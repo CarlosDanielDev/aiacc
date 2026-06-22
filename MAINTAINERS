@@ -1,0 +1,16 @@
+# aiacc maintainers
+#
+# Area owners, FFmpeg-style. Format:
+#   area: path/glob ........ @github-handle
+# A change to an area should get review from that area's maintainer.
+# To volunteer for an unowned area, open a PR adding yourself.
+
+Project lead .................. @CarlosDanielDev
+
+config (internal/config) ...... @CarlosDanielDev
+provider (internal/provider) .. @CarlosDanielDev
+shell hooks (internal/shell) .. @CarlosDanielDev
+usage parser (internal/usage) . @CarlosDanielDev
+commands (cmd) ................ @CarlosDanielDev
+CI / release (.github) ........ @CarlosDanielDev
+docs / ADRs (docs) ............ @CarlosDanielDev

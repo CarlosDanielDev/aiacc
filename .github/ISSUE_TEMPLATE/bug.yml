@@ -1,0 +1,29 @@
+name: Bug report
+description: Something behaves incorrectly.
+title: "fix(scope): short description"
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Actual vs expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: aiacc version, OS, shell.
+      placeholder: "aiacc v0.1.0, macOS 15, fish"
+    validations:
+      required: true

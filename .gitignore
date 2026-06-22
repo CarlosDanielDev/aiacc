@@ -1,0 +1,13 @@
+# Binaries
+/aiacc
+/dist/
+*.exe
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Local
+.DS_Store
+.env
