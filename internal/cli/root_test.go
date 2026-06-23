@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"slices"
 	"sort"
 	"testing"
 )
@@ -13,12 +14,7 @@ func TestNewRootHasAllSubcommands(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{"add", "list", "remove", "shell-init", "status", "usage", "use"}
-	if len(got) != len(want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("subcommands = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("subcommands = %v, want %v", got, want)
-		}
 	}
 }

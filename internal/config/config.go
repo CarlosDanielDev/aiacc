@@ -46,9 +46,6 @@ func Load(path string) (*Config, error) {
 		}
 		return nil, err
 	}
-	if c.Providers == nil {
-		c.Providers = map[string]Provider{}
-	}
 	return c, nil
 }
 
