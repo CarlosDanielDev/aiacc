@@ -11,3 +11,6 @@ coverage.*
 # Local
 .DS_Store
 .env
+
+# SDD scratch
+.superpowers/
