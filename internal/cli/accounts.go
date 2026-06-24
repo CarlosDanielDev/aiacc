@@ -2,8 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"text/tabwriter"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
@@ -26,10 +27,6 @@ func newAddCmd() *cobra.Command {
 			if dir == "" {
 				return fmt.Errorf("--dir is required")
 			}
-			env, err := provider.EnvVar(&config.Config{Providers: map[string]config.Provider{}}, providerName)
-			if err != nil && providerName != "" {
-				env = "" // unknown provider with no preset; user must define env via config later
-			}
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
@@ -41,6 +38,9 @@ func newAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// An unknown provider with no preset gets an empty env_var; the
+			// user defines it later (switching is where a missing one errors).
+			env, _ := provider.EnvVar(c, providerName)
 			p := c.Providers[providerName]
 			if p.Accounts == nil {
 				p.Accounts = map[string]config.Account{}
@@ -98,19 +98,10 @@ func newListCmd() *cobra.Command {
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
 			fmt.Fprintln(w, "PROVIDER\tACCOUNT\tDIR")
-			providers := make([]string, 0, len(c.Providers))
-			for name := range c.Providers {
-				providers = append(providers, name)
-			}
-			sort.Strings(providers)
-			for _, pn := range providers {
-				accounts := make([]string, 0, len(c.Providers[pn].Accounts))
-				for a := range c.Providers[pn].Accounts {
-					accounts = append(accounts, a)
-				}
-				sort.Strings(accounts)
-				for _, a := range accounts {
-					fmt.Fprintf(w, "%s\t%s\t%s\n", pn, a, c.Providers[pn].Accounts[a].Dir)
+			for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
+				p := c.Providers[pn]
+				for _, a := range slices.Sorted(maps.Keys(p.Accounts)) {
+					fmt.Fprintf(w, "%s\t%s\t%s\n", pn, a, p.Accounts[a].Dir)
 				}
 			}
 			return w.Flush()
