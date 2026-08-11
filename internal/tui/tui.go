@@ -20,6 +20,7 @@ import (
 type Row struct {
 	Provider string
 	Account  string
+	Email    string // logged-in account email, "" if not logged in
 	Dir      string // expanded, ready for the export line
 	Active   bool
 	Tokens   int
@@ -108,7 +109,7 @@ func Select(rows []Row, in io.Reader, out io.Writer) (int, error) {
 // Render returns the full terminal frame for rows with the cursor on the given
 // row. Lines are CRLF-terminated for raw mode.
 func Render(rows []Row, cursor int) string {
-	pw, aw := len("PROVIDER"), len("ACCOUNT")
+	pw, aw, ew := len("PROVIDER"), len("ACCOUNT"), len("LOGIN")
 	for _, r := range rows {
 		if len(r.Provider) > pw {
 			pw = len(r.Provider)
@@ -116,11 +117,14 @@ func Render(rows []Row, cursor int) string {
 		if len(r.Account) > aw {
 			aw = len(r.Account)
 		}
+		if len(login(r)) > ew {
+			ew = len(login(r))
+		}
 	}
 	var b strings.Builder
 	b.WriteString(clearScreen)
 	b.WriteString("  Select an account  (↑/↓ move · enter switch · q cancel)\r\n\r\n")
-	fmt.Fprintf(&b, "    %-*s  %-*s  %-6s  %s\r\n", pw, "PROVIDER", aw, "ACCOUNT", "ACTIVE", "TOKENS")
+	fmt.Fprintf(&b, "    %-*s  %-*s  %-*s  %-6s  %s\r\n", pw, "PROVIDER", aw, "ACCOUNT", ew, "LOGIN", "ACTIVE", "TOKENS")
 	for i, r := range rows {
 		cur := " "
 		if i == cursor {
@@ -130,9 +134,18 @@ func Render(rows []Row, cursor int) string {
 		if r.Active {
 			active = "*"
 		}
-		fmt.Fprintf(&b, "  %s %-*s  %-*s  %-6s  %s\r\n", cur, pw, r.Provider, aw, r.Account, active, humanTokens(r.Tokens))
+		fmt.Fprintf(&b, "  %s %-*s  %-*s  %-*s  %-6s  %s\r\n", cur, pw, r.Provider, aw, r.Account, ew, login(r), active, humanTokens(r.Tokens))
 	}
 	return b.String()
+}
+
+// login is the display value for the LOGIN column: the account email, or "-"
+// when the directory has no logged-in account.
+func login(r Row) string {
+	if r.Email == "" {
+		return "-"
+	}
+	return r.Email
 }
 
 // humanTokens renders a token count compactly (1_200_000 -> "1.2M").
