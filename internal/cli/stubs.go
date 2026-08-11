@@ -13,15 +13,6 @@ func notImplemented(name string) func(*cobra.Command, []string) error {
 	}
 }
 
-func newAddCmd() *cobra.Command {
-	return &cobra.Command{Use: "add <provider> <account>", Short: "Register an account", RunE: notImplemented("add")}
-}
-func newRemoveCmd() *cobra.Command {
-	return &cobra.Command{Use: "remove <provider> <account>", Short: "Unregister an account", RunE: notImplemented("remove")}
-}
-func newListCmd() *cobra.Command {
-	return &cobra.Command{Use: "list", Short: "List providers and accounts", RunE: notImplemented("list")}
-}
 func newUseCmd() *cobra.Command {
 	return &cobra.Command{Use: "use <provider> <account>", Short: "Switch the shell to an account", RunE: notImplemented("use")}
 }
