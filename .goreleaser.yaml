@@ -1,0 +1,56 @@
+# GoReleaser configuration for aiacc.
+# Docs: https://goreleaser.com
+version: 2
+
+project_name: aiacc
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: aiacc
+    main: .
+    binary: aiacc
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/CarlosDanielDev/aiacc/internal/cli.version={{.Version}}
+
+archives:
+  - id: aiacc
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+brews:
+  - name: aiacc
+    repository:
+      owner: CarlosDanielDev
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/CarlosDanielDev/aiacc"
+    description: "Switch and monitor multiple AI-CLI accounts"
+    license: "MIT"
+    install: |
+      bin.install "aiacc"
+    test: |
+      system "#{bin}/aiacc", "--version"
+
+release:
+  github:
+    owner: CarlosDanielDev
+    name: aiacc
