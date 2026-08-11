@@ -68,6 +68,11 @@ claude    work      ~/.claude-work
 # Switch the current shell to an account (needs the shell hook above).
 $ aiacc use claude work
 
+# Or omit the account for an interactive picker (arrow keys / j·k, enter to
+# switch, q to cancel) showing which account is active and its token usage.
+# 'aiacc use claude' scopes it to one provider; 'aiacc use' lists them all.
+$ aiacc use
+
 # See which account is active per provider. '*' marks the live one;
 # LAST-USED is the directory's modification time.
 $ aiacc status
@@ -142,7 +147,7 @@ From then on `aiacc use foo work` emits `export FOO_CONFIG_HOME=~/.foo-work`
 | `aiacc add <provider> <account> --dir <path> [--quota N]` | Register an account; creates the directory if missing. |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. |
 | `aiacc list` | Table of providers and their accounts. |
-| `aiacc use <provider> <account>` | Switch the current shell (via the hook). Validates the directory exists. |
+| `aiacc use [provider] [account]` | Switch the current shell (via the hook). Validates the directory exists. Omit the account for an interactive picker. |
 | `aiacc status` | Active account per provider, from the live environment, plus last-used time. |
 | `aiacc usage [provider]` | Token totals per account from local logs; `used/quota` when a quota is set. |
 | `aiacc shell-init <bash\|zsh\|fish>` | Print the shell hook to add to your startup file. |
