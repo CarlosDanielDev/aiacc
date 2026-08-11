@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/shell"
@@ -104,6 +105,7 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 			rows = append(rows, tui.Row{
 				Provider: pn,
 				Account:  an,
+				Email:    claude.Detect(dir).Email,
 				Dir:      dir,
 				Active:   env != "" && dir == live,
 				Tokens:   t.Total(),

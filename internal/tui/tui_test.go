@@ -9,7 +9,7 @@ import (
 func sample() []Row {
 	return []Row{
 		{Provider: "claude", Account: "personal", Dir: "/p", Tokens: 340_000},
-		{Provider: "claude", Account: "work", Dir: "/w", Active: true, Tokens: 1_200_000},
+		{Provider: "claude", Account: "work", Email: "w@co.com", Dir: "/w", Active: true, Tokens: 1_200_000},
 	}
 }
 
@@ -70,6 +70,9 @@ func TestRenderShowsCursorActiveTokens(t *testing.T) {
 	}
 	if !strings.Contains(out, "1.2M") || !strings.Contains(out, "340.0k") {
 		t.Errorf("tokens not humanized:\n%s", out)
+	}
+	if !strings.Contains(out, "w@co.com") || !strings.Contains(out, "LOGIN") {
+		t.Errorf("login column missing:\n%s", out)
 	}
 }
 
