@@ -99,9 +99,10 @@ $ aiacc use claude work
 
 # Or launch the interactive picker — a clean one-line-per-account list showing
 # which is active (●) and its login. Arrow keys / j·k move, enter switches,
-# a adds, q quits. Accounts you can't safely switch into (a missing dir, or a
-# provider with no env var) are shown but not selectable, so a broken switch
-# can't be made by mistake.
+# a adds a new account, d removes the highlighted one (with a confirm), q quits.
+# Accounts you can't safely switch into (a missing dir, or a provider with no
+# env var) are shown but Enter won't switch into them — though you can still
+# remove them.
 $ aiacc              # bare aiacc, in a terminal, IS the front door
 $ aiacc use          # the same picker; 'aiacc use claude' scopes to one provider
 
