@@ -14,3 +14,9 @@ coverage.*
 
 # SDD scratch
 .superpowers/
+
+# maestro tooling (local; not part of this repo)
+.maestro/
+maestro.toml
+maestro-state.json
+maestro-state.json.lock
