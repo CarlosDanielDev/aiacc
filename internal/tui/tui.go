@@ -360,10 +360,164 @@ func RenderSetup(info SetupInfo, phase setupPhase, doneErr error, cols int) stri
 }
 
 func sourceCmd(info SetupInfo) string {
-	if info.Shell == "fish" {
-		return "source " + info.Path
-	}
 	return "source " + info.Path
+}
+
+// --- Add account --------------------------------------------------------------
+
+// AddResult is the outcome of the framed add screen. OK is false when cancelled.
+type AddResult struct {
+	Name string
+	Dir  string
+	OK   bool
+}
+
+// validName reports whether s is a legal account name: a letter/underscore, then
+// letters, digits, hyphens, or underscores. This is exactly the alias-safe set,
+// so every account the screen creates gets a working `<provider>-<name>` shortcut
+// — and a name like "??????????" cannot be entered at all.
+func validName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case (r >= '0' && r <= '9' || r == '-') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func nameByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '-' || b == '_'
+}
+func printableByte(b byte) bool { return b >= 0x20 && b < 0x7f }
+
+func defaultDir(name string) string {
+	if name == "" {
+		return "~/.claude-<name>"
+	}
+	return "~/.claude-" + name
+}
+
+// RenderAdd returns the add-account frame: a live name field, a dir field that
+// defaults to ~/.claude-<name> until edited, the current login for context, and
+// an optional hint. field is 0 for name, 1 for dir. Pure, for tests.
+func RenderAdd(currentLogin, name, dir string, field int, hint string, cols int) string {
+	w := innerWidth(cols)
+	lines := []string{boxTop("aiacc — add account", w), boxBlank(w)}
+
+	if currentLogin != "" {
+		lines = append(lines,
+			boxRow([]seg{pad(2), {"current  ", inkGrey}, {trunc(currentLogin, w-11), inkDim}}, w),
+			boxBlank(w),
+		)
+	}
+
+	nameCaret, dirCaret := "", ""
+	if field == 0 {
+		nameCaret = "▏"
+	} else {
+		dirCaret = "▏"
+	}
+	nameLabelInk, dirLabelInk := inkGrey, inkGrey
+	if field == 0 {
+		nameLabelInk = inkWhite
+	} else {
+		dirLabelInk = inkWhite
+	}
+
+	lines = append(lines, boxRow([]seg{
+		pad(2), {"name  ", nameLabelInk}, {name, inkWhite}, {nameCaret, inkPink},
+	}, w))
+
+	// The dir field shows the derived default (dim) until the user types one.
+	dirSeg := seg{dir, inkWhite}
+	if dir == "" {
+		dirSeg = seg{defaultDir(name), inkDim}
+	}
+	lines = append(lines, boxRow([]seg{
+		pad(2), {"dir   ", dirLabelInk}, dirSeg, {dirCaret, inkPink},
+	}, w))
+
+	lines = append(lines, boxBlank(w))
+	if hint != "" {
+		lines = append(lines, boxRow([]seg{pad(2), {"⚠ " + trunc(hint, w-4), inkRed}}, w))
+	} else {
+		lines = append(lines, boxBlank(w))
+	}
+	lines = append(lines, boxBottom(w))
+
+	legend := legendLine([][2]string{{"type", "name"}, {"⇥", "field"}, {"⏎", "create"}, {"esc", "cancel"}})
+	return frame(lines, legend, cols, w)
+}
+
+// driveAdd is the add-screen input loop, decoupled from /dev/tty for tests. It
+// filters keystrokes so the name field can only ever hold alias-safe characters.
+func driveAdd(currentLogin string, cols int, in io.Reader, out io.Writer) (AddResult, error) {
+	name, dir, field, hint := "", "", 0, ""
+	r := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, RenderAdd(currentLogin, name, dir, field, hint, cols))
+		b, err := r.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				return AddResult{}, nil
+			}
+			return AddResult{}, err
+		}
+		switch b {
+		case 0x1b, 3: // Esc / Ctrl-C
+			return AddResult{}, nil
+		case '\t':
+			field, hint = 1-field, ""
+		case '\r', '\n':
+			if !validName(name) {
+				field, hint = 0, "name: a letter first, then letters, digits, - or _"
+				continue
+			}
+			d := dir
+			if d == "" {
+				d = "~/.claude-" + name
+			}
+			return AddResult{Name: name, Dir: d, OK: true}, nil
+		case 0x7f, 0x08: // Backspace / Delete
+			if field == 0 {
+				name = trimLastByte(name)
+			} else {
+				dir = trimLastByte(dir)
+			}
+			hint = ""
+		default:
+			if field == 0 && nameByte(b) {
+				name += string(b)
+			} else if field == 1 && printableByte(b) {
+				dir += string(b)
+			}
+			hint = ""
+		}
+	}
+}
+
+func trimLastByte(s string) string {
+	if s == "" {
+		return s
+	}
+	return s[:len(s)-1]
+}
+
+// RunAdd shows the framed add screen on /dev/tty. currentLogin (may be "") is
+// shown for context.
+func RunAdd(currentLogin string) (AddResult, error) {
+	tty, cols, restore, err := openRawTTY()
+	if err != nil {
+		return AddResult{}, err
+	}
+	defer restore()
+	return driveAdd(currentLogin, cols, tty, tty)
 }
 
 // --- Terminal driving ---------------------------------------------------------
