@@ -156,6 +156,22 @@ func TestHookBash(t *testing.T) {
 	}
 }
 
+// TestHookCapturesNoArgs proves the hook also evals a bare `aiacc` (the front
+// door), not just `use` — otherwise a switch chosen in the TUI would print an
+// export line nothing evaluates.
+func TestHookCapturesNoArgs(t *testing.T) {
+	for _, sh := range []string{"bash", "zsh"} {
+		got, _ := Hook(sh)
+		if !strings.Contains(got, `[ "$#" -eq 0 ]`) {
+			t.Errorf("Hook(%s) does not capture the no-arg front door:\n%s", sh, got)
+		}
+	}
+	fish, _ := Hook("fish")
+	if !strings.Contains(fish, "count $argv") {
+		t.Errorf("Hook(fish) does not capture the no-arg front door:\n%s", fish)
+	}
+}
+
 func TestHookZsh(t *testing.T) {
 	got, err := Hook("zsh")
 	if err != nil {

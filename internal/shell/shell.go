@@ -87,10 +87,11 @@ func fishSingleQuote(s string) string {
 }
 
 // Hook returns the shell function text emitted by `aiacc shell-init <shell>`.
-// The function is named aiacc and wraps the real binary: for `use` it evals the
-// binary's stdout (passing --shell <shell>); every other subcommand runs the
-// binary directly. `command aiacc` prevents the function from recursing into
-// itself.
+// The function is named aiacc and wraps the real binary: for `use` — and for a
+// bare `aiacc` with no arguments, the interactive front door — it evals the
+// binary's stdout (passing --shell <shell>) so a chosen switch is applied to the
+// current shell; every other subcommand runs the binary directly. `command
+// aiacc` prevents the function from recursing into itself.
 func Hook(shellName string) (string, error) {
 	switch shellName {
 	case "bash", "zsh":
@@ -106,7 +107,7 @@ func Hook(shellName string) (string, error) {
 // POSIX syntax and differ only in the --shell argument.
 func posixHook(shellName string) string {
 	return fmt.Sprintf(`aiacc() {
-  if [ "$1" = use ]; then
+  if [ "$1" = use ] || [ "$#" -eq 0 ]; then
     local _out
     _out="$(command aiacc "$@" --shell %s)" || return
     eval "$_out"
@@ -120,7 +121,7 @@ func posixHook(shellName string) string {
 // fishHook is the fish function body; fish uses its own syntax and `set -gx`
 // semantics, so it cannot share the POSIX template.
 const fishHook = `function aiacc
-  if test "$argv[1]" = use
+  if test "$argv[1]" = use; or test (count $argv) -eq 0
     eval (command aiacc $argv --shell fish)
   else
     command aiacc $argv
