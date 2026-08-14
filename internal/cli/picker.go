@@ -51,6 +51,12 @@ func runPicker(cmd *cobra.Command, shellName, filter string) error {
 				return err
 			}
 			continue // rebuild the list and re-open
+		case tui.Remove:
+			row := rows[res.Index]
+			if err := removeAccount(path, row.Provider, row.Account); err != nil {
+				return err
+			}
+			continue // rebuild the list and re-open
 		case tui.Switch:
 			row := rows[res.Index]
 			line, err := shell.ExportLine(shellName, row.EnvVar, row.Dir)
