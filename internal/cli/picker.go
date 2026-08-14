@@ -5,32 +5,33 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/shell"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
-	"github.com/CarlosDanielDev/aiacc/internal/usage"
 	"github.com/spf13/cobra"
 )
 
-// runPicker drives the interactive TUI shared by a bare `aiacc` and `aiacc use`
-// with no account. filter scopes the list to one provider ("" = all).
+// runPicker drives the interactive front door shared by a bare `aiacc` and
+// `aiacc use` with no account. filter scopes the list to one provider.
 //
-// It loops so the add wizard (the `a` key) can register an account and return
-// to a freshly-rebuilt list without leaving the TUI. On a chosen switch it
-// prints the export line to cmd's stdout — which the shell hook captures and
-// evaluates. If the hook is not active (stdout is a terminal, not a pipe) the
-// TUI has already shown its andon; we still print the line so it is not lost.
+// Poka-yoke: if the shell hook is not active, switching cannot work — so instead
+// of a picker that silently no-ops, we show the one-time setup gate. The single
+// confusing state ("I switched and nothing happened") is unreachable.
 func runPicker(cmd *cobra.Command, shellName, filter string) error {
+	if !hookActive(cmd.OutOrStdout()) {
+		return runSetupGate(shellName)
+	}
+
 	path, err := configPath()
 	if err != nil {
 		return err
 	}
-	hookActive := hookActive(cmd.OutOrStdout())
-
 	for {
 		c, err := config.Load(path)
 		if err != nil {
@@ -38,7 +39,7 @@ func runPicker(cmd *cobra.Command, shellName, filter string) error {
 		}
 		rows := collectRows(c, filter)
 
-		res, err := tui.Run(rows, hookActive)
+		res, err := tui.Run(rows)
 		if err != nil {
 			return err
 		}
@@ -62,9 +63,73 @@ func runPicker(cmd *cobra.Command, shellName, filter string) error {
 	}
 }
 
+// runSetupGate shows the one-time hook-install screen and, on request, appends
+// the hook line to the shell's startup file.
+func runSetupGate(shellName string) error {
+	sh := supportedShell(shellName)
+	line, err := shell.RcLine(sh)
+	if err != nil {
+		return err
+	}
+	rc, err := shell.RcPath(sh)
+	if err != nil {
+		return err
+	}
+	info := tui.SetupInfo{
+		Shell:          sh,
+		Line:           line,
+		Path:           tildeize(rc),
+		AlreadyPresent: fileContains(rc, line),
+	}
+	return tui.RunSetup(info, func() error { return installHook(rc, line) })
+}
+
+// installHook appends the hook line to rc, idempotently — an existing line is
+// left untouched so re-running never duplicates it. The parent directory is
+// created for fish's ~/.config/fish.
+func installHook(rc, line string) error {
+	if fileContains(rc, line) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(rc), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(rc, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "\n# aiacc shell hook\n%s\n", line)
+	return err
+}
+
+func fileContains(path, needle string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && strings.Contains(string(b), needle)
+}
+
+// supportedShell maps whatever $SHELL reports onto a shell aiacc can wire up,
+// defaulting to bash so the gate always has something concrete to show.
+func supportedShell(name string) string {
+	switch name {
+	case "bash", "zsh", "fish":
+		return name
+	default:
+		return "bash"
+	}
+}
+
+// tildeize replaces the home-dir prefix of p with ~ for display.
+func tildeize(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
+}
+
 // addFromPicker runs the existing line-based add wizard on /dev/tty. It must not
-// touch cmd's stdout: that channel is reserved for the export line the shell
-// hook evaluates, and wizard prompts eval'd as shell would be a disaster.
+// touch cmd's stdout: that channel carries the export line the shell hook
+// evaluates, and wizard prompts eval'd as shell would be a disaster.
 func addFromPicker(cfgPath string) error {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
@@ -114,9 +179,9 @@ func isTerminal(f *os.File) bool {
 
 // collectRows builds the picker rows from config: every account (optionally
 // filtered to one provider), with its expanded dir, whether that dir exists, the
-// provider's env var, the live-active flag, logged-in identity, token total, and
-// quota. Accounts whose dir cannot be resolved at all are skipped; a merely
-// missing dir is kept and shown blocked, so the user sees what to repair.
+// provider's env var, the live-active flag, and logged-in identity. Accounts
+// whose dir cannot be resolved at all are skipped; a merely missing dir is kept
+// and shown blocked, so the user sees what to repair.
 func collectRows(c *config.Config, filter string) []tui.Row {
 	var rows []tui.Row
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
@@ -135,7 +200,6 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 				continue
 			}
 			_, statErr := os.Stat(dir)
-			t, _ := usage.Aggregate(dir)
 			rows = append(rows, tui.Row{
 				Provider:  pn,
 				Account:   an,
@@ -144,8 +208,6 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 				EnvVar:    env,
 				Active:    env != "" && dir == live,
 				DirExists: statErr == nil,
-				Tokens:    t.Total(),
-				Quota:     p.Accounts[an].Quota,
 			})
 		}
 	}

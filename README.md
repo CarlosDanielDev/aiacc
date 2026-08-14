@@ -31,12 +31,12 @@ brew install CarlosDanielDev/tap/aiacc
 Switching accounts means changing an environment variable **in your current
 shell**. A child process cannot mutate its parent shell's environment, so `aiacc`
 can't do it by itself — the same reason `direnv` and `nvm` install a shell hook.
-`aiacc shell-init` prints a small shell function named `aiacc` that wraps the
-binary: for `use` — and for a bare `aiacc`, the interactive front door — it
-evaluates the binary's export line in your shell; every other command runs the
-binary directly.
 
-Add the matching line to your shell startup file, then open a new shell:
+**Easiest: let aiacc set it up.** Run `aiacc` in a terminal. If the hook isn't
+installed yet, it shows a one-time setup screen — press `i` and it appends the
+right line to your shell's startup file. Open a new terminal and you're done.
+
+Prefer to do it by hand? Add the matching line yourself, then open a new shell:
 
 ```sh
 # ~/.bashrc
@@ -49,13 +49,35 @@ eval "$(aiacc shell-init zsh)"
 aiacc shell-init fish | source
 ```
 
-Without the hook, `aiacc use` still works — it just prints the `export` line
-instead of applying it, so you can inspect or pipe it yourself. The interactive
-picker shows a warning banner in that state, since a switch it can't apply would
-otherwise look like it worked.
+`aiacc shell-init` prints a shell function named `aiacc` that wraps the binary
+(for `use` and for a bare `aiacc` it evaluates the binary's export line in your
+shell; every other command runs the binary directly), **plus one shortcut
+function per registered account** — see [Switch by name](#switch-by-name) below.
 
-> **Upgrading?** The hook now also wraps a bare `aiacc` (the front door), so
-> re-run the `shell-init` line above and open a new shell after updating.
+Until the hook is active, the interactive `aiacc` shows the setup screen instead
+of a picker, so you never land in a UI that silently fails to switch. Scripted or
+piped, `aiacc use claude work` still just prints the `export` line for you to
+eval yourself.
+
+> **Upgrading from ≤ v0.2?** The hook changed (a bare `aiacc` front door and the
+> per-account shortcuts). Re-run the `shell-init` line above — or just run
+> `aiacc` and press `i` — then open a new shell.
+
+## Switch by name
+
+`aiacc shell-init` also emits a shortcut function for every account, named
+`<provider>-<account>`. After the hook is loaded (new shell, or re-source), just
+type the account:
+
+```sh
+$ claude-work        # switch this shell to claude / work
+$ claude-personal    # switch back
+```
+
+Each shortcut is sugar for `aiacc use <provider> <account>`, so it validates the
+directory and applies the switch the same way. New accounts get their shortcut on
+your next shell (or after re-running the `shell-init` line). Accounts whose name
+wouldn't make a safe function name are skipped and stay reachable via `aiacc use`.
 
 ## Quickstart
 
@@ -71,14 +93,15 @@ PROVIDER  ACCOUNT   DIR
 claude    personal  ~/.claude-personal
 claude    work      ~/.claude-work
 
-# Switch the current shell to an account (needs the shell hook above).
+# Switch the current shell to an account, three ways:
+$ claude-work        # shortcut function (needs the hook loaded)
 $ aiacc use claude work
 
-# Or launch the interactive picker — a framed TUI showing each account's active
-# state, login identity, token usage, and quota. Arrow keys / j·k move, enter
-# switches, a adds, q cancels. Accounts you can't safely switch into (a missing
-# dir, or a provider with no env var) are shown but not selectable, so a broken
-# switch can't be made by mistake.
+# Or launch the interactive picker — a clean one-line-per-account list showing
+# which is active (●) and its login. Arrow keys / j·k move, enter switches,
+# a adds, q quits. Accounts you can't safely switch into (a missing dir, or a
+# provider with no env var) are shown but not selectable, so a broken switch
+# can't be made by mistake.
 $ aiacc              # bare aiacc, in a terminal, IS the front door
 $ aiacc use          # the same picker; 'aiacc use claude' scopes to one provider
 
@@ -153,14 +176,15 @@ From then on `aiacc use foo work` emits `export FOO_CONFIG_HOME=~/.foo-work`
 
 | Command | Effect |
 |---|---|
-| `aiacc` | Launch the interactive picker (the front door). Needs a terminal; piped or redirected, it prints help instead. |
+| `aiacc` | Launch the interactive picker (the front door), or the one-time setup screen if the hook isn't installed. Needs a terminal; piped or redirected, it prints help instead. |
+| `<provider>-<account>` (e.g. `claude-work`) | Shortcut function from `shell-init`; switches straight to that account. |
 | `aiacc add <provider> <account> --dir <path> [--quota N]` | Register an account; creates the directory if missing. |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc use [provider] [account]` | Switch the current shell (via the hook). Validates the directory exists. Omit the account for the interactive picker. |
 | `aiacc status` | Active account per provider, from the live environment, plus last-used time. |
 | `aiacc usage [provider]` | Token totals per account from local logs; `used/quota` when a quota is set. |
-| `aiacc shell-init <bash\|zsh\|fish>` | Print the shell hook to add to your startup file. |
+| `aiacc shell-init <bash\|zsh\|fish>` | Print the shell hook and per-account shortcut functions to add to your startup file. |
 
 ## Contributing
 

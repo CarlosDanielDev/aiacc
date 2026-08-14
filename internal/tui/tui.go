@@ -1,19 +1,19 @@
-// Package tui renders aiacc's interactive account picker: a framed, poka-yoke
-// terminal UI shown by a bare `aiacc` (the front door) and by `aiacc use` with
-// no account. It draws on /dev/tty — stdout is reserved for the shell hook's
-// command substitution — and returns the chosen account so the caller can emit
+// Package tui renders aiacc's interactive account UI: a framed, poka-yoke
+// terminal front door shown by a bare `aiacc` and by `aiacc use` with no
+// account. It draws on /dev/tty — stdout is reserved for the shell hook's
+// command substitution — and returns the user's choice so the caller can emit
 // the switch.
 //
-// Poka-yoke is the whole point of this package:
-//   - There is no text field, so there is no parse step, so there is no invalid
-//     input to reject. Navigation is a bounded index.
+// Poka-yoke shapes the whole flow:
+//   - Navigation is a bounded index. No text field, so no parse step, so no
+//     invalid input to reject.
 //   - A row you cannot safely switch into (its config dir is gone, or its
-//     provider has no env var) is *not selectable*: the cursor skips it, so the
-//     broken switch is unreachable rather than merely warned about.
-//   - When the shell hook is not active a switch would print an export line that
-//     nothing evaluates — a silent no-op. The frame carries a persistent andon
-//     banner in that state, so you learn the switch won't apply before you make
-//     it, not after.
+//     provider has no env var) is not selectable: the cursor skips it, so a
+//     broken switch is unreachable rather than merely flagged.
+//   - Switching only works through the shell hook. Rather than drop you into a
+//     picker that can't apply anything and warn you after the fact, the caller
+//     shows the setup gate (RunSetup) first when the hook is absent — so the
+//     one confusing state, "I switched and nothing happened", cannot occur.
 //
 // Raw mode is toggled with stty (POSIX; the Linux/macOS release targets), so the
 // package needs no non-stdlib dependency.
@@ -28,12 +28,13 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"unicode/utf8"
 )
 
-// Row is one account in the picker, with everything the poka-yoke rules and the
-// display need. The caller fills it from config + live environment + logs.
+// Row is one account in the picker. The caller fills it from config + the live
+// environment.
 type Row struct {
 	Provider  string
 	Account   string
@@ -42,20 +43,15 @@ type Row struct {
 	EnvVar    string // the provider's env var; "" means switching is undefined
 	Active    bool   // this dir is the live one for its provider right now
 	DirExists bool   // the config dir is present on disk
-	Tokens    int    // total tokens from the dir's session logs
-	Quota     int    // manual plan size; 0 = unset
 }
 
 // ResultKind is what the user asked the picker to do.
 type ResultKind int
 
 const (
-	// Cancelled: the user backed out (q / Esc / Ctrl-C / EOF). Emit nothing.
-	Cancelled ResultKind = iota
-	// Switch: the user chose Index; the caller emits its export line.
-	Switch
-	// Add: the user pressed `a`; the caller runs the add wizard and re-opens.
-	Add
+	Cancelled ResultKind = iota // backed out (q / Esc / Ctrl-C / EOF)
+	Switch                      // chose Index; the caller emits its export line
+	Add                         // pressed `a`; the caller runs the add wizard
 )
 
 // Result is what Run/drive returns. Index is meaningful only for Switch.
@@ -104,7 +100,6 @@ const (
 // color is off when NO_COLOR is set (https://no-color.org).
 var color = os.Getenv("NO_COLOR") == ""
 
-// 256-colour SGR codes, matching native-jiggler's palette.
 const (
 	inkDim    = "2"
 	inkGreen  = "38;5;78"
@@ -117,8 +112,8 @@ const (
 )
 
 // seg is a run of text with an optional colour. Keeping colour separate from
-// text lets every width calculation run on *visible* runes, so ANSI escapes
-// never leak into the maths that keeps the frame square.
+// text lets every width calculation run on visible runes, so ANSI escapes never
+// leak into the maths that keeps the frame square.
 type seg struct {
 	text string
 	ink  string
@@ -134,9 +129,9 @@ func paint(s, ink string) string {
 }
 
 // render joins segs to exactly width visible runes — padding when short,
-// truncating when long. This clamp is the poka-yoke turned on the layout code
-// itself: no row, however long its content grows, can push the frame's border
-// out and tear the box. The guarantee lives here, not in every call site.
+// truncating when long. This clamp is poka-yoke on the layout itself: no row,
+// however long its content grows, can push the frame's border out and tear the
+// box. The guarantee lives here, not in every call site.
 func render(segs []seg, width int) string {
 	var b strings.Builder
 	used := 0
@@ -157,86 +152,20 @@ func render(segs []seg, width int) string {
 	return b.String()
 }
 
-// Box-drawing. Every glyph is one terminal column, so visible-rune padding keeps
-// the frame square with no wcwidth guesswork.
 func boxTop(title string, w int) string {
 	t := " " + title + " "
 	return "╭─" + t + strings.Repeat("─", max(0, w-utf8.RuneCountInString(t)-1)) + "╮"
 }
-func boxDivider(w int) string { return "├" + strings.Repeat("─", w) + "┤" }
-func boxBottom(w int) string  { return "╰" + strings.Repeat("─", w) + "╯" }
+func boxBottom(w int) string { return "╰" + strings.Repeat("─", w) + "╯" }
 func boxRow(segs []seg, w int) string {
 	return "│" + render(segs, w) + "│"
 }
 func boxBlank(w int) string { return boxRow(nil, w) }
 
-// miniBar renders tokens as a filled bar relative to the busiest account. The
-// shape is honest: it is derived from real token totals, not a fabricated time
-// series aiacc does not keep. Colour tracks the same green→yellow→red urgency
-// as the quota cell.
-func miniBar(tokens, maxTokens, cells int) []seg {
-	if maxTokens <= 0 || tokens <= 0 {
-		return []seg{{strings.Repeat("·", cells), inkDim}}
-	}
-	frac := float64(tokens) / float64(maxTokens)
-	if frac > 1 {
-		frac = 1
-	}
-	filled := int(frac*float64(cells) + 0.5)
-	if filled > cells {
-		filled = cells
-	}
-	ink := inkGreen
-	switch {
-	case frac > 0.85:
-		ink = inkRed
-	case frac > 0.6:
-		ink = inkYellow
-	}
-	return []seg{
-		{strings.Repeat("█", filled), ink},
-		{strings.Repeat("░", cells-filled), inkDim},
-	}
-}
-
-// quotaCell shows used/quota as a coloured percentage, or "-" when no quota is
-// set. It never divides by zero and clamps a runaway percentage to a legible
-// ">999%" rather than smearing the frame.
-func quotaCell(tokens, quota int) seg {
-	if quota <= 0 {
-		return seg{"    -", inkDim}
-	}
-	pct := tokens * 100 / quota
-	ink := inkGreen
-	switch {
-	case pct > 85:
-		ink = inkRed
-	case pct > 60:
-		ink = inkYellow
-	}
-	s := strconv.Itoa(pct) + "%"
-	if pct > 999 {
-		s = ">999%"
-	}
-	return seg{fmt.Sprintf("%5s", s), ink}
-}
-
-// humanTokens renders a token count compactly (1_200_000 -> "1.2M").
-func humanTokens(n int) string {
-	switch {
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM", float64(n)/1e6)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(n)/1e3)
-	default:
-		return strconv.Itoa(n)
-	}
-}
-
-// innerWidth is the frame's inner column count, clamped so it fits the terminal
-// but never collapses below a legible floor.
+// innerWidth clamps the frame to the terminal but never collapses below a
+// legible floor.
 func innerWidth(cols int) int {
-	const base, floor = 44, 30
+	const base, floor = 46, 30
 	w := base
 	if cols-4 < w {
 		w = cols - 4
@@ -244,109 +173,20 @@ func innerWidth(cols int) int {
 	return max(floor, w)
 }
 
-// Render returns the whole terminal frame: a clear+home, the centred box, and a
-// key legend below it. It is pure (no I/O) so tests can assert on the exact
-// output for any width and any row state.
-func Render(rows []Row, cursor int, hookActive bool, cols int) string {
-	w := innerWidth(cols)
+func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
-	maxTokens := 0
-	for _, r := range rows {
-		if r.Tokens > maxTokens {
-			maxTokens = r.Tokens
-		}
+func trunc(s string, n int) string {
+	if runeLen(s) <= n {
+		return s
 	}
+	return string([]rune(s)[:max(0, n-1)]) + "…"
+}
 
-	var lines []string
-	lines = append(lines, boxTop("aiacc", w), boxBlank(w))
-
-	if len(rows) == 0 {
-		lines = append(lines,
-			boxRow([]seg{pad(2), {"No accounts registered yet.", inkWhite}}, w),
-			boxBlank(w),
-			boxRow([]seg{pad(2), {"Press ", inkGrey}, {"a", inkWhite}, {" to add one, or run:", inkGrey}}, w),
-			boxRow([]seg{pad(4), {"aiacc add <provider> <account> --dir <path>", inkBlue}}, w),
-			boxBlank(w),
-		)
-	}
-
-	for i, r := range rows {
-		focused := i == cursor
-		st := r.state()
-
-		// Line 1: cursor + provider·account + status badge.
-		marker := seg{"  ", ""}
-		if focused {
-			marker = seg{"▸ ", inkPink}
-		}
-		nameInk := inkGrey
-		if focused {
-			nameInk = inkWhite
-		}
-		warn := ""
-		if st == stNoDir || st == stNoEnv {
-			warn = "⚠ "
-			nameInk = inkRed
-		}
-		line1 := []seg{
-			marker,
-			{warn, inkRed},
-			{r.Provider + " · " + r.Account, nameInk},
-		}
-		switch {
-		case r.Active:
-			line1 = append(line1, pad(2), seg{"● ACTIVE", inkGreen})
-		case st == stNoDir:
-			line1 = append(line1, pad(2), seg{"dir missing", inkRed})
-		case st == stNoEnv:
-			line1 = append(line1, pad(2), seg{"no env var", inkRed})
-		}
-		lines = append(lines, boxRow(line1, w))
-
-		// Line 2: identity + tokens + relative bar + quota. Blocked rows skip it;
-		// there is nothing safe to act on, so the detail would only invite a
-		// switch the UI is refusing to allow.
-		if st == stNoDir || st == stNoEnv {
-			continue
-		}
-		id := r.Email
-		idInk := inkGrey
-		if id == "" {
-			id, idInk = "not logged in", inkYellow
-		}
-		line2 := []seg{
-			pad(4),
-			{fmt.Sprintf("%-18s", trunc(id, 18)), idInk},
-			{fmt.Sprintf("%6s ", humanTokens(r.Tokens)), inkWhite},
-		}
-		line2 = append(line2, miniBar(r.Tokens, maxTokens, 4)...)
-		line2 = append(line2, seg{" ", ""}, quotaCell(r.Tokens, r.Quota))
-		lines = append(lines, boxRow(line2, w))
-	}
-
-	// Andon: the shell hook is what actually applies a switch. Without it, the
-	// export line goes nowhere and switching is a convincing no-op — so say so,
-	// continuously, inside the frame.
-	if !hookActive {
-		lines = append(lines,
-			boxBlank(w),
-			boxDivider(w),
-			boxRow([]seg{pad(2), {"⚠ hook not active — switch won't apply", inkYellow}}, w),
-			boxRow([]seg{pad(4), {"fix: ", inkGrey}, {`eval "$(aiacc shell-init <shell>)"`, inkBlue}}, w),
-		)
-	}
-
-	lines = append(lines, boxBottom(w))
-
-	// Key legend, outside the frame like native-jiggler's dashboard.
-	legend := "  " + paint("↑↓", inkWhite) + paint(" move   ", inkDim) +
-		paint("⏎", inkWhite) + paint(" switch   ", inkDim) +
-		paint("a", inkWhite) + paint(" add   ", inkDim) +
-		paint("q", inkWhite) + paint(" quit", inkDim)
+// frame centres the built lines in the terminal, adds a clear+home, and appends
+// a key legend below the box. Shared by the picker and the setup gate.
+func frame(lines []string, legend string, cols, innerW int) string {
 	lines = append(lines, "", legend)
-
-	// Centre horizontally; a small top margin keeps it off the very top row.
-	left := max(0, (cols-(w+2))/2)
+	left := max(0, (cols-(innerW+2))/2)
 	pref := strings.Repeat(" ", left)
 	var b strings.Builder
 	b.WriteString(clearHome)
@@ -359,14 +199,175 @@ func Render(rows []Row, cursor int, hookActive bool, cols int) string {
 	return b.String()
 }
 
-func trunc(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
+// Render returns the whole picker frame. One line per account: a cursor mark, a
+// status dot (● active / ○ idle / ⚠ blocked), the provider·account, and a quiet
+// login/status on the right. Pure, so tests assert on exact output.
+func Render(rows []Row, cursor, cols int) string {
+	w := innerWidth(cols)
+	const nameCol = 22
+
+	lines := []string{boxTop("aiacc — switch account", w), boxBlank(w)}
+
+	if len(rows) == 0 {
+		lines = append(lines,
+			boxRow([]seg{pad(2), {"No accounts yet.", inkWhite}}, w),
+			boxRow([]seg{pad(2), {"Press ", inkGrey}, {"a", inkWhite}, {" to add one.", inkGrey}}, w),
+			boxBlank(w),
+		)
 	}
-	return string([]rune(s)[:n-1]) + "…"
+
+	for i, r := range rows {
+		focused := i == cursor
+		st := r.state()
+
+		cur := seg{"  ", ""}
+		if focused {
+			cur = seg{"▸ ", inkPink}
+		}
+		var dot seg
+		switch {
+		case st == stNoDir || st == stNoEnv:
+			dot = seg{"⚠ ", inkRed}
+		case r.Active:
+			dot = seg{"● ", inkGreen}
+		default:
+			dot = seg{"○ ", inkDim}
+		}
+		nameInk := inkGrey
+		switch {
+		case st == stNoDir || st == stNoEnv:
+			nameInk = inkRed
+		case focused:
+			nameInk = inkWhite
+		}
+		name := r.Provider + " · " + r.Account
+
+		var info seg
+		switch st {
+		case stNoEnv:
+			info = seg{"no env var", inkRed}
+		case stNoDir:
+			info = seg{"dir missing", inkRed}
+		case stNoLogin:
+			info = seg{"not logged in", inkYellow}
+		default:
+			info = seg{trunc(r.Email, w-nameCol-4), inkGrey}
+		}
+
+		lines = append(lines, boxRow([]seg{
+			cur, dot,
+			{name, nameInk},
+			pad(nameCol - runeLen(name)),
+			info,
+		}, w))
+	}
+
+	lines = append(lines, boxBottom(w))
+	legend := legendLine([][2]string{{"↑↓", "move"}, {"⏎", "switch"}, {"a", "add"}, {"q", "quit"}})
+	return frame(lines, legend, cols, w)
 }
 
-// key is one decoded logical keypress.
+func legendLine(pairs [][2]string) string {
+	var b strings.Builder
+	b.WriteString("  ")
+	for _, p := range pairs {
+		b.WriteString(paint(p[0], inkWhite))
+		b.WriteString(paint(" "+p[1]+"   ", inkDim))
+	}
+	return b.String()
+}
+
+// --- Setup gate ---------------------------------------------------------------
+
+// SetupInfo is what the gate needs to explain and (optionally) perform the
+// one-time hook install.
+type SetupInfo struct {
+	Shell          string // bash | zsh | fish
+	Line           string // the line to add to the startup file
+	Path           string // display path of that startup file (~ form)
+	AlreadyPresent bool   // the line is already there; only a restart is needed
+}
+
+type setupPhase int
+
+const (
+	phaseAsk     setupPhase = iota // offer to install
+	phasePresent                   // line already present, restart to finish
+	phaseDone                      // just installed, restart to finish
+	phaseErr                       // install failed
+)
+
+// RenderSetup returns the gate frame for a phase. doneErr is shown in phaseErr.
+func RenderSetup(info SetupInfo, phase setupPhase, doneErr error, cols int) string {
+	w := innerWidth(cols)
+	var lines []string
+	var legend string
+
+	switch phase {
+	case phaseAsk:
+		lines = []string{
+			boxTop("aiacc — one-time setup", w), boxBlank(w),
+			boxRow([]seg{pad(2), {"Switching accounts sets an environment", inkWhite}}, w),
+			boxRow([]seg{pad(2), {"variable in your shell — that needs a", inkWhite}}, w),
+			boxRow([]seg{pad(2), {"one-line hook, added once.", inkWhite}}, w),
+			boxBlank(w),
+			boxRow([]seg{pad(2), {"shell   ", inkGrey}, {info.Shell, inkWhite}}, w),
+			boxRow([]seg{pad(2), {"add to  ", inkGrey}, {info.Path, inkWhite}}, w),
+			boxRow([]seg{pad(4), {info.Line, inkBlue}}, w),
+			boxBottom(w),
+		}
+		legend = legendLine([][2]string{{"i", "install it for me"}, {"q", "not now"}})
+	case phasePresent:
+		lines = []string{
+			boxTop("aiacc — one-time setup", w), boxBlank(w),
+			boxRow([]seg{pad(2), {"The hook is already in your startup file:", inkWhite}}, w),
+			boxRow([]seg{pad(4), {info.Path, inkGrey}}, w),
+			boxBlank(w),
+			boxRow([]seg{pad(2), {"Open a new terminal to load it, then run", inkWhite}}, w),
+			boxRow([]seg{pad(2), {"aiacc again.", inkWhite}}, w),
+			boxBottom(w),
+		}
+		legend = legendLine([][2]string{{"q", "ok"}})
+	case phaseDone:
+		lines = []string{
+			boxTop("aiacc — setup", w), boxBlank(w),
+			boxRow([]seg{pad(2), {"✓ Added the hook to", inkGreen}}, w),
+			boxRow([]seg{pad(4), {info.Path, inkWhite}}, w),
+			boxBlank(w),
+			boxRow([]seg{pad(2), {"Open a new terminal (or run:", inkWhite}}, w),
+			boxRow([]seg{pad(4), {sourceCmd(info), inkBlue}}, w),
+			boxRow([]seg{pad(2), {"then run ", inkWhite}, {"aiacc", inkWhite}, {" again.", inkWhite}}, w),
+			boxBottom(w),
+		}
+		legend = legendLine([][2]string{{"q", "done"}})
+	case phaseErr:
+		msg := "unknown error"
+		if doneErr != nil {
+			msg = doneErr.Error()
+		}
+		lines = []string{
+			boxTop("aiacc — setup", w), boxBlank(w),
+			boxRow([]seg{pad(2), {"⚠ Couldn't write the hook:", inkRed}}, w),
+			boxRow([]seg{pad(4), {trunc(msg, w-6), inkGrey}}, w),
+			boxBlank(w),
+			boxRow([]seg{pad(2), {"Add this line by hand to " + info.Path + ":", inkWhite}}, w),
+			boxRow([]seg{pad(4), {info.Line, inkBlue}}, w),
+			boxBottom(w),
+		}
+		legend = legendLine([][2]string{{"q", "ok"}})
+	}
+	return frame(lines, legend, cols, w)
+}
+
+func sourceCmd(info SetupInfo) string {
+	if info.Shell == "fish" {
+		return "source " + info.Path
+	}
+	return "source " + info.Path
+}
+
+// --- Terminal driving ---------------------------------------------------------
+
 type key int
 
 const (
@@ -375,65 +376,79 @@ const (
 	keyDown
 	keyEnter
 	keyAdd
+	keyInstall
 	keyQuit
 )
 
-// Run shows the picker on /dev/tty and returns the user's Result. hookActive
-// tells it whether a switch will actually be applied (see the andon in Render).
-//
-// Poka-yoke on the terminal itself: entering raw mode installs its own undo via
-// a signal handler in the same breath. A SIGTERM/SIGHUP — or a SIGINT that slips
-// past the -isig flag — restores the tty and shows the cursor before exiting, so
-// no code path leaves the user staring at a hidden cursor in a raw terminal.
-// Cleanup is not a step you can forget, because it is not a step you perform.
-func Run(rows []Row, hookActive bool) (Result, error) {
+// openRawTTY puts /dev/tty in raw mode and returns it, the terminal width, and a
+// restore func. A signal handler restores the tty and shows the cursor before
+// exiting on SIGTERM/HUP (or a SIGINT that slips past -isig), so no exit path
+// leaves the user in a hidden-cursor raw terminal. Cleanup is not a step you can
+// forget, because it is not a step you perform.
+func openRawTTY() (*os.File, int, func(), error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return Result{Kind: Cancelled}, err
+		return nil, 0, nil, err
 	}
-	defer tty.Close()
-
 	saved, err := sttyState(tty)
+	if err != nil {
+		tty.Close()
+		return nil, 0, nil, err
+	}
+	var once sync.Once
+	restore := func() {
+		once.Do(func() {
+			stty(tty, saved)
+			fmt.Fprint(tty, showCursor+clearHome)
+			tty.Close()
+		})
+	}
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	// ponytail: this goroutine parks until a signal or process exit; a CLI runs a
+	// couple of these at most, so the parked goroutine is not worth a teardown.
+	go func() {
+		<-sigc
+		restore()
+		os.Exit(130)
+	}()
+	// -isig makes Ctrl-C arrive as a byte we handle as a clean cancel in-loop.
+	if err := stty(tty, "-icanon", "-echo", "-isig", "min", "1", "time", "0"); err != nil {
+		restore()
+		return nil, 0, nil, err
+	}
+	fmt.Fprint(tty, hideCursor)
+	return tty, ttyCols(tty), restore, nil
+}
+
+// Run shows the account picker on /dev/tty and returns the user's Result. Only
+// reached when the shell hook is active, so a chosen switch always applies.
+func Run(rows []Row) (Result, error) {
+	tty, cols, restore, err := openRawTTY()
 	if err != nil {
 		return Result{Kind: Cancelled}, err
 	}
-	restore := func() {
-		stty(tty, saved)
-		fmt.Fprint(tty, showCursor+clearHome)
-	}
-
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-sigc:
-			restore()
-			os.Exit(130)
-		case <-done:
-		}
-	}()
-	defer close(done)
-	defer signal.Stop(sigc)
 	defer restore()
-
-	// -isig makes Ctrl-C arrive as a byte we handle as a clean cancel in-loop,
-	// rather than a signal that would race the restore above.
-	if err := stty(tty, "-icanon", "-echo", "-isig", "min", "1", "time", "0"); err != nil {
-		return Result{Kind: Cancelled}, err
-	}
-	fmt.Fprint(tty, hideCursor)
-
-	return drive(rows, hookActive, ttyCols(tty), tty, tty)
+	return drive(rows, cols, tty, tty)
 }
 
-// drive is the render/key loop, decoupled from /dev/tty so tests can feed it
-// scripted keystrokes and a fixed width.
-func drive(rows []Row, hookActive bool, cols int, in io.Reader, out io.Writer) (Result, error) {
+// RunSetup shows the one-time setup gate. install performs the hook write and
+// returns nil on success; the gate handles rendering the outcome.
+func RunSetup(info SetupInfo, install func() error) error {
+	tty, cols, restore, err := openRawTTY()
+	if err != nil {
+		return err
+	}
+	defer restore()
+	return driveSetup(info, install, cols, tty, tty)
+}
+
+// drive is the picker render/key loop, decoupled from /dev/tty for tests.
+func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
 	cursor := initialCursor(rows)
 	r := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, Render(rows, cursor, hookActive, cols))
+		fmt.Fprint(out, Render(rows, cursor, cols))
 		k, err := readKey(r)
 		if err != nil {
 			if err == io.EOF {
@@ -447,9 +462,7 @@ func drive(rows []Row, hookActive bool, cols int, in io.Reader, out io.Writer) (
 		case keyDown:
 			cursor = step(rows, cursor, +1)
 		case keyEnter:
-			// Guaranteed selectable: the cursor only ever lands on selectable
-			// rows, so there is no broken switch to guard against here.
-			if cursor >= 0 {
+			if cursor >= 0 { // only lands on selectable rows
 				return Result{Kind: Switch, Index: cursor}, nil
 			}
 		case keyAdd:
@@ -460,7 +473,44 @@ func drive(rows []Row, hookActive bool, cols int, in io.Reader, out io.Writer) (
 	}
 }
 
-// initialCursor lands on the active account if it is selectable, else the first
+// driveSetup is the gate render/key loop, decoupled from /dev/tty for tests.
+func driveSetup(info SetupInfo, install func() error, cols int, in io.Reader, out io.Writer) error {
+	phase := phaseAsk
+	if info.AlreadyPresent {
+		phase = phasePresent
+	}
+	var doneErr error
+	r := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, RenderSetup(info, phase, doneErr, cols))
+		k, err := readKey(r)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		switch phase {
+		case phaseAsk:
+			switch k {
+			case keyInstall:
+				if doneErr = install(); doneErr != nil {
+					phase = phaseErr
+				} else {
+					phase = phaseDone
+				}
+			case keyQuit:
+				return nil
+			}
+		default: // phasePresent, phaseDone, phaseErr — any exit key leaves
+			if k == keyQuit || k == keyEnter {
+				return nil
+			}
+		}
+	}
+}
+
+// initialCursor lands on the active account if selectable, else the first
 // selectable row, else -1 when nothing can be switched into.
 func initialCursor(rows []Row) int {
 	first := -1
@@ -479,8 +529,7 @@ func initialCursor(rows []Row) int {
 }
 
 // step moves the cursor to the nearest selectable row in direction dir, or stays
-// put when none exists that way. The boundary is where movement stops — you
-// cannot land on a blocked row.
+// put when none exists that way — the boundary is where movement stops.
 func step(rows []Row, cursor, dir int) int {
 	if cursor < 0 {
 		return cursor
@@ -494,7 +543,7 @@ func step(rows []Row, cursor, dir int) int {
 }
 
 // readKey decodes one logical keypress: arrows (or vim j/k), enter, add (a),
-// and quit (q / Esc / Ctrl-C).
+// install (i), and quit (q / Esc / Ctrl-C).
 func readKey(r *bufio.Reader) (key, error) {
 	b, err := r.ReadByte()
 	if err != nil {
@@ -503,10 +552,12 @@ func readKey(r *bufio.Reader) (key, error) {
 	switch b {
 	case '\r', '\n':
 		return keyEnter, nil
-	case 'q', 'Q', 3: // 3 = Ctrl-C (delivered as a byte under -isig)
+	case 'q', 'Q', 3: // 3 = Ctrl-C (a byte under -isig)
 		return keyQuit, nil
 	case 'a', 'A':
 		return keyAdd, nil
+	case 'i', 'I':
+		return keyInstall, nil
 	case 'j':
 		return keyDown, nil
 	case 'k':
@@ -534,7 +585,6 @@ func readKey(r *bufio.Reader) (key, error) {
 	return keyNone, nil
 }
 
-// sttyState captures the current terminal settings so they can be restored.
 func sttyState(tty *os.File) (string, error) {
 	out, err := runStty(tty, "-g")
 	if err != nil {
