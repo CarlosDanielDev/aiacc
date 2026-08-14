@@ -47,7 +47,7 @@ func runPicker(cmd *cobra.Command, shellName, filter string) error {
 		case tui.Cancelled:
 			return nil // emit nothing — a hook eval of "" is a no-op
 		case tui.Add:
-			if err := addFromPicker(path); err != nil {
+			if err := runAddTUI(path); err != nil {
 				return err
 			}
 			continue // rebuild the list and re-open
@@ -127,32 +127,51 @@ func tildeize(p string) string {
 	return p
 }
 
-// addFromPicker runs the existing line-based add wizard on /dev/tty. It must not
-// touch cmd's stdout: that channel carries the export line the shell hook
-// evaluates, and wizard prompts eval'd as shell would be a disaster.
-func addFromPicker(cfgPath string) error {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+// runAddTUI shows the framed add screen and, on confirm, creates the config dir
+// and registers the account. The screen constrains the name to alias-safe
+// characters, so a junk name can't be entered and every new account gets a
+// working `claude-<name>` shortcut. Claude is the provider; a different provider
+// still uses `aiacc add <provider> <account> --dir`.
+func runAddTUI(cfgPath string) error {
+	res, err := tui.RunAdd(currentClaudeLogin())
 	if err != nil {
 		return err
 	}
-	defer tty.Close()
-	fmt.Fprintln(tty)
-	if err := runAddWizard(tty, tty, cfgPath); err != nil {
-		fmt.Fprintf(tty, "add failed: %v\n", err)
+	if !res.OK {
+		return nil // cancelled
 	}
-	fmt.Fprint(tty, "\npress enter to continue…")
-	readLine(tty)
-	return nil
+	dir := expandTilde(res.Dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	// Store the value the user saw (with ~); config expands it on read.
+	return saveAccount(cfgPath, "claude", res.Name, res.Dir, 0)
 }
 
-func readLine(r io.Reader) {
-	var b [1]byte
-	for {
-		n, err := r.Read(b[:])
-		if n == 0 || err != nil || b[0] == '\n' {
-			return
+// currentClaudeLogin is the email (and org) logged into the active Claude dir,
+// shown in the add screen for context, or "" when not logged in.
+func currentClaudeLogin() string {
+	cur := currentClaudeDir()
+	if cur == "" {
+		return ""
+	}
+	info := claude.Detect(cur)
+	if !info.LoggedIn {
+		return ""
+	}
+	if info.Organization != "" {
+		return info.Email + " (" + info.Organization + ")"
+	}
+	return info.Email
+}
+
+func expandTilde(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(p, "~"))
 		}
 	}
+	return p
 }
 
 // hookActive reports whether aiacc is being run through its shell hook, which is

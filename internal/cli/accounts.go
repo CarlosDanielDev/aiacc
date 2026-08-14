@@ -29,6 +29,11 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			if len(args) == 0 {
+				// Interactive terminal → the framed add screen. Piped/scripted
+				// (and tests) → the line wizard, which reads stdin.
+				if isTerminal(os.Stdin) {
+					return runAddTUI(path)
+				}
 				return runAddWizard(cmd.InOrStdin(), cmd.OutOrStdout(), path)
 			}
 			if len(args) != 2 {

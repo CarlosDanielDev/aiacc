@@ -189,6 +189,70 @@ func TestRenderSetupShowsShellLinePath(t *testing.T) {
 	}
 }
 
+// --- Add account --------------------------------------------------------------
+
+func add(t *testing.T, keys string) AddResult {
+	t.Helper()
+	res, err := driveAdd("", 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	return res
+}
+
+func TestAddTypeNameEnter(t *testing.T) {
+	res := add(t, "work\r")
+	if !res.OK || res.Name != "work" || res.Dir != "~/.claude-work" {
+		t.Fatalf("got %+v, want {work ~/.claude-work true}", res)
+	}
+}
+
+// TestAddRejectsJunkChars is the fix for the "??????????" account: characters
+// that are not alias-safe cannot be typed into the name field at all.
+func TestAddRejectsJunkChars(t *testing.T) {
+	res := add(t, "wo?!$ rk\r") // ? ! $ space are all dropped
+	if !res.OK || res.Name != "work" {
+		t.Fatalf("got %+v, want name=work (junk filtered)", res)
+	}
+}
+
+func TestAddEmptyNameBlocksThenAccepts(t *testing.T) {
+	// Enter on an empty name is refused; after typing it succeeds.
+	res := add(t, "\rok\r")
+	if !res.OK || res.Name != "ok" {
+		t.Fatalf("got %+v, want name=ok", res)
+	}
+}
+
+func TestAddEscCancels(t *testing.T) {
+	if res := add(t, "work\x1b"); res.OK {
+		t.Fatalf("got %+v, want cancelled", res)
+	}
+}
+
+func TestAddBackspace(t *testing.T) {
+	if res := add(t, "work\x7f\r"); !res.OK || res.Name != "wor" {
+		t.Fatalf("got %+v, want name=wor", res)
+	}
+}
+
+func TestAddCustomDirViaTab(t *testing.T) {
+	// Tab to the dir field, type an absolute dir; it overrides the default.
+	res := add(t, "work\t/tmp/x\r")
+	if !res.OK || res.Name != "work" || res.Dir != "/tmp/x" {
+		t.Fatalf("got %+v, want dir=/tmp/x", res)
+	}
+}
+
+func TestRenderAddShowsFieldsAndLogin(t *testing.T) {
+	out := RenderAdd("me@x.com", "wo", "", 0, "", 80)
+	for _, want := range []string{"add account", "name", "wo", "~/.claude-wo", "me@x.com"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("add render missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // --- Layout self-test ---------------------------------------------------------
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -216,6 +280,7 @@ func TestFramesStaySquare(t *testing.T) {
 		frames["picker"] = Render(rows, 0, cols)
 		frames["setupAsk"] = RenderSetup(setupInfo(), phaseAsk, nil, cols)
 		frames["setupDone"] = RenderSetup(setupInfo(), phaseDone, nil, cols)
+		frames["add"] = RenderAdd("me@example.com", "work", "", 0, "bad name", cols)
 		for name, out := range frames {
 			wid := -1
 			for _, ln := range strings.Split(out, "\r\n") {
