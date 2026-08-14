@@ -32,8 +32,9 @@ Switching accounts means changing an environment variable **in your current
 shell**. A child process cannot mutate its parent shell's environment, so `aiacc`
 can't do it by itself — the same reason `direnv` and `nvm` install a shell hook.
 `aiacc shell-init` prints a small shell function named `aiacc` that wraps the
-binary: for `use` it evaluates the binary's export line in your shell; every other
-command runs the binary directly.
+binary: for `use` — and for a bare `aiacc`, the interactive front door — it
+evaluates the binary's export line in your shell; every other command runs the
+binary directly.
 
 Add the matching line to your shell startup file, then open a new shell:
 
@@ -49,7 +50,12 @@ aiacc shell-init fish | source
 ```
 
 Without the hook, `aiacc use` still works — it just prints the `export` line
-instead of applying it, so you can inspect or pipe it yourself.
+instead of applying it, so you can inspect or pipe it yourself. The interactive
+picker shows a warning banner in that state, since a switch it can't apply would
+otherwise look like it worked.
+
+> **Upgrading?** The hook now also wraps a bare `aiacc` (the front door), so
+> re-run the `shell-init` line above and open a new shell after updating.
 
 ## Quickstart
 
@@ -68,10 +74,13 @@ claude    work      ~/.claude-work
 # Switch the current shell to an account (needs the shell hook above).
 $ aiacc use claude work
 
-# Or omit the account for an interactive picker (arrow keys / j·k, enter to
-# switch, q to cancel) showing which account is active and its token usage.
-# 'aiacc use claude' scopes it to one provider; 'aiacc use' lists them all.
-$ aiacc use
+# Or launch the interactive picker — a framed TUI showing each account's active
+# state, login identity, token usage, and quota. Arrow keys / j·k move, enter
+# switches, a adds, q cancels. Accounts you can't safely switch into (a missing
+# dir, or a provider with no env var) are shown but not selectable, so a broken
+# switch can't be made by mistake.
+$ aiacc              # bare aiacc, in a terminal, IS the front door
+$ aiacc use          # the same picker; 'aiacc use claude' scopes to one provider
 
 # See which account is active per provider. '*' marks the live one;
 # LAST-USED is the directory's modification time.
@@ -144,10 +153,11 @@ From then on `aiacc use foo work` emits `export FOO_CONFIG_HOME=~/.foo-work`
 
 | Command | Effect |
 |---|---|
+| `aiacc` | Launch the interactive picker (the front door). Needs a terminal; piped or redirected, it prints help instead. |
 | `aiacc add <provider> <account> --dir <path> [--quota N]` | Register an account; creates the directory if missing. |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. |
 | `aiacc list` | Table of providers and their accounts. |
-| `aiacc use [provider] [account]` | Switch the current shell (via the hook). Validates the directory exists. Omit the account for an interactive picker. |
+| `aiacc use [provider] [account]` | Switch the current shell (via the hook). Validates the directory exists. Omit the account for the interactive picker. |
 | `aiacc status` | Active account per provider, from the live environment, plus last-used time. |
 | `aiacc usage [provider]` | Token totals per account from local logs; `used/quota` when a quota is set. |
 | `aiacc shell-init <bash\|zsh\|fish>` | Print the shell hook to add to your startup file. |
