@@ -82,22 +82,28 @@ func newRemoveCmd() *cobra.Command {
 		Short: "Unregister an account (keeps the directory)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			providerName, account := args[0], args[1]
 			path, err := configPath()
 			if err != nil {
 				return err
 			}
-			c, err := config.Load(path)
-			if err != nil {
-				return err
-			}
-			if p, ok := c.Providers[providerName]; ok {
-				delete(p.Accounts, account)
-				c.Providers[providerName] = p
-			}
-			return config.Save(path, c)
+			return removeAccount(path, args[0], args[1])
 		},
 	}
+}
+
+// removeAccount unregisters (provider, account) from the config at path. The
+// account's directory is left on disk — only the registration is dropped. Used
+// by both `remove` and the picker's `d`.
+func removeAccount(path, providerName, account string) error {
+	c, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	if p, ok := c.Providers[providerName]; ok {
+		delete(p.Accounts, account)
+		c.Providers[providerName] = p
+	}
+	return config.Save(path, c)
 }
 
 func newListCmd() *cobra.Command {

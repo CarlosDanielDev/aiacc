@@ -52,6 +52,7 @@ const (
 	Cancelled ResultKind = iota // backed out (q / Esc / Ctrl-C / EOF)
 	Switch                      // chose Index; the caller emits its export line
 	Add                         // pressed `a`; the caller runs the add wizard
+	Remove                      // confirmed removing Index; the caller unregisters it
 )
 
 // Result is what Run/drive returns. Index is meaningful only for Switch.
@@ -263,7 +264,25 @@ func Render(rows []Row, cursor, cols int) string {
 	}
 
 	lines = append(lines, boxBottom(w))
-	legend := legendLine([][2]string{{"↑↓", "move"}, {"⏎", "switch"}, {"a", "add"}, {"q", "quit"}})
+	legend := legendLine([][2]string{{"↑↓", "move"}, {"⏎", "switch"}, {"a", "add"}, {"d", "remove"}, {"q", "quit"}})
+	return frame(lines, legend, cols, w)
+}
+
+// RenderRemove is the confirm screen for removing an account. Removing only
+// unregisters it from aiacc; the config dir is left on disk, so the action is
+// reversible by re-adding. It still asks first — an explicit `y`, never Enter,
+// so a stray keystroke can't drop an account.
+func RenderRemove(r Row, cols int) string {
+	w := innerWidth(cols)
+	lines := []string{
+		boxTop("aiacc — remove account", w), boxBlank(w),
+		boxRow([]seg{pad(2), {"Remove ", inkWhite}, {r.Provider + " · " + r.Account, inkYellow}, {" from aiacc?", inkWhite}}, w),
+		boxBlank(w),
+		boxRow([]seg{pad(2), {"The config dir is left on disk — only the", inkGrey}}, w),
+		boxRow([]seg{pad(2), {"aiacc registration is removed.", inkGrey}}, w),
+		boxBottom(w),
+	}
+	legend := legendLine([][2]string{{"y", "remove"}, {"n", "cancel"}})
 	return frame(lines, legend, cols, w)
 }
 
@@ -531,6 +550,9 @@ const (
 	keyEnter
 	keyAdd
 	keyInstall
+	keyRemove
+	keyYes
+	keyNo
 	keyQuit
 )
 
@@ -597,12 +619,20 @@ func RunSetup(info SetupInfo, install func() error) error {
 	return driveSetup(info, install, cols, tty, tty)
 }
 
-// drive is the picker render/key loop, decoupled from /dev/tty for tests.
+// drive is the picker render/key loop, decoupled from /dev/tty for tests. The
+// cursor visits every row so any account can be removed, but Enter only switches
+// into a selectable one — you still cannot switch into a broken account, the
+// guard just moved from the cursor to the action.
 func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
 	cursor := initialCursor(rows)
+	confirm := -1 // >=0 while confirming removal of that row
 	r := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, Render(rows, cursor, cols))
+		if confirm >= 0 {
+			fmt.Fprint(out, RenderRemove(rows[confirm], cols))
+		} else {
+			fmt.Fprint(out, Render(rows, cursor, cols))
+		}
 		k, err := readKey(r)
 		if err != nil {
 			if err == io.EOF {
@@ -610,14 +640,27 @@ func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
 			}
 			return Result{Kind: Cancelled}, err
 		}
+		if confirm >= 0 {
+			switch k {
+			case keyYes:
+				return Result{Kind: Remove, Index: confirm}, nil
+			case keyNo, keyQuit: // n / Esc / q / Ctrl-C back out — Enter is inert
+				confirm = -1
+			}
+			continue
+		}
 		switch k {
 		case keyUp:
 			cursor = step(rows, cursor, -1)
 		case keyDown:
 			cursor = step(rows, cursor, +1)
 		case keyEnter:
-			if cursor >= 0 { // only lands on selectable rows
+			if cursor >= 0 && rows[cursor].selectable() {
 				return Result{Kind: Switch, Index: cursor}, nil
+			}
+		case keyRemove:
+			if cursor >= 0 {
+				confirm = cursor
 			}
 		case keyAdd:
 			return Result{Kind: Add}, nil
@@ -664,36 +707,39 @@ func driveSetup(info SetupInfo, install func() error, cols int, in io.Reader, ou
 	}
 }
 
-// initialCursor lands on the active account if selectable, else the first
-// selectable row, else -1 when nothing can be switched into.
+// initialCursor lands on the active account, else the first selectable row, else
+// the first row (so an all-blocked list is still navigable for removal), else -1
+// when the list is empty.
 func initialCursor(rows []Row) int {
+	if len(rows) == 0 {
+		return -1
+	}
 	first := -1
 	for i, r := range rows {
-		if !r.selectable() {
-			continue
-		}
-		if first < 0 {
-			first = i
-		}
 		if r.Active {
 			return i
 		}
+		if first < 0 && r.selectable() {
+			first = i
+		}
 	}
-	return first
+	if first >= 0 {
+		return first
+	}
+	return 0
 }
 
-// step moves the cursor to the nearest selectable row in direction dir, or stays
-// put when none exists that way — the boundary is where movement stops.
+// step moves the cursor one row in direction dir, clamped to the list. Every row
+// is reachable; switching is guarded at Enter, not here.
 func step(rows []Row, cursor, dir int) int {
 	if cursor < 0 {
 		return cursor
 	}
-	for i := cursor + dir; i >= 0 && i < len(rows); i += dir {
-		if rows[i].selectable() {
-			return i
-		}
+	next := cursor + dir
+	if next < 0 || next >= len(rows) {
+		return cursor
 	}
-	return cursor
+	return next
 }
 
 // readKey decodes one logical keypress: arrows (or vim j/k), enter, add (a),
@@ -712,6 +758,12 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyAdd, nil
 	case 'i', 'I':
 		return keyInstall, nil
+	case 'd', 'D':
+		return keyRemove, nil
+	case 'y', 'Y':
+		return keyYes, nil
+	case 'n', 'N':
+		return keyNo, nil
 	case 'j':
 		return keyDown, nil
 	case 'k':
