@@ -2,23 +2,24 @@ package tui
 
 import (
 	"bytes"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
 
-// sample is two switchable claude accounts; "work" is active and has a quota.
+// sample is two switchable claude accounts; "work" is active.
 func sample() []Row {
 	return []Row{
-		{Provider: "claude", Account: "personal", Email: "me@x.com", Dir: "/p", EnvVar: "CLAUDE_CONFIG_DIR", DirExists: true, Tokens: 340_000},
-		{Provider: "claude", Account: "work", Email: "w@co.com", Dir: "/w", EnvVar: "CLAUDE_CONFIG_DIR", DirExists: true, Active: true, Tokens: 1_200_000, Quota: 2_000_000},
+		{Provider: "claude", Account: "personal", Email: "me@x.com", Dir: "/p", EnvVar: "CLAUDE_CONFIG_DIR", DirExists: true},
+		{Provider: "claude", Account: "work", Email: "w@co.com", Dir: "/w", EnvVar: "CLAUDE_CONFIG_DIR", DirExists: true, Active: true},
 	}
 }
 
 func drv(t *testing.T, keys string, rows []Row) Result {
 	t.Helper()
-	res, err := drive(rows, true, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	res, err := drive(rows, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("drive: %v", err)
 	}
@@ -27,15 +28,13 @@ func drv(t *testing.T, keys string, rows []Row) Result {
 
 func TestDriveArrowUpThenEnter(t *testing.T) {
 	// Cursor starts on the active row (1); Up -> 0; Enter switches to 0.
-	res := drv(t, "\x1b[A\r", sample())
-	if res.Kind != Switch || res.Index != 0 {
+	if res := drv(t, "\x1b[A\r", sample()); res.Kind != Switch || res.Index != 0 {
 		t.Fatalf("got %+v, want Switch 0", res)
 	}
 }
 
 func TestDriveDefaultsToActiveRow(t *testing.T) {
-	res := drv(t, "\r", sample())
-	if res.Kind != Switch || res.Index != 1 {
+	if res := drv(t, "\r", sample()); res.Kind != Switch || res.Index != 1 {
 		t.Fatalf("got %+v, want Switch 1 (active row)", res)
 	}
 }
@@ -49,16 +48,13 @@ func TestDriveQuitCancels(t *testing.T) {
 }
 
 func TestDriveClampsAtTop(t *testing.T) {
-	res := drv(t, "\x1b[A\x1b[A\r", sample()) // Up past the top stays at 0
-	if res.Kind != Switch || res.Index != 0 {
+	if res := drv(t, "\x1b[A\x1b[A\r", sample()); res.Kind != Switch || res.Index != 0 {
 		t.Fatalf("got %+v, want Switch 0", res)
 	}
 }
 
 func TestDriveVimKeys(t *testing.T) {
-	// j from active(1) clamps at the bottom; k -> 0; enter.
-	res := drv(t, "jk\r", sample())
-	if res.Kind != Switch || res.Index != 0 {
+	if res := drv(t, "jk\r", sample()); res.Kind != Switch || res.Index != 0 {
 		t.Fatalf("got %+v, want Switch 0", res)
 	}
 }
@@ -77,15 +73,13 @@ func TestDriveSkipsBlockedRows(t *testing.T) {
 		{Provider: "claude", Account: "ok", Email: "a@b.c", EnvVar: "CLAUDE_CONFIG_DIR", DirExists: true}, // switchable
 		{Provider: "foo", Account: "x", EnvVar: "", DirExists: true},                                      // blocked: no env var
 	}
-	// Cursor starts on the only selectable row (1). Down and Up both have only
-	// blocked rows to move onto, so they must stay put.
+	// Cursor starts on the only selectable row (1); Down and Up have only blocked
+	// rows to move onto, so they must stay put.
 	if res := drv(t, "\x1b[B\x1b[A\r", rows); res.Kind != Switch || res.Index != 1 {
 		t.Fatalf("got %+v, want Switch 1 (blocked rows unreachable)", res)
 	}
 }
 
-// TestDriveAllBlockedCannotSwitch: with nothing selectable, Enter is a no-op and
-// only quit gets out.
 func TestDriveAllBlockedCannotSwitch(t *testing.T) {
 	rows := []Row{{Provider: "foo", Account: "x", EnvVar: "", DirExists: true}}
 	if res := drv(t, "\rq", rows); res.Kind != Cancelled { // Enter no-op, then q
@@ -106,22 +100,12 @@ func TestInitialCursorSkipsBlockedToActive(t *testing.T) {
 	}
 }
 
-func TestRenderShowsActiveTokensLogin(t *testing.T) {
-	out := Render(sample(), 0, true, 80)
-	for _, want := range []string{"▸", "● ACTIVE", "1.2M", "340.0k", "w@co.com", "aiacc"} {
+func TestRenderShowsActiveAndLogin(t *testing.T) {
+	out := Render(sample(), 0, 80)
+	for _, want := range []string{"▸", "●", "claude · work", "w@co.com", "switch account"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q:\n%s", want, out)
 		}
-	}
-}
-
-func TestRenderAndonOnlyWhenHookInactive(t *testing.T) {
-	const andon = "hook not active"
-	if in := Render(sample(), 0, false, 80); !strings.Contains(in, andon) {
-		t.Errorf("andon missing when hook inactive:\n%s", in)
-	}
-	if act := Render(sample(), 0, true, 80); strings.Contains(act, andon) {
-		t.Errorf("andon shown when hook active:\n%s", act)
 	}
 }
 
@@ -130,7 +114,7 @@ func TestRenderBlockedBadges(t *testing.T) {
 		{Provider: "claude", Account: "gone", EnvVar: "CLAUDE_CONFIG_DIR", DirExists: false},
 		{Provider: "foo", Account: "x", EnvVar: "", DirExists: true},
 	}
-	out := Render(rows, -1, true, 80)
+	out := Render(rows, -1, 80)
 	for _, want := range []string{"dir missing", "no env var"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing blocked badge %q:\n%s", want, out)
@@ -139,44 +123,77 @@ func TestRenderBlockedBadges(t *testing.T) {
 }
 
 func TestRenderEmptyState(t *testing.T) {
-	if out := Render(nil, -1, true, 80); !strings.Contains(out, "No accounts registered") {
+	if out := Render(nil, -1, 80); !strings.Contains(out, "No accounts yet") {
 		t.Errorf("empty state missing guidance:\n%s", out)
 	}
 }
 
-var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+// --- Setup gate ---------------------------------------------------------------
 
-func visibleLen(s string) int { return utf8.RuneCountInString(ansi.ReplaceAllString(s, "")) }
+func setupInfo() SetupInfo {
+	return SetupInfo{Shell: "fish", Line: "aiacc shell-init fish | source", Path: "~/.config/fish/config.fish"}
+}
 
-// TestRenderFrameStaysSquare is a poka-yoke self-test on the layout: no width,
-// and no row content, may tear the box. Every framed line (border or body) must
-// have the same visible width — even at a width too small to fit the content and
-// one far wider than it.
-func TestRenderFrameStaysSquare(t *testing.T) {
-	rows := append(sample(),
-		Row{Provider: "claude", Account: "averylongaccountnamethatwouldoverflowanyreasonableframe", Email: "someone.with.a.long.address@example.com", EnvVar: "CLAUDE_CONFIG_DIR", DirExists: true, Tokens: 999_999_999},
-		Row{Provider: "foo", Account: "gone", EnvVar: "", DirExists: false},
-	)
-	for _, cols := range []int{20, 40, 80, 200} {
-		out := Render(rows, 0, false, cols) // hook inactive => andon rows too
-		var wid = -1
-		for _, ln := range strings.Split(out, "\r\n") {
-			trimmed := strings.TrimLeft(ansi.ReplaceAllString(ln, ""), " ")
-			if !strings.ContainsAny(firstRune(trimmed), "╭│├╰") {
-				continue
-			}
-			n := visibleLen(ln)
-			if wid == -1 {
-				wid = n
-			} else if n != wid {
-				t.Fatalf("cols=%d: framed line width %d != %d:\n%q", cols, n, wid, ln)
-			}
-		}
-		if wid == -1 {
-			t.Fatalf("cols=%d: no framed lines found", cols)
+func TestSetupInstallCallsInstallThenExits(t *testing.T) {
+	called := false
+	install := func() error { called = true; return nil }
+	// i triggers install; the done screen then exits on q.
+	err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("driveSetup: %v", err)
+	}
+	if !called {
+		t.Fatal("install was not called on 'i'")
+	}
+}
+
+func TestSetupQuitSkipsInstall(t *testing.T) {
+	called := false
+	install := func() error { called = true; return nil }
+	if err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("q"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("driveSetup: %v", err)
+	}
+	if called {
+		t.Fatal("install ran on quit — must only run on 'i'")
+	}
+}
+
+func TestSetupAlreadyPresentDoesNotInstall(t *testing.T) {
+	info := setupInfo()
+	info.AlreadyPresent = true
+	called := false
+	install := func() error { called = true; return nil }
+	// In the present phase, 'i' is inert; only quit exits.
+	if err := driveSetup(info, install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("driveSetup: %v", err)
+	}
+	if called {
+		t.Fatal("install ran though the hook was already present")
+	}
+}
+
+func TestSetupInstallErrorShownNotFatal(t *testing.T) {
+	install := func() error { return errors.New("permission denied") }
+	// i -> error screen; q exits. driveSetup itself must not return the error.
+	if err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("driveSetup returned install error, should render it: %v", err)
+	}
+}
+
+func TestRenderSetupShowsShellLinePath(t *testing.T) {
+	out := RenderSetup(setupInfo(), phaseAsk, nil, 80)
+	for _, want := range []string{"one-time setup", "fish", "shell-init fish | source", "install it for me"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("setup render missing %q:\n%s", want, out)
 		}
 	}
 }
+
+// --- Layout self-test ---------------------------------------------------------
+
+var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func visibleLen(s string) int { return utf8.RuneCountInString(ansi.ReplaceAllString(s, "")) }
 
 func firstRune(s string) string {
 	for _, r := range s {
@@ -185,11 +202,36 @@ func firstRune(s string) string {
 	return ""
 }
 
-func TestHumanTokens(t *testing.T) {
-	cases := map[int]string{0: "0", 999: "999", 1500: "1.5k", 340_000: "340.0k", 2_500_000: "2.5M"}
-	for in, want := range cases {
-		if got := humanTokens(in); got != want {
-			t.Errorf("humanTokens(%d) = %q, want %q", in, got, want)
+// TestFramesStaySquare is a poka-yoke self-test on the layout: no width, and no
+// row content, may tear a box — for the picker or the gate. Every framed line
+// must have the same visible width, at a width too small for the content and one
+// far wider than it.
+func TestFramesStaySquare(t *testing.T) {
+	rows := append(sample(),
+		Row{Provider: "claude", Account: "averylongaccountnamethatwouldoverflowanyreasonableframe", Email: "someone.with.a.long.address@example.com", EnvVar: "CLAUDE_CONFIG_DIR", DirExists: true},
+		Row{Provider: "foo", Account: "gone", EnvVar: "", DirExists: false},
+	)
+	frames := map[string]string{}
+	for _, cols := range []int{20, 40, 80, 200} {
+		frames["picker"] = Render(rows, 0, cols)
+		frames["setupAsk"] = RenderSetup(setupInfo(), phaseAsk, nil, cols)
+		frames["setupDone"] = RenderSetup(setupInfo(), phaseDone, nil, cols)
+		for name, out := range frames {
+			wid := -1
+			for _, ln := range strings.Split(out, "\r\n") {
+				trimmed := strings.TrimLeft(ansi.ReplaceAllString(ln, ""), " ")
+				if !strings.ContainsAny(firstRune(trimmed), "╭│├╰") {
+					continue
+				}
+				if n := visibleLen(ln); wid == -1 {
+					wid = n
+				} else if n != wid {
+					t.Fatalf("%s cols=%d: framed line width %d != %d:\n%q", name, cols, n, wid, ln)
+				}
+			}
+			if wid == -1 {
+				t.Fatalf("%s cols=%d: no framed lines found", name, cols)
+			}
 		}
 	}
 }

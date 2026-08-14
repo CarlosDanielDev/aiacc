@@ -199,3 +199,46 @@ func TestHookUnknownShell(t *testing.T) {
 		t.Fatalf("want ErrUnknownShell, got %v", err)
 	}
 }
+
+func TestAccountAliasFormats(t *testing.T) {
+	cases := map[string]string{
+		"bash": "claude-work() { aiacc use claude work; }\n",
+		"zsh":  "claude-work() { aiacc use claude work; }\n",
+		"fish": "function claude-work; aiacc use claude work; end\n",
+	}
+	for sh, want := range cases {
+		got, err := AccountAlias(sh, "claude", "work")
+		if err != nil {
+			t.Fatalf("AccountAlias(%s): %v", sh, err)
+		}
+		if got != want {
+			t.Errorf("AccountAlias(%s) = %q, want %q", sh, got, want)
+		}
+	}
+}
+
+// TestAccountAliasSkipsUnsafeNames: a provider/account that would produce an
+// unsafe function name is skipped (empty, no error), never emitted into the
+// eval'd script.
+func TestAccountAliasSkipsUnsafeNames(t *testing.T) {
+	for _, c := range []struct{ provider, account string }{
+		{"claude", "work space"},
+		{"claude", "a;rm -rf"},
+		{"claude", "a$(x)"},
+		{"1bad", "acct"},
+	} {
+		got, err := AccountAlias("bash", c.provider, c.account)
+		if err != nil {
+			t.Fatalf("AccountAlias(%q,%q): unexpected error %v", c.provider, c.account, err)
+		}
+		if got != "" {
+			t.Errorf("AccountAlias(%q,%q) = %q, want skipped", c.provider, c.account, got)
+		}
+	}
+}
+
+func TestAccountAliasUnknownShell(t *testing.T) {
+	if _, err := AccountAlias("tcsh", "claude", "work"); !errors.Is(err, ErrUnknownShell) {
+		t.Fatalf("want ErrUnknownShell, got %v", err)
+	}
+}

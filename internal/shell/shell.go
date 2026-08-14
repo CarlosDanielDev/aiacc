@@ -10,6 +10,8 @@ package shell
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -84,6 +86,68 @@ func fishSingleQuote(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, "'", `\'`)
 	return "'" + s + "'"
+}
+
+// RcLine is the line a user adds to their shell startup file to load the aiacc
+// hook. bash/zsh eval the shell-init output; fish sources it.
+func RcLine(shellName string) (string, error) {
+	switch shellName {
+	case "bash", "zsh":
+		return fmt.Sprintf(`eval "$(aiacc shell-init %s)"`, shellName), nil
+	case "fish":
+		return "aiacc shell-init fish | source", nil
+	default:
+		return "", ErrUnknownShell
+	}
+}
+
+// RcPath is the conventional startup file for a shell, absolute. It does not
+// check whether the file exists — callers create it on write.
+func RcPath(shellName string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	switch shellName {
+	case "bash":
+		return filepath.Join(home, ".bashrc"), nil
+	case "zsh":
+		return filepath.Join(home, ".zshrc"), nil
+	case "fish":
+		return filepath.Join(home, ".config", "fish", "config.fish"), nil
+	default:
+		return "", ErrUnknownShell
+	}
+}
+
+// aliasNameRe matches a function name aiacc will emit: a letter/underscore
+// start, then letters, digits, hyphens, or underscores. Anything else (a space,
+// a shell metacharacter) is refused rather than emitted into an eval'd script.
+var aliasNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+
+// AccountAlias returns a shell function that switches straight to (provider,
+// account) by name — e.g. `claude-work` for ("claude", "work"). It defers to the
+// aiacc hook, so it only works alongside it (same shell-init output).
+//
+// Poka-yoke: when `provider-account` is not a safe function name it returns ""
+// with no error, so the caller skips it silently; that account stays reachable
+// via `aiacc use`. A bad name is never written into a script the shell evals.
+func AccountAlias(shellName, provider, account string) (string, error) {
+	name := provider + "-" + account
+	if !aliasNameRe.MatchString(name) {
+		if shellName != "bash" && shellName != "zsh" && shellName != "fish" {
+			return "", ErrUnknownShell
+		}
+		return "", nil
+	}
+	switch shellName {
+	case "bash", "zsh":
+		return fmt.Sprintf("%s() { aiacc use %s %s; }\n", name, provider, account), nil
+	case "fish":
+		return fmt.Sprintf("function %s; aiacc use %s %s; end\n", name, provider, account), nil
+	default:
+		return "", ErrUnknownShell
+	}
 }
 
 // Hook returns the shell function text emitted by `aiacc shell-init <shell>`.

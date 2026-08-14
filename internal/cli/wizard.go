@@ -48,7 +48,9 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string) error {
 	}
 
 	fmt.Fprintf(out, "\nRegistered '%s' → %s\n", name, dir)
-	fmt.Fprintf(out, "Log in as this account:\n  aiacc use claude %s\n  claude          # then /login\n", name)
+	fmt.Fprintf(out, "Switch to it:\n  aiacc use claude %s\n", name)
+	fmt.Fprintf(out, "Or, in a new shell, just run:\n  claude-%s\n", name)
+	fmt.Fprintf(out, "Then log in:\n  claude          # then /login\n")
 	return nil
 }
 
