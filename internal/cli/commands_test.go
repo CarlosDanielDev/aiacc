@@ -41,6 +41,10 @@ func TestShellInitPrintsLaunchers(t *testing.T) {
 		t.Fatalf("shell-init: %v", err)
 	}
 	s := out.String()
+	// Erases any stale pre-v0.7 hook so re-sourcing fixes the current shell.
+	if !strings.Contains(s, "unset -f aiacc") {
+		t.Fatalf("shell-init should erase the old aiacc hook:\n%s", s)
+	}
 	// One launcher named after the account ("work"), running claude with the
 	// profile's dir.
 	for _, want := range []string{"work() {", "CLAUDE_CONFIG_DIR=", "command claude"} {
