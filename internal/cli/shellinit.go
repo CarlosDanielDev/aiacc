@@ -41,6 +41,10 @@ func launchers(shellName string) (string, error) {
 
 	var b strings.Builder
 	b.WriteString("# aiacc profile launchers\n")
+	// Poka-yoke migration: erase any leftover pre-v0.7 `aiacc` hook function so
+	// re-sourcing this fixes the current shell (bare `aiacc` falls back to the
+	// binary) with no restart. Harmless when no such function exists.
+	b.WriteString(eraseOldHook(shellName))
 
 	path, err := configPath()
 	if err != nil {
@@ -65,4 +69,16 @@ func launchers(shellName string) (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+// eraseOldHook removes the pre-v0.7 `aiacc` shell function if it is defined, so a
+// re-source of shell-init un-breaks the current shell. It is a no-op when the
+// function is absent.
+func eraseOldHook(shellName string) string {
+	switch shellName {
+	case "fish":
+		return "functions -q aiacc; and functions -e aiacc\n"
+	default: // bash, zsh
+		return "unset -f aiacc 2>/dev/null || true\n"
+	}
 }
