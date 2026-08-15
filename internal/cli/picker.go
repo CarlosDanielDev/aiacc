@@ -2,32 +2,24 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
-	"github.com/CarlosDanielDev/aiacc/internal/shell"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
-	"github.com/spf13/cobra"
 )
 
-// runPicker drives the interactive front door shared by a bare `aiacc` and
-// `aiacc use` with no account. filter scopes the list to one provider.
-//
-// Poka-yoke: if the shell hook is not active, switching cannot work — so instead
-// of a picker that silently no-ops, we show the one-time setup gate. The single
-// confusing state ("I switched and nothing happened") is unreachable.
-func runPicker(cmd *cobra.Command, shellName, filter string) error {
-	if !hookActive(cmd.OutOrStdout()) {
-		return runSetupGate(shellName)
-	}
-
+// runPicker drives the interactive profile launcher (a bare `aiacc`). filter
+// scopes the list to one provider ("" = all). It loops so add/remove return to a
+// freshly-rebuilt list; Launch replaces this process with the provider's CLI.
+func runPicker(filter string) error {
 	path, err := configPath()
 	if err != nil {
 		return err
@@ -45,112 +37,73 @@ func runPicker(cmd *cobra.Command, shellName, filter string) error {
 		}
 		switch res.Kind {
 		case tui.Cancelled:
-			return nil // emit nothing — a hook eval of "" is a no-op
+			return nil
 		case tui.Add:
 			if err := runAddTUI(path); err != nil {
 				return err
 			}
-			continue // rebuild the list and re-open
+			continue
 		case tui.Remove:
 			row := rows[res.Index]
 			if err := removeAccount(path, row.Provider, row.Account); err != nil {
 				return err
 			}
-			continue // rebuild the list and re-open
-		case tui.Switch:
-			row := rows[res.Index]
-			line, err := shell.ExportLine(shellName, row.EnvVar, row.Dir)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), line)
-			return nil
+			continue
+		case tui.Launch:
+			return launchProfile(rows[res.Index]) // execs; returns only on error
 		}
 	}
 }
 
-// runSetupGate shows the one-time hook-install screen and, on request, appends
-// the hook line to the shell's startup file.
-func runSetupGate(shellName string) error {
-	sh := supportedShell(shellName)
-	line, err := shell.RcLine(sh)
+// launchProfile replaces the aiacc process with the profile's CLI, its env var
+// pointed at the profile's config dir. On success it never returns (the terminal
+// is handed to the launched program); it returns only if the command is missing.
+func launchProfile(row tui.Row) error {
+	bin, err := exec.LookPath(row.Command)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s not found in PATH — is it installed?", row.Command)
 	}
-	rc, err := shell.RcPath(sh)
-	if err != nil {
-		return err
-	}
-	info := tui.SetupInfo{
-		Shell:          sh,
-		Line:           line,
-		Path:           tildeize(rc),
-		AlreadyPresent: fileContains(rc, line),
-	}
-	return tui.RunSetup(info, func() error { return installHook(rc, line) })
+	env := setEnv(os.Environ(), row.EnvVar, row.Dir)
+	return syscall.Exec(bin, []string{row.Command}, env)
 }
 
-// installHook appends the hook line to rc, idempotently — an existing line is
-// left untouched so re-running never duplicates it. The parent directory is
-// created for fish's ~/.config/fish.
-func installHook(rc, line string) error {
-	if fileContains(rc, line) {
-		return nil
+// setEnv returns env with key set to val, replacing any existing entry.
+func setEnv(env []string, key, val string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(rc), 0o755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(rc, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = fmt.Fprintf(f, "\n# aiacc shell hook\n%s\n", line)
-	return err
+	return append(out, key+"="+val)
 }
 
-func fileContains(path, needle string) bool {
-	b, err := os.ReadFile(path)
-	return err == nil && strings.Contains(string(b), needle)
-}
-
-// supportedShell maps whatever $SHELL reports onto a shell aiacc can wire up,
-// defaulting to bash so the gate always has something concrete to show.
-func supportedShell(name string) string {
-	switch name {
-	case "bash", "zsh", "fish":
-		return name
-	default:
-		return "bash"
+// launchCommand is the CLI aiacc runs for a provider. Claude Code is the built-in
+// launcher; other providers have none yet (their rows stay in the list but can't
+// be launched until one is added).
+func launchCommand(providerName string) string {
+	if providerName == "claude" {
+		return "claude"
 	}
-}
-
-// tildeize replaces the home-dir prefix of p with ~ for display.
-func tildeize(p string) string {
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
-		return "~" + strings.TrimPrefix(p, home)
-	}
-	return p
+	return ""
 }
 
 // runAddTUI shows the framed add screen and, on confirm, creates the config dir
-// and registers the account. The screen constrains the name to alias-safe
-// characters, so a junk name can't be entered and every new account gets a
-// working `claude-<name>` shortcut. Claude is the provider; a different provider
-// still uses `aiacc add <provider> <account> --dir`.
+// and registers the profile. The screen constrains the name to a safe launcher
+// command, so a junk name can't be entered.
 func runAddTUI(cfgPath string) error {
 	res, err := tui.RunAdd(currentClaudeLogin())
 	if err != nil {
 		return err
 	}
 	if !res.OK {
-		return nil // cancelled
+		return nil
 	}
 	dir := expandTilde(res.Dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	// Store the value the user saw (with ~); config expands it on read.
 	return saveAccount(cfgPath, "claude", res.Name, res.Dir, 0)
 }
 
@@ -180,18 +133,6 @@ func expandTilde(p string) string {
 	return p
 }
 
-// hookActive reports whether aiacc is being run through its shell hook, which is
-// what actually applies a switch. The hook captures stdout in a command
-// substitution, so a non-terminal stdout means the hook is present; a terminal
-// stdout means the export line would just be printed and never evaluated.
-func hookActive(out io.Writer) bool {
-	f, ok := out.(*os.File)
-	if !ok {
-		return true // not a real terminal (tests, pipes): assume captured
-	}
-	return !isTerminal(f)
-}
-
 // isTerminal reports whether f is a character device (a tty), using only the
 // stdlib: a pipe or regular file is not a char device.
 func isTerminal(f *os.File) bool {
@@ -202,11 +143,11 @@ func isTerminal(f *os.File) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// collectRows builds the picker rows from config: every account (optionally
+// collectRows builds the launcher rows from config: every profile (optionally
 // filtered to one provider), with its expanded dir, whether that dir exists, the
-// provider's env var, the live-active flag, and logged-in identity. Accounts
-// whose dir cannot be resolved at all are skipped; a merely missing dir is kept
-// and shown blocked, so the user sees what to repair.
+// provider's env var and launch command, and the logged-in identity. Profiles
+// whose dir can't be resolved at all are skipped; a merely missing dir is kept
+// and shown blocked, so the user sees what to repair or remove.
 func collectRows(c *config.Config, filter string) []tui.Row {
 	var rows []tui.Row
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
@@ -214,10 +155,6 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 			continue
 		}
 		env, _ := provider.EnvVar(c, pn)
-		live := ""
-		if env != "" {
-			live = os.Getenv(env)
-		}
 		p := c.Providers[pn]
 		for _, an := range slices.Sorted(maps.Keys(p.Accounts)) {
 			dir, err := provider.AccountDir(c, pn, an)
@@ -230,9 +167,9 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 				Account:   an,
 				Email:     claude.Detect(dir).Email,
 				Dir:       dir,
-				EnvVar:    env,
-				Active:    env != "" && dir == live,
 				DirExists: statErr == nil,
+				EnvVar:    env,
+				Command:   launchCommand(pn),
 			})
 		}
 	}

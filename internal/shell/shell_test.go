@@ -2,243 +2,111 @@ package shell
 
 import (
 	"errors"
+	"os"
 	"os/exec"
-	"strings"
+	"path/filepath"
 	"testing"
 )
 
-func TestExportLineGolden(t *testing.T) {
+func TestLauncherGolden(t *testing.T) {
 	tests := []struct {
 		shell string
 		want  string
 	}{
-		{"bash", `export CLAUDE_CONFIG_DIR='/Users/x/.claude-work'`},
-		{"zsh", `export CLAUDE_CONFIG_DIR='/Users/x/.claude-work'`},
-		{"fish", `set -gx CLAUDE_CONFIG_DIR '/Users/x/.claude-work'`},
+		{"bash", "claude-work() { CLAUDE_CONFIG_DIR='/home/x/.claude-work' command claude \"$@\"; }\n"},
+		{"zsh", "claude-work() { CLAUDE_CONFIG_DIR='/home/x/.claude-work' command claude \"$@\"; }\n"},
+		{"fish", "function claude-work; env CLAUDE_CONFIG_DIR='/home/x/.claude-work' claude $argv; end\n"},
 	}
 	for _, tt := range tests {
-		got, err := ExportLine(tt.shell, "CLAUDE_CONFIG_DIR", "/Users/x/.claude-work")
+		got, err := Launcher(tt.shell, "claude-work", "claude", "CLAUDE_CONFIG_DIR", "/home/x/.claude-work")
 		if err != nil {
-			t.Fatalf("ExportLine(%q): unexpected error %v", tt.shell, err)
+			t.Fatalf("Launcher(%q): %v", tt.shell, err)
 		}
 		if got != tt.want {
-			t.Errorf("ExportLine(%q) = %q, want %q", tt.shell, got, tt.want)
+			t.Errorf("Launcher(%q) =\n%q\nwant\n%q", tt.shell, got, tt.want)
 		}
 	}
 }
 
-func TestExportLineSingleQuoteEscape(t *testing.T) {
-	// A dir with an embedded quote must be escaped with the '\'' idiom so it
-	// cannot terminate the surrounding single-quoted string.
-	got, err := ExportLine("bash", "X", `a'b`)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := `export X='a'\''b'`
-	if got != want {
-		t.Fatalf("ExportLine escape = %q, want %q", got, want)
-	}
-}
-
-// TestExportLineNoBreakout proves via a real shell that a hostile directory
-// value cannot break out of the quotes and execute commands.
-func TestExportLineNoBreakout(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("bash not available")
-	}
-	// Hostile value: a quote to try to close the string, shell metacharacters,
-	// and a $()-substitution that must stay literal. If any of it were honored,
-	// $CLAUDE_CONFIG_DIR would differ from dir (e.g. truncate at the quote, or
-	// have echo output prepended). Byte-for-byte equality proves no breakout.
-	dir := `/tmp/a'; echo INJECTED; $(echo sub) '`
-	line, err := ExportLine("bash", "CLAUDE_CONFIG_DIR", dir)
-	if err != nil {
-		t.Fatalf("ExportLine: %v", err)
-	}
-	out, err := exec.Command(bash, "-c", line+`; printf '%s' "$CLAUDE_CONFIG_DIR"`).CombinedOutput()
-	if err != nil {
-		t.Fatalf("bash eval failed: %v (out=%q)", err, out)
-	}
-	if string(out) != dir {
-		t.Fatalf("breakout: bash saw %q, want %q", out, dir)
-	}
-}
-
-func TestExportLineFishBackslashEscaped(t *testing.T) {
-	// fish treats backslash as special inside single quotes, so it must be
-	// doubled; a bare '\'' idiom (correct for bash) would be an injection under
-	// fish. These goldens run without a fish binary present.
-	cases := []struct{ dir, want string }{
-		{`a\`, `set -gx X 'a\\'`},
-		{`a'b`, `set -gx X 'a\'b'`},
-		{`a\'b`, `set -gx X 'a\\\'b'`},
+// TestLauncherSkipsUnsafeTokens: a name, command, or env var that isn't a safe
+// token yields "" (no error), so the caller skips it — never written into a
+// sourced script.
+func TestLauncherSkipsUnsafeTokens(t *testing.T) {
+	cases := []struct{ name, cmd, env string }{
+		{"claude work", "claude", "CLAUDE_CONFIG_DIR"},  // space in name
+		{"a;rm", "claude", "CLAUDE_CONFIG_DIR"},         // metachar in name
+		{"claude-work", "cla ude", "CLAUDE_CONFIG_DIR"}, // space in command
+		{"claude-work", "claude", "BAD VAR"},            // space in env var
+		{"claude-work", "claude", ""},                   // empty env var
+		{"claude-work", "", "CLAUDE_CONFIG_DIR"},        // empty command
 	}
 	for _, c := range cases {
-		got, err := ExportLine("fish", "X", c.dir)
+		got, err := Launcher("bash", c.name, c.cmd, c.env, "/x")
 		if err != nil {
-			t.Fatalf("ExportLine(fish, %q): %v", c.dir, err)
+			t.Fatalf("Launcher(%+v): unexpected error %v", c, err)
 		}
-		if got != c.want {
-			t.Errorf("ExportLine(fish, %q) = %q, want %q", c.dir, got, c.want)
+		if got != "" {
+			t.Errorf("Launcher(%+v) = %q, want skipped", c, got)
 		}
 	}
 }
 
-// TestExportLineFishNoBreakout proves via a real fish shell that a hostile
-// directory value cannot break out of the quotes and execute commands.
-func TestExportLineFishNoBreakout(t *testing.T) {
-	fish, err := exec.LookPath("fish")
-	if err != nil {
-		t.Skip("fish not available")
-	}
-	// A trailing backslash before a quote is the fish-specific breakout the POSIX
-	// idiom misses; the appended commands must stay literal.
-	dir := `/tmp/a\'; touch INJECTED; echo '`
-	line, err := ExportLine("fish", "AIACC_T", dir)
-	if err != nil {
-		t.Fatalf("ExportLine: %v", err)
-	}
-	out, err := exec.Command(fish, "-c", line+`; printf '%s' $AIACC_T`).CombinedOutput()
-	if err != nil {
-		t.Fatalf("fish eval failed: %v (out=%q)", err, out)
-	}
-	if string(out) != dir {
-		t.Fatalf("breakout: fish saw %q, want %q", out, dir)
-	}
-}
-
-func TestExportLineNewlineDirRejected(t *testing.T) {
-	if _, err := ExportLine("bash", "X", "/tmp/a\nb"); !errors.Is(err, ErrUnsafeDir) {
-		t.Fatalf("want ErrUnsafeDir for newline, got %v", err)
-	}
-}
-
-func TestExportLineControlCharsRejected(t *testing.T) {
-	for _, dir := range []string{"", "/tmp/a\rb", "/tmp/a\x00b", "/tmp/a\tb", "/tmp/a\x1fb"} {
-		if _, err := ExportLine("bash", "X", dir); !errors.Is(err, ErrUnsafeDir) {
+func TestLauncherUnsafeDirRejected(t *testing.T) {
+	for _, dir := range []string{"", "/tmp/a\nb", "/tmp/a\x00b", "/tmp/a\tb"} {
+		if _, err := Launcher("bash", "claude-work", "claude", "CLAUDE_CONFIG_DIR", dir); !errors.Is(err, ErrUnsafeDir) {
 			t.Fatalf("want ErrUnsafeDir for %q, got %v", dir, err)
 		}
 	}
 }
 
-func TestExportLineInvalidEnvVarRejected(t *testing.T) {
-	for _, name := range []string{"", "1ABC", "A-B", "A B", "A$", "A.B"} {
-		if _, err := ExportLine("bash", name, "/tmp/x"); !errors.Is(err, ErrInvalidEnvVar) {
-			t.Fatalf("want ErrInvalidEnvVar for %q, got %v", name, err)
-		}
-	}
-}
-
-func TestExportLineValidEnvVarAccepted(t *testing.T) {
-	for _, name := range []string{"A", "_x", "CLAUDE_CONFIG_DIR", "_", "a1_2"} {
-		if _, err := ExportLine("bash", name, "/tmp/x"); err != nil {
-			t.Fatalf("valid env var %q rejected: %v", name, err)
-		}
-	}
-}
-
-func TestExportLineUnknownShell(t *testing.T) {
-	if _, err := ExportLine("tcsh", "X", "/tmp/x"); !errors.Is(err, ErrUnknownShell) {
+func TestLauncherUnknownShell(t *testing.T) {
+	if _, err := Launcher("tcsh", "claude-work", "claude", "CLAUDE_CONFIG_DIR", "/x"); !errors.Is(err, ErrUnknownShell) {
 		t.Fatalf("want ErrUnknownShell, got %v", err)
 	}
 }
 
-func TestHookBash(t *testing.T) {
-	got, err := Hook("bash")
+// TestLauncherNoBreakoutBash proves via a real bash that a hostile directory
+// value cannot break out of the quotes when the function definition is sourced.
+// A bad quote would let the injected `touch INJECTED` run at definition time.
+func TestLauncherNoBreakoutBash(t *testing.T) {
+	bash, err := exec.LookPath("bash")
 	if err != nil {
-		t.Fatalf("Hook(bash): %v", err)
+		t.Skip("bash not available")
 	}
-	for _, want := range []string{"aiacc()", "eval", "command aiacc", "--shell bash"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Hook(bash) missing %q in:\n%s", want, got)
-		}
-	}
-}
-
-// TestHookCapturesNoArgs proves the hook also evals a bare `aiacc` (the front
-// door), not just `use` — otherwise a switch chosen in the TUI would print an
-// export line nothing evaluates.
-func TestHookCapturesNoArgs(t *testing.T) {
-	for _, sh := range []string{"bash", "zsh"} {
-		got, _ := Hook(sh)
-		if !strings.Contains(got, `[ "$#" -eq 0 ]`) {
-			t.Errorf("Hook(%s) does not capture the no-arg front door:\n%s", sh, got)
-		}
-	}
-	fish, _ := Hook("fish")
-	if !strings.Contains(fish, "count $argv") {
-		t.Errorf("Hook(fish) does not capture the no-arg front door:\n%s", fish)
-	}
-}
-
-func TestHookZsh(t *testing.T) {
-	got, err := Hook("zsh")
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "INJECTED")
+	dir := `/tmp/a'; touch ` + marker + `; echo '`
+	fn, err := Launcher("bash", "prof", "true", "CLAUDE_CONFIG_DIR", dir)
 	if err != nil {
-		t.Fatalf("Hook(zsh): %v", err)
+		t.Fatalf("Launcher: %v", err)
 	}
-	if !strings.Contains(got, "--shell zsh") || !strings.Contains(got, "eval") {
-		t.Errorf("Hook(zsh) wrong body:\n%s", got)
+	// Source the function definition; it must define, not execute the injection.
+	if out, err := exec.Command(bash, "-c", fn).CombinedOutput(); err != nil {
+		t.Fatalf("sourcing function failed: %v (%s)", err, out)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("breakout: injected command ran while sourcing the launcher")
 	}
 }
 
-func TestHookFish(t *testing.T) {
-	got, err := Hook("fish")
+// TestLauncherNoBreakoutFish is the fish-specific counterpart: a trailing
+// backslash before a quote is the breakout the POSIX idiom misses.
+func TestLauncherNoBreakoutFish(t *testing.T) {
+	fish, err := exec.LookPath("fish")
 	if err != nil {
-		t.Fatalf("Hook(fish): %v", err)
+		t.Skip("fish not available")
 	}
-	for _, want := range []string{"function aiacc", "end", "eval", "command aiacc", "--shell fish"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Hook(fish) missing %q in:\n%s", want, got)
-		}
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "INJECTED")
+	dir := `/tmp/a\'; touch ` + marker + `; echo '`
+	fn, err := Launcher("fish", "prof", "true", "CLAUDE_CONFIG_DIR", dir)
+	if err != nil {
+		t.Fatalf("Launcher: %v", err)
 	}
-}
-
-func TestHookUnknownShell(t *testing.T) {
-	if _, err := Hook("tcsh"); !errors.Is(err, ErrUnknownShell) {
-		t.Fatalf("want ErrUnknownShell, got %v", err)
+	if out, err := exec.Command(fish, "-c", fn).CombinedOutput(); err != nil {
+		t.Fatalf("sourcing function failed: %v (%s)", err, out)
 	}
-}
-
-func TestAccountAliasFormats(t *testing.T) {
-	cases := map[string]string{
-		"bash": "claude-work() { aiacc use claude work; }\n",
-		"zsh":  "claude-work() { aiacc use claude work; }\n",
-		"fish": "function claude-work; aiacc use claude work; end\n",
-	}
-	for sh, want := range cases {
-		got, err := AccountAlias(sh, "claude", "work")
-		if err != nil {
-			t.Fatalf("AccountAlias(%s): %v", sh, err)
-		}
-		if got != want {
-			t.Errorf("AccountAlias(%s) = %q, want %q", sh, got, want)
-		}
-	}
-}
-
-// TestAccountAliasSkipsUnsafeNames: a provider/account that would produce an
-// unsafe function name is skipped (empty, no error), never emitted into the
-// eval'd script.
-func TestAccountAliasSkipsUnsafeNames(t *testing.T) {
-	for _, c := range []struct{ provider, account string }{
-		{"claude", "work space"},
-		{"claude", "a;rm -rf"},
-		{"claude", "a$(x)"},
-		{"1bad", "acct"},
-	} {
-		got, err := AccountAlias("bash", c.provider, c.account)
-		if err != nil {
-			t.Fatalf("AccountAlias(%q,%q): unexpected error %v", c.provider, c.account, err)
-		}
-		if got != "" {
-			t.Errorf("AccountAlias(%q,%q) = %q, want skipped", c.provider, c.account, got)
-		}
-	}
-}
-
-func TestAccountAliasUnknownShell(t *testing.T) {
-	if _, err := AccountAlias("tcsh", "claude", "work"); !errors.Is(err, ErrUnknownShell) {
-		t.Fatalf("want ErrUnknownShell, got %v", err)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("breakout: injected command ran while sourcing the fish launcher")
 	}
 }

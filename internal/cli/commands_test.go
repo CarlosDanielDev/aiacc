@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,43 +28,11 @@ func seedConfig(t *testing.T, path, dir string, quota int) {
 	}
 }
 
-func TestUsePrintsExportLine(t *testing.T) {
+func TestShellInitPrintsLaunchers(t *testing.T) {
 	path := withTempConfig(t)
 	dir := t.TempDir()
 	seedConfig(t, path, dir, 0)
 
-	cmd := newUseCmd()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"claude", "work", "--shell", "bash"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("use: %v", err)
-	}
-
-	want, err := shell.ExportLine("bash", "CLAUDE_CONFIG_DIR", dir)
-	if err != nil {
-		t.Fatalf("export line: %v", err)
-	}
-	if strings.TrimSpace(out.String()) != want {
-		t.Fatalf("use output = %q, want %q", out.String(), want)
-	}
-}
-
-func TestUseMissingDirErrors(t *testing.T) {
-	path := withTempConfig(t)
-	missing := filepath.Join(t.TempDir(), "gone")
-	seedConfig(t, path, missing, 0)
-
-	cmd := newUseCmd()
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"claude", "work", "--shell", "bash"})
-	if err := cmd.Execute(); err == nil {
-		t.Fatalf("expected error for missing account dir")
-	}
-}
-
-func TestShellInitPrintsHook(t *testing.T) {
 	cmd := newShellInitCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -74,8 +41,20 @@ func TestShellInitPrintsHook(t *testing.T) {
 		t.Fatalf("shell-init: %v", err)
 	}
 	s := out.String()
-	if !strings.Contains(s, "aiacc()") || !strings.Contains(s, "eval") {
-		t.Fatalf("hook output missing markers: %q", s)
+	// One launcher named after the account ("work"), running claude with the
+	// profile's dir.
+	for _, want := range []string{"work() {", "CLAUDE_CONFIG_DIR=", "command claude"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("shell-init output missing %q:\n%s", want, s)
+		}
+	}
+	// Cross-check with the shell package's own rendering.
+	fn, err := shell.Launcher("bash", "work", "claude", "CLAUDE_CONFIG_DIR", dir)
+	if err != nil {
+		t.Fatalf("Launcher: %v", err)
+	}
+	if !strings.Contains(s, fn) {
+		t.Fatalf("shell-init did not emit the expected launcher %q in:\n%s", fn, s)
 	}
 }
 

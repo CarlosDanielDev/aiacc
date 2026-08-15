@@ -48,9 +48,10 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string) error {
 	}
 
 	fmt.Fprintf(out, "\nRegistered '%s' → %s\n", name, dir)
-	fmt.Fprintf(out, "Switch to it:\n  aiacc use claude %s\n", name)
-	fmt.Fprintf(out, "Or, in a new shell, just run:\n  claude-%s\n", name)
-	fmt.Fprintf(out, "Then log in:\n  claude          # then /login\n")
+	fmt.Fprintf(out, "Launch Claude Code as this profile:\n")
+	fmt.Fprintf(out, "  aiacc            # pick it from the list, or\n")
+	fmt.Fprintf(out, "  %s               # after adding: aiacc shell-init <shell> to your startup file\n", name)
+	fmt.Fprintf(out, "The first run opens Claude Code; log in there with /login.\n")
 	return nil
 }
 
