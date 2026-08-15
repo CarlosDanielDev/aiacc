@@ -1,19 +1,17 @@
-// Package tui renders aiacc's interactive account UI: a framed, poka-yoke
-// terminal front door shown by a bare `aiacc` and by `aiacc use` with no
-// account. It draws on /dev/tty — stdout is reserved for the shell hook's
-// command substitution — and returns the user's choice so the caller can emit
-// the switch.
+// Package tui renders aiacc's interactive profile launcher: a framed, poka-yoke
+// terminal UI shown by a bare `aiacc`. Each row is a profile (an isolated config
+// directory); Enter launches the provider's CLI with that profile's directory,
+// scoped to that run. There is no persistent "active" account and no shell env to
+// mutate, so there is no shell hook — the confusing indirection is gone.
 //
-// Poka-yoke shapes the whole flow:
-//   - Navigation is a bounded index. No text field, so no parse step, so no
-//     invalid input to reject.
-//   - A row you cannot safely switch into (its config dir is gone, or its
-//     provider has no env var) is not selectable: the cursor skips it, so a
-//     broken switch is unreachable rather than merely flagged.
-//   - Switching only works through the shell hook. Rather than drop you into a
-//     picker that can't apply anything and warn you after the fact, the caller
-//     shows the setup gate (RunSetup) first when the hook is absent — so the
-//     one confusing state, "I switched and nothing happened", cannot occur.
+// Poka-yoke shapes the flow:
+//   - Navigation is a bounded index. No text field on the list, so no parse step
+//     and no invalid input.
+//   - A profile you cannot launch (its dir is gone, or its provider has no
+//     launch command) is shown but Enter is inert on it — the launch that can't
+//     work is refused, not attempted. It can still be removed.
+//   - Removing asks for an explicit `y`; Enter is inert there, so a stray key
+//     can't drop a profile.
 //
 // Raw mode is toggled with stty (POSIX; the Linux/macOS release targets), so the
 // package needs no non-stdlib dependency.
@@ -33,63 +31,51 @@ import (
 	"unicode/utf8"
 )
 
-// Row is one account in the picker. The caller fills it from config + the live
-// environment.
+// Row is one profile in the launcher. The caller fills it from config.
 type Row struct {
 	Provider  string
 	Account   string
 	Email     string // logged-in identity for the dir, "" when not logged in
-	Dir       string // expanded, ready for the export line
-	EnvVar    string // the provider's env var; "" means switching is undefined
-	Active    bool   // this dir is the live one for its provider right now
+	Dir       string // expanded config dir, passed to the launched CLI
 	DirExists bool   // the config dir is present on disk
+	EnvVar    string // env var the CLI reads to select its config ("" = unknown)
+	Command   string // CLI to launch (e.g. "claude"); "" = no launcher for this
 }
 
-// ResultKind is what the user asked the picker to do.
+// launchable reports whether Enter can launch this profile: the dir exists, and
+// we know both which env var to set and which command to run.
+func (r Row) launchable() bool {
+	return r.DirExists && r.EnvVar != "" && r.Command != ""
+}
+
+// blockedReason is the short label shown when a row cannot be launched.
+func (r Row) blockedReason() string {
+	switch {
+	case r.EnvVar == "":
+		return "no env var"
+	case r.Command == "":
+		return "no launcher"
+	case !r.DirExists:
+		return "dir missing"
+	default:
+		return ""
+	}
+}
+
+// ResultKind is what the user asked the launcher to do.
 type ResultKind int
 
 const (
 	Cancelled ResultKind = iota // backed out (q / Esc / Ctrl-C / EOF)
-	Switch                      // chose Index; the caller emits its export line
-	Add                         // pressed `a`; the caller runs the add wizard
-	Remove                      // confirmed removing Index; the caller unregisters it
+	Launch                      // launch Index's profile
+	Add                         // pressed `a`; the caller runs the add screen
+	Remove                      // confirmed removing Index
 )
 
-// Result is what Run/drive returns. Index is meaningful only for Switch.
+// Result is what Run/drive returns. Index is meaningful for Launch and Remove.
 type Result struct {
 	Kind  ResultKind
 	Index int
-}
-
-// rowState collapses a Row's flags into the single fact the UI cares about:
-// whether it is switchable, and what to say when it is not.
-type rowState int
-
-const (
-	stOK      rowState = iota // switchable, logged in
-	stNoLogin                 // switchable, but no identity recorded yet
-	stNoDir                   // blocked: the config dir is missing
-	stNoEnv                   // blocked: the provider has no env var
-)
-
-func (r Row) state() rowState {
-	switch {
-	case r.EnvVar == "":
-		return stNoEnv
-	case !r.DirExists:
-		return stNoDir
-	case r.Email == "":
-		return stNoLogin
-	default:
-		return stOK
-	}
-}
-
-// selectable reports whether switching into this row is safe. Blocked rows are
-// unreachable by the cursor — the mistake cannot be made, not merely flagged.
-func (r Row) selectable() bool {
-	s := r.state()
-	return s != stNoDir && s != stNoEnv
 }
 
 const (
@@ -113,8 +99,8 @@ const (
 )
 
 // seg is a run of text with an optional colour. Keeping colour separate from
-// text lets every width calculation run on visible runes, so ANSI escapes never
-// leak into the maths that keeps the frame square.
+// text lets width calculations run on visible runes, so ANSI escapes never leak
+// into the maths that keeps the frame square.
 type seg struct {
 	text string
 	ink  string
@@ -131,8 +117,7 @@ func paint(s, ink string) string {
 
 // render joins segs to exactly width visible runes — padding when short,
 // truncating when long. This clamp is poka-yoke on the layout itself: no row,
-// however long its content grows, can push the frame's border out and tear the
-// box. The guarantee lives here, not in every call site.
+// however long its content grows, can push the frame's border out.
 func render(segs []seg, width int) string {
 	var b strings.Builder
 	used := 0
@@ -163,8 +148,6 @@ func boxRow(segs []seg, w int) string {
 }
 func boxBlank(w int) string { return boxRow(nil, w) }
 
-// innerWidth clamps the frame to the terminal but never collapses below a
-// legible floor.
 func innerWidth(cols int) int {
 	const base, floor = 46, 30
 	w := base
@@ -184,7 +167,7 @@ func trunc(s string, n int) string {
 }
 
 // frame centres the built lines in the terminal, adds a clear+home, and appends
-// a key legend below the box. Shared by the picker and the setup gate.
+// a key legend below the box. Shared by the launcher, add, and remove screens.
 func frame(lines []string, legend string, cols, innerW int) string {
 	lines = append(lines, "", legend)
 	left := max(0, (cols-(innerW+2))/2)
@@ -200,92 +183,6 @@ func frame(lines []string, legend string, cols, innerW int) string {
 	return b.String()
 }
 
-// Render returns the whole picker frame. One line per account: a cursor mark, a
-// status dot (● active / ○ idle / ⚠ blocked), the provider·account, and a quiet
-// login/status on the right. Pure, so tests assert on exact output.
-func Render(rows []Row, cursor, cols int) string {
-	w := innerWidth(cols)
-	const nameCol = 22
-
-	lines := []string{boxTop("aiacc — switch account", w), boxBlank(w)}
-
-	if len(rows) == 0 {
-		lines = append(lines,
-			boxRow([]seg{pad(2), {"No accounts yet.", inkWhite}}, w),
-			boxRow([]seg{pad(2), {"Press ", inkGrey}, {"a", inkWhite}, {" to add one.", inkGrey}}, w),
-			boxBlank(w),
-		)
-	}
-
-	for i, r := range rows {
-		focused := i == cursor
-		st := r.state()
-
-		cur := seg{"  ", ""}
-		if focused {
-			cur = seg{"▸ ", inkPink}
-		}
-		var dot seg
-		switch {
-		case st == stNoDir || st == stNoEnv:
-			dot = seg{"⚠ ", inkRed}
-		case r.Active:
-			dot = seg{"● ", inkGreen}
-		default:
-			dot = seg{"○ ", inkDim}
-		}
-		nameInk := inkGrey
-		switch {
-		case st == stNoDir || st == stNoEnv:
-			nameInk = inkRed
-		case focused:
-			nameInk = inkWhite
-		}
-		name := r.Provider + " · " + r.Account
-
-		var info seg
-		switch st {
-		case stNoEnv:
-			info = seg{"no env var", inkRed}
-		case stNoDir:
-			info = seg{"dir missing", inkRed}
-		case stNoLogin:
-			info = seg{"not logged in", inkYellow}
-		default:
-			info = seg{trunc(r.Email, w-nameCol-4), inkGrey}
-		}
-
-		lines = append(lines, boxRow([]seg{
-			cur, dot,
-			{name, nameInk},
-			pad(nameCol - runeLen(name)),
-			info,
-		}, w))
-	}
-
-	lines = append(lines, boxBottom(w))
-	legend := legendLine([][2]string{{"↑↓", "move"}, {"⏎", "switch"}, {"a", "add"}, {"d", "remove"}, {"q", "quit"}})
-	return frame(lines, legend, cols, w)
-}
-
-// RenderRemove is the confirm screen for removing an account. Removing only
-// unregisters it from aiacc; the config dir is left on disk, so the action is
-// reversible by re-adding. It still asks first — an explicit `y`, never Enter,
-// so a stray keystroke can't drop an account.
-func RenderRemove(r Row, cols int) string {
-	w := innerWidth(cols)
-	lines := []string{
-		boxTop("aiacc — remove account", w), boxBlank(w),
-		boxRow([]seg{pad(2), {"Remove ", inkWhite}, {r.Provider + " · " + r.Account, inkYellow}, {" from aiacc?", inkWhite}}, w),
-		boxBlank(w),
-		boxRow([]seg{pad(2), {"The config dir is left on disk — only the", inkGrey}}, w),
-		boxRow([]seg{pad(2), {"aiacc registration is removed.", inkGrey}}, w),
-		boxBottom(w),
-	}
-	legend := legendLine([][2]string{{"y", "remove"}, {"n", "cancel"}})
-	return frame(lines, legend, cols, w)
-}
-
 func legendLine(pairs [][2]string) string {
 	var b strings.Builder
 	b.WriteString("  ")
@@ -296,93 +193,88 @@ func legendLine(pairs [][2]string) string {
 	return b.String()
 }
 
-// --- Setup gate ---------------------------------------------------------------
-
-// SetupInfo is what the gate needs to explain and (optionally) perform the
-// one-time hook install.
-type SetupInfo struct {
-	Shell          string // bash | zsh | fish
-	Line           string // the line to add to the startup file
-	Path           string // display path of that startup file (~ form)
-	AlreadyPresent bool   // the line is already there; only a restart is needed
-}
-
-type setupPhase int
-
-const (
-	phaseAsk     setupPhase = iota // offer to install
-	phasePresent                   // line already present, restart to finish
-	phaseDone                      // just installed, restart to finish
-	phaseErr                       // install failed
-)
-
-// RenderSetup returns the gate frame for a phase. doneErr is shown in phaseErr.
-func RenderSetup(info SetupInfo, phase setupPhase, doneErr error, cols int) string {
+// Render returns the launcher frame: one line per profile — a cursor mark, the
+// provider·account, and a quiet login/status on the right. Pure, for tests.
+func Render(rows []Row, cursor, cols int) string {
 	w := innerWidth(cols)
-	var lines []string
-	var legend string
+	const nameCol = 22
 
-	switch phase {
-	case phaseAsk:
-		lines = []string{
-			boxTop("aiacc — one-time setup", w), boxBlank(w),
-			boxRow([]seg{pad(2), {"Switching accounts sets an environment", inkWhite}}, w),
-			boxRow([]seg{pad(2), {"variable in your shell — that needs a", inkWhite}}, w),
-			boxRow([]seg{pad(2), {"one-line hook, added once.", inkWhite}}, w),
+	lines := []string{boxTop("aiacc — launch a profile", w), boxBlank(w)}
+
+	if len(rows) == 0 {
+		lines = append(lines,
+			boxRow([]seg{pad(2), {"No profiles yet.", inkWhite}}, w),
+			boxRow([]seg{pad(2), {"Press ", inkGrey}, {"a", inkWhite}, {" to add one.", inkGrey}}, w),
 			boxBlank(w),
-			boxRow([]seg{pad(2), {"shell   ", inkGrey}, {info.Shell, inkWhite}}, w),
-			boxRow([]seg{pad(2), {"add to  ", inkGrey}, {info.Path, inkWhite}}, w),
-			boxRow([]seg{pad(4), {info.Line, inkBlue}}, w),
-			boxBottom(w),
-		}
-		legend = legendLine([][2]string{{"i", "install it for me"}, {"q", "not now"}})
-	case phasePresent:
-		lines = []string{
-			boxTop("aiacc — one-time setup", w), boxBlank(w),
-			boxRow([]seg{pad(2), {"The hook is already in your startup file:", inkWhite}}, w),
-			boxRow([]seg{pad(4), {info.Path, inkGrey}}, w),
-			boxBlank(w),
-			boxRow([]seg{pad(2), {"Open a new terminal to load it, then run", inkWhite}}, w),
-			boxRow([]seg{pad(2), {"aiacc again.", inkWhite}}, w),
-			boxBottom(w),
-		}
-		legend = legendLine([][2]string{{"q", "ok"}})
-	case phaseDone:
-		lines = []string{
-			boxTop("aiacc — setup", w), boxBlank(w),
-			boxRow([]seg{pad(2), {"✓ Added the hook to", inkGreen}}, w),
-			boxRow([]seg{pad(4), {info.Path, inkWhite}}, w),
-			boxBlank(w),
-			boxRow([]seg{pad(2), {"Open a new terminal (or run:", inkWhite}}, w),
-			boxRow([]seg{pad(4), {sourceCmd(info), inkBlue}}, w),
-			boxRow([]seg{pad(2), {"then run ", inkWhite}, {"aiacc", inkWhite}, {" again.", inkWhite}}, w),
-			boxBottom(w),
-		}
-		legend = legendLine([][2]string{{"q", "done"}})
-	case phaseErr:
-		msg := "unknown error"
-		if doneErr != nil {
-			msg = doneErr.Error()
-		}
-		lines = []string{
-			boxTop("aiacc — setup", w), boxBlank(w),
-			boxRow([]seg{pad(2), {"⚠ Couldn't write the hook:", inkRed}}, w),
-			boxRow([]seg{pad(4), {trunc(msg, w-6), inkGrey}}, w),
-			boxBlank(w),
-			boxRow([]seg{pad(2), {"Add this line by hand to " + info.Path + ":", inkWhite}}, w),
-			boxRow([]seg{pad(4), {info.Line, inkBlue}}, w),
-			boxBottom(w),
-		}
-		legend = legendLine([][2]string{{"q", "ok"}})
+		)
 	}
+
+	for i, r := range rows {
+		focused := i == cursor
+		blocked := !r.launchable()
+
+		cur := seg{"  ", ""}
+		if focused {
+			cur = seg{"▸ ", inkPink}
+		}
+		warn := ""
+		nameInk := inkGrey
+		switch {
+		case blocked:
+			warn, nameInk = "⚠ ", inkRed
+		case focused:
+			nameInk = inkWhite
+		}
+		// The account name is the launcher command, and the identity, so it is
+		// the row's label. The provider is an implementation detail (which env
+		// var / CLI) — shown as a dim tag only when it isn't the default claude.
+		name := r.Account
+		if r.Provider != "claude" {
+			name += " (" + r.Provider + ")"
+		}
+
+		var info seg
+		switch {
+		case blocked:
+			info = seg{r.blockedReason(), inkRed}
+		case r.Email == "":
+			info = seg{"not logged in", inkYellow}
+		default:
+			info = seg{trunc(r.Email, w-nameCol-4), inkGrey}
+		}
+
+		lines = append(lines, boxRow([]seg{
+			cur,
+			{warn, inkRed},
+			{name, nameInk},
+			pad(nameCol - runeLen(warn) - runeLen(name)),
+			info,
+		}, w))
+	}
+
+	lines = append(lines, boxBottom(w))
+	legend := legendLine([][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"d", "remove"}, {"q", "quit"}})
 	return frame(lines, legend, cols, w)
 }
 
-func sourceCmd(info SetupInfo) string {
-	return "source " + info.Path
+// RenderRemove is the confirm screen for removing a profile. Removing only
+// unregisters it from aiacc; the config dir is left on disk, so it is reversible
+// by re-adding. It asks first — an explicit `y`, never Enter.
+func RenderRemove(r Row, cols int) string {
+	w := innerWidth(cols)
+	lines := []string{
+		boxTop("aiacc — remove profile", w), boxBlank(w),
+		boxRow([]seg{pad(2), {"Remove ", inkWhite}, {r.Account, inkYellow}, {" from aiacc?", inkWhite}}, w),
+		boxBlank(w),
+		boxRow([]seg{pad(2), {"The config dir is left on disk — only the", inkGrey}}, w),
+		boxRow([]seg{pad(2), {"aiacc registration is removed.", inkGrey}}, w),
+		boxBottom(w),
+	}
+	legend := legendLine([][2]string{{"y", "remove"}, {"n", "cancel"}})
+	return frame(lines, legend, cols, w)
 }
 
-// --- Add account --------------------------------------------------------------
+// --- Add profile --------------------------------------------------------------
 
 // AddResult is the outcome of the framed add screen. OK is false when cancelled.
 type AddResult struct {
@@ -391,10 +283,10 @@ type AddResult struct {
 	OK   bool
 }
 
-// validName reports whether s is a legal account name: a letter/underscore, then
-// letters, digits, hyphens, or underscores. This is exactly the alias-safe set,
-// so every account the screen creates gets a working `<provider>-<name>` shortcut
-// — and a name like "??????????" cannot be entered at all.
+// validName reports whether s is a legal profile name: a letter/underscore, then
+// letters, digits, hyphens, or underscores. The name is also the launcher
+// command, so it must be a legal shell function name — which is why a name like
+// "??????????" cannot be entered.
 func validName(s string) bool {
 	if s == "" {
 		return false
@@ -422,12 +314,12 @@ func defaultDir(name string) string {
 	return "~/.claude-" + name
 }
 
-// RenderAdd returns the add-account frame: a live name field, a dir field that
+// RenderAdd returns the add-profile frame: a live name field, a dir field that
 // defaults to ~/.claude-<name> until edited, the current login for context, and
 // an optional hint. field is 0 for name, 1 for dir. Pure, for tests.
 func RenderAdd(currentLogin, name, dir string, field int, hint string, cols int) string {
 	w := innerWidth(cols)
-	lines := []string{boxTop("aiacc — add account", w), boxBlank(w)}
+	lines := []string{boxTop("aiacc — add profile", w), boxBlank(w)}
 
 	if currentLogin != "" {
 		lines = append(lines,
@@ -453,7 +345,6 @@ func RenderAdd(currentLogin, name, dir string, field int, hint string, cols int)
 		pad(2), {"name  ", nameLabelInk}, {name, inkWhite}, {nameCaret, inkPink},
 	}, w))
 
-	// The dir field shows the derived default (dim) until the user types one.
 	dirSeg := seg{dir, inkWhite}
 	if dir == "" {
 		dirSeg = seg{defaultDir(name), inkDim}
@@ -470,12 +361,17 @@ func RenderAdd(currentLogin, name, dir string, field int, hint string, cols int)
 	}
 	lines = append(lines, boxBottom(w))
 
-	legend := legendLine([][2]string{{"type", "name"}, {"⇥", "field"}, {"⏎", "create"}, {"esc", "cancel"}})
+	// The name becomes the launcher command, so spell that out.
+	tip := "type name"
+	if validName(name) {
+		tip = "launches as: " + name
+	}
+	legend := legendLine([][2]string{{"", tip}, {"⇥", "field"}, {"⏎", "create"}, {"esc", "cancel"}})
 	return frame(lines, legend, cols, w)
 }
 
 // driveAdd is the add-screen input loop, decoupled from /dev/tty for tests. It
-// filters keystrokes so the name field can only ever hold alias-safe characters.
+// filters keystrokes so the name field can only ever hold command-safe chars.
 func driveAdd(currentLogin string, cols int, in io.Reader, out io.Writer) (AddResult, error) {
 	name, dir, field, hint := "", "", 0, ""
 	r := bufio.NewReader(in)
@@ -528,17 +424,6 @@ func trimLastByte(s string) string {
 	return s[:len(s)-1]
 }
 
-// RunAdd shows the framed add screen on /dev/tty. currentLogin (may be "") is
-// shown for context.
-func RunAdd(currentLogin string) (AddResult, error) {
-	tty, cols, restore, err := openRawTTY()
-	if err != nil {
-		return AddResult{}, err
-	}
-	defer restore()
-	return driveAdd(currentLogin, cols, tty, tty)
-}
-
 // --- Terminal driving ---------------------------------------------------------
 
 type key int
@@ -549,7 +434,6 @@ const (
 	keyDown
 	keyEnter
 	keyAdd
-	keyInstall
 	keyRemove
 	keyYes
 	keyNo
@@ -559,8 +443,7 @@ const (
 // openRawTTY puts /dev/tty in raw mode and returns it, the terminal width, and a
 // restore func. A signal handler restores the tty and shows the cursor before
 // exiting on SIGTERM/HUP (or a SIGINT that slips past -isig), so no exit path
-// leaves the user in a hidden-cursor raw terminal. Cleanup is not a step you can
-// forget, because it is not a step you perform.
+// leaves the user in a hidden-cursor raw terminal.
 func openRawTTY() (*os.File, int, func(), error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
@@ -588,7 +471,6 @@ func openRawTTY() (*os.File, int, func(), error) {
 		restore()
 		os.Exit(130)
 	}()
-	// -isig makes Ctrl-C arrive as a byte we handle as a clean cancel in-loop.
 	if err := stty(tty, "-icanon", "-echo", "-isig", "min", "1", "time", "0"); err != nil {
 		restore()
 		return nil, 0, nil, err
@@ -597,8 +479,7 @@ func openRawTTY() (*os.File, int, func(), error) {
 	return tty, ttyCols(tty), restore, nil
 }
 
-// Run shows the account picker on /dev/tty and returns the user's Result. Only
-// reached when the shell hook is active, so a chosen switch always applies.
+// Run shows the profile launcher on /dev/tty and returns the user's Result.
 func Run(rows []Row) (Result, error) {
 	tty, cols, restore, err := openRawTTY()
 	if err != nil {
@@ -608,21 +489,20 @@ func Run(rows []Row) (Result, error) {
 	return drive(rows, cols, tty, tty)
 }
 
-// RunSetup shows the one-time setup gate. install performs the hook write and
-// returns nil on success; the gate handles rendering the outcome.
-func RunSetup(info SetupInfo, install func() error) error {
+// RunAdd shows the framed add screen on /dev/tty. currentLogin (may be "") is
+// shown for context.
+func RunAdd(currentLogin string) (AddResult, error) {
 	tty, cols, restore, err := openRawTTY()
 	if err != nil {
-		return err
+		return AddResult{}, err
 	}
 	defer restore()
-	return driveSetup(info, install, cols, tty, tty)
+	return driveAdd(currentLogin, cols, tty, tty)
 }
 
-// drive is the picker render/key loop, decoupled from /dev/tty for tests. The
-// cursor visits every row so any account can be removed, but Enter only switches
-// into a selectable one — you still cannot switch into a broken account, the
-// guard just moved from the cursor to the action.
+// drive is the launcher render/key loop, decoupled from /dev/tty for tests. The
+// cursor visits every row so any profile can be removed, but Enter only launches
+// a launchable one — the guard is on the action, not the cursor.
 func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
 	cursor := initialCursor(rows)
 	confirm := -1 // >=0 while confirming removal of that row
@@ -655,8 +535,8 @@ func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
 		case keyDown:
 			cursor = step(rows, cursor, +1)
 		case keyEnter:
-			if cursor >= 0 && rows[cursor].selectable() {
-				return Result{Kind: Switch, Index: cursor}, nil
+			if cursor >= 0 && rows[cursor].launchable() {
+				return Result{Kind: Launch, Index: cursor}, nil
 			}
 		case keyRemove:
 			if cursor >= 0 {
@@ -670,67 +550,22 @@ func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
 	}
 }
 
-// driveSetup is the gate render/key loop, decoupled from /dev/tty for tests.
-func driveSetup(info SetupInfo, install func() error, cols int, in io.Reader, out io.Writer) error {
-	phase := phaseAsk
-	if info.AlreadyPresent {
-		phase = phasePresent
-	}
-	var doneErr error
-	r := bufio.NewReader(in)
-	for {
-		fmt.Fprint(out, RenderSetup(info, phase, doneErr, cols))
-		k, err := readKey(r)
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		switch phase {
-		case phaseAsk:
-			switch k {
-			case keyInstall:
-				if doneErr = install(); doneErr != nil {
-					phase = phaseErr
-				} else {
-					phase = phaseDone
-				}
-			case keyQuit:
-				return nil
-			}
-		default: // phasePresent, phaseDone, phaseErr — any exit key leaves
-			if k == keyQuit || k == keyEnter {
-				return nil
-			}
-		}
-	}
-}
-
-// initialCursor lands on the active account, else the first selectable row, else
-// the first row (so an all-blocked list is still navigable for removal), else -1
-// when the list is empty.
+// initialCursor lands on the first launchable profile, else the first row (so an
+// all-blocked list is still navigable for removal), else -1 when empty.
 func initialCursor(rows []Row) int {
 	if len(rows) == 0 {
 		return -1
 	}
-	first := -1
 	for i, r := range rows {
-		if r.Active {
+		if r.launchable() {
 			return i
 		}
-		if first < 0 && r.selectable() {
-			first = i
-		}
-	}
-	if first >= 0 {
-		return first
 	}
 	return 0
 }
 
 // step moves the cursor one row in direction dir, clamped to the list. Every row
-// is reachable; switching is guarded at Enter, not here.
+// is reachable; launching is guarded at Enter, not here.
 func step(rows []Row, cursor, dir int) int {
 	if cursor < 0 {
 		return cursor
@@ -743,7 +578,7 @@ func step(rows []Row, cursor, dir int) int {
 }
 
 // readKey decodes one logical keypress: arrows (or vim j/k), enter, add (a),
-// install (i), and quit (q / Esc / Ctrl-C).
+// remove (d), yes/no (y/n), and quit (q / Esc / Ctrl-C).
 func readKey(r *bufio.Reader) (key, error) {
 	b, err := r.ReadByte()
 	if err != nil {
@@ -756,8 +591,6 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyQuit, nil
 	case 'a', 'A':
 		return keyAdd, nil
-	case 'i', 'I':
-		return keyInstall, nil
 	case 'd', 'D':
 		return keyRemove, nil
 	case 'y', 'Y':
