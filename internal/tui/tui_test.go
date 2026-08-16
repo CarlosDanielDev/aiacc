@@ -2,7 +2,6 @@ package tui
 
 import (
 	"bytes"
-	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -84,62 +83,37 @@ func TestRenderShowsSetupNudgeOnlyWhenNeeded(t *testing.T) {
 
 // --- Shell setup --------------------------------------------------------------
 
-func setupInfo() SetupInfo {
-	return SetupInfo{
-		Shell: "fish", RcLine: "aiacc shell-init fish | source",
-		RcPath: "~/.config/fish/config.fish", ReloadCmd: "source ~/.config/fish/config.fish",
-		Example: "claude-work",
+func setupResult() SetupResult {
+	return SetupResult{
+		BinDir: "~/.local/bin", Names: []string{"claude-work", "claude-personal"},
+		Example: "claude-work", WorksNow: true,
 	}
 }
 
-func TestSetupInstallThenExit(t *testing.T) {
-	called := false
-	install := func() error { called = true; return nil }
-	if err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{}); err != nil {
-		t.Fatalf("driveSetup: %v", err)
-	}
-	if !called {
-		t.Fatal("install not called on 'i'")
+func TestDriveSetupResultExits(t *testing.T) {
+	if err := driveSetupResult(setupResult(), 80, bytes.NewBufferString("q"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("driveSetupResult: %v", err)
 	}
 }
 
-func TestSetupQuitSkipsInstall(t *testing.T) {
-	called := false
-	install := func() error { called = true; return nil }
-	if err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("q"), &bytes.Buffer{}); err != nil {
-		t.Fatalf("driveSetup: %v", err)
-	}
-	if called {
-		t.Fatal("install ran on quit")
-	}
-}
-
-func TestSetupAlreadyPresentDoesNotInstall(t *testing.T) {
-	info := setupInfo()
-	info.AlreadyPresent = true
-	called := false
-	install := func() error { called = true; return nil }
-	if err := driveSetup(info, install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{}); err != nil {
-		t.Fatalf("driveSetup: %v", err)
-	}
-	if called {
-		t.Fatal("install ran though already present")
-	}
-}
-
-func TestSetupInstallErrorNotFatal(t *testing.T) {
-	install := func() error { return errors.New("permission denied") }
-	if err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{}); err != nil {
-		t.Fatalf("driveSetup should render the error, not return it: %v", err)
-	}
-}
-
-func TestRenderSetupShowsSteps(t *testing.T) {
-	out := RenderSetup(setupInfo(), setupAsk, nil, 80)
-	for _, want := range []string{"shell setup", "fish", "Step 1", "Step 2", "Step 3", "shell-init fish | source", "source ~/.config/fish/config.fish", "claude-work"} {
+func TestRenderSetupResultWorksNow(t *testing.T) {
+	out := RenderSetupResult(setupResult(), 80)
+	for _, want := range []string{"setup", "2 command", "~/.local/bin", "claude-work", "claude-personal", "work now"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("setup render missing %q:\n%s", want, out)
+			t.Errorf("setup result missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestRenderSetupResultNeedsNewTerminal(t *testing.T) {
+	r := setupResult()
+	r.WorksNow = false
+	out := RenderSetupResult(r, 80)
+	if !strings.Contains(out, "new terminal") {
+		t.Errorf("expected new-terminal guidance when not on PATH:\n%s", out)
+	}
+	if strings.Contains(out, "work now") {
+		t.Errorf("should not claim works-now when off PATH:\n%s", out)
 	}
 }
 
@@ -329,7 +303,7 @@ func TestFramesStaySquare(t *testing.T) {
 		frames["picker"] = Render(rows, 0, true, cols)
 		frames["add"] = RenderAdd("me@example.com", "work", "", 0, "bad name", cols)
 		frames["remove"] = RenderRemove(Row{Provider: "claude", Account: "work"}, cols)
-		frames["setup"] = RenderSetup(SetupInfo{Shell: "fish", RcLine: "aiacc shell-init fish | source", RcPath: "~/.config/fish/config.fish", ReloadCmd: "source ~/.config/fish/config.fish", Example: "claude-work"}, setupAsk, nil, cols)
+		frames["setup"] = RenderSetupResult(setupResult(), cols)
 		for name, out := range frames {
 			wid := -1
 			for _, ln := range strings.Split(out, "\r\n") {

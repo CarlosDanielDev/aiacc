@@ -44,7 +44,11 @@ func runPicker(filter string) error {
 			}
 			continue
 		case tui.Setup:
-			if err := runSetup(); err != nil {
+			res, err := doSetup(path)
+			if err != nil {
+				return err
+			}
+			if err := tui.RunSetupResult(res); err != nil {
 				return err
 			}
 			continue
@@ -109,7 +113,11 @@ func runAddTUI(cfgPath string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return saveAccount(cfgPath, "claude", res.Name, res.Dir, 0)
+	if err := saveAccount(cfgPath, "claude", res.Name, res.Dir, 0); err != nil {
+		return err
+	}
+	syncLauncher(cfgPath, "claude", res.Name) // keep the command in sync (best-effort)
+	return nil
 }
 
 // currentClaudeLogin is the email (and org) logged into the active Claude dir,

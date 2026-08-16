@@ -51,33 +51,25 @@ The name you give an account **is** its launcher command, so name it how you wan
 to type it: `claude-work`, `claude-client-x`, whatever. Names are limited to
 letters, digits, `-` and `_` (they have to be valid shell command names).
 
-## Shell setup
-
-To type `claude-work` from anywhere, the launcher functions need to load in your
-shell. Let aiacc do it:
+## Shell setup — one step
 
 ```sh
 $ aiacc setup
 ```
 
-`aiacc setup` is a guided, step-by-step screen: it detects your shell, adds the
-one line to the right startup file for you (press `i`), then shows the exact
-command to reload and the exact command to try. It's idempotent — safe to re-run
-— and the picker nudges you toward it (`s`) until it's done.
+That's it. `aiacc setup` installs a small executable per account (`claude-work`,
+…) into a directory on your `PATH`, so the commands work **immediately, in the
+shell you're already in** — no sourcing, no reload, no new terminal. It's
+idempotent (safe to re-run), `aiacc add` / `aiacc remove` keep the commands in
+sync automatically, and the picker nudges you toward it (`s`) until it's done.
 
-Prefer to do it by hand? `aiacc shell-init <shell>` prints the launcher functions;
-add the matching line to your startup file yourself:
+In the rare case that no writable directory is already on your `PATH`, aiacc
+installs into `~/.local/bin` and adds that to your `PATH` — the one situation
+where you'll need to open a new terminal to finish.
 
-```sh
-# ~/.bashrc
-eval "$(aiacc shell-init bash)"
-
-# ~/.zshrc
-eval "$(aiacc shell-init zsh)"
-
-# ~/.config/fish/config.fish
-aiacc shell-init fish | source
-```
+Prefer shell functions instead of executables? `aiacc shell-init <shell>` still
+prints them (`eval "$(aiacc shell-init bash)"`, or `aiacc shell-init fish |
+source`), if you'd rather add a line to your startup file yourself.
 
 What it emits, for example under bash:
 
@@ -132,7 +124,7 @@ are a natural next addition.
 | `<account>` (e.g. `claude-work`) | Launcher function from `shell-init`; opens Claude Code in that account. |
 | `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen when run with no arguments in a terminal); creates the directory if missing. |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. (Or press `d` in the picker.) |
-| `aiacc setup` | Guided, step-by-step install of the launcher commands into your shell startup file. |
+| `aiacc setup` | One-step install of the launcher commands as executables on your PATH — they work immediately, no reload. |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
 | `aiacc usage [provider]` | Token totals per account from local session logs. |
