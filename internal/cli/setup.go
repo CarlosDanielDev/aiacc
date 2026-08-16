@@ -29,7 +29,11 @@ func newSetupCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Plain, scriptable output (also the non-TTY path).
+			// Interactive terminal → the framed result screen; piped/scripted →
+			// plain, greppable output.
+			if isTerminal(os.Stdout) {
+				return tui.RunSetupResult(res)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Installed %d command(s) to %s:\n", len(res.Names), res.BinDir)
 			for _, n := range res.Names {
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", n)

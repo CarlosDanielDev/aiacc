@@ -23,14 +23,17 @@ $ claude-personal    # …a different account entirely — no re-login, no juggl
 Bare `aiacc` opens an interactive launcher:
 
 ```text
-╭─ aiacc — launch a profile ───────────────────╮
-│                                              │
-│ ▸ claude-work           carlos@work.com      │
-│   claude-personal       me@gmail.com         │
-│   ⚠ old                 dir missing          │
-╰──────────────────────────────────────────────╯
-  ↑↓ move   ⏎ launch   a add   r rename   d remove   q quit
+┏━ AIACC — LAUNCH A PROFILE ━━━━━━━━━━━━━━━━━━━━┓
+┃                                              ┃
+┃ ▸ claude-work           carlos@work.com      ┃
+┃   claude-personal       me@gmail.com         ┃
+┃   ⚠ old                 dir missing          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+  ↑↓ move  ⏎ launch  a add  r rename  h hand off  d remove  q quit
 ```
+
+> Cyberpunk / _Akira_ skin — neon on black behind a blood-red frame. Add / rename
+> / remove / hand off / setup all happen in-screen. Honors `NO_COLOR`.
 
 ---
 
@@ -133,7 +136,7 @@ aiacc shell-init fish | source         # ~/.config/fish/config.fish
 | `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
-| `aiacc handoff <provider> <from> <to>` | Copy a session from one account to another to resume it there. `--session <id>`, `--launch`. |
+| `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
 | `aiacc usage [provider]` | Token totals per account, from local session logs. |
