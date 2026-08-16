@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func sample() []Row {
 
 func drv(t *testing.T, keys string, rows []Row) Result {
 	t.Helper()
-	res, err := drive(rows, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	res, err := drive(rows, false, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("drive: %v", err)
 	}
@@ -61,6 +62,84 @@ func TestDriveClampsAtBottom(t *testing.T) {
 func TestDriveAddKey(t *testing.T) {
 	if res := drv(t, "a", sample()); res.Kind != Add {
 		t.Fatalf("got %+v, want Add", res)
+	}
+}
+
+func TestDriveSetupKey(t *testing.T) {
+	if res := drv(t, "s", sample()); res.Kind != Setup {
+		t.Fatalf("got %+v, want Setup", res)
+	}
+}
+
+func TestRenderShowsSetupNudgeOnlyWhenNeeded(t *testing.T) {
+	const nudge = "press "
+	if on := Render(sample(), 0, true, 80); !strings.Contains(on, "s") || !strings.Contains(on, "setup") {
+		t.Errorf("setup nudge/legend missing when needed:\n%s", on)
+	}
+	off := Render(sample(), 0, false, 80)
+	if strings.Contains(off, nudge+"s to install") {
+		t.Errorf("setup nudge shown when not needed:\n%s", off)
+	}
+}
+
+// --- Shell setup --------------------------------------------------------------
+
+func setupInfo() SetupInfo {
+	return SetupInfo{
+		Shell: "fish", RcLine: "aiacc shell-init fish | source",
+		RcPath: "~/.config/fish/config.fish", ReloadCmd: "source ~/.config/fish/config.fish",
+		Example: "claude-work",
+	}
+}
+
+func TestSetupInstallThenExit(t *testing.T) {
+	called := false
+	install := func() error { called = true; return nil }
+	if err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("driveSetup: %v", err)
+	}
+	if !called {
+		t.Fatal("install not called on 'i'")
+	}
+}
+
+func TestSetupQuitSkipsInstall(t *testing.T) {
+	called := false
+	install := func() error { called = true; return nil }
+	if err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("q"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("driveSetup: %v", err)
+	}
+	if called {
+		t.Fatal("install ran on quit")
+	}
+}
+
+func TestSetupAlreadyPresentDoesNotInstall(t *testing.T) {
+	info := setupInfo()
+	info.AlreadyPresent = true
+	called := false
+	install := func() error { called = true; return nil }
+	if err := driveSetup(info, install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("driveSetup: %v", err)
+	}
+	if called {
+		t.Fatal("install ran though already present")
+	}
+}
+
+func TestSetupInstallErrorNotFatal(t *testing.T) {
+	install := func() error { return errors.New("permission denied") }
+	if err := driveSetup(setupInfo(), install, 80, bytes.NewBufferString("iq"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("driveSetup should render the error, not return it: %v", err)
+	}
+}
+
+func TestRenderSetupShowsSteps(t *testing.T) {
+	out := RenderSetup(setupInfo(), setupAsk, nil, 80)
+	for _, want := range []string{"shell setup", "fish", "Step 1", "Step 2", "Step 3", "shell-init fish | source", "source ~/.config/fish/config.fish", "claude-work"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("setup render missing %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -136,7 +215,7 @@ func TestRenderRemoveShowsAccount(t *testing.T) {
 // --- Render -------------------------------------------------------------------
 
 func TestRenderShowsProfilesAndLogin(t *testing.T) {
-	out := Render(sample(), 0, 80)
+	out := Render(sample(), 0, false, 80)
 	for _, want := range []string{"▸", "work", "w@co.com", "launch a profile"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q:\n%s", want, out)
@@ -149,7 +228,7 @@ func TestRenderBlockedBadges(t *testing.T) {
 		{Provider: "claude", Account: "gone", DirExists: false, EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude"}, // dir missing
 		{Provider: "openai", Account: "x", DirExists: true, EnvVar: "OPENAI_CONFIG", Command: ""},               // no launcher
 	}
-	out := Render(rows, -1, 80)
+	out := Render(rows, -1, false, 80)
 	for _, want := range []string{"dir missing", "no launcher"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing blocked badge %q:\n%s", want, out)
@@ -158,7 +237,7 @@ func TestRenderBlockedBadges(t *testing.T) {
 }
 
 func TestRenderEmptyState(t *testing.T) {
-	if out := Render(nil, -1, 80); !strings.Contains(out, "No profiles yet") {
+	if out := Render(nil, -1, false, 80); !strings.Contains(out, "No profiles yet") {
 		t.Errorf("empty state missing guidance:\n%s", out)
 	}
 }
@@ -247,9 +326,10 @@ func TestFramesStaySquare(t *testing.T) {
 	)
 	frames := map[string]string{}
 	for _, cols := range []int{20, 40, 80, 200} {
-		frames["picker"] = Render(rows, 0, cols)
+		frames["picker"] = Render(rows, 0, true, cols)
 		frames["add"] = RenderAdd("me@example.com", "work", "", 0, "bad name", cols)
 		frames["remove"] = RenderRemove(Row{Provider: "claude", Account: "work"}, cols)
+		frames["setup"] = RenderSetup(SetupInfo{Shell: "fish", RcLine: "aiacc shell-init fish | source", RcPath: "~/.config/fish/config.fish", ReloadCmd: "source ~/.config/fish/config.fish", Example: "claude-work"}, setupAsk, nil, cols)
 		for name, out := range frames {
 			wid := -1
 			for _, ln := range strings.Split(out, "\r\n") {

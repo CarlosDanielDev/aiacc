@@ -11,6 +11,8 @@ package shell
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -62,6 +64,47 @@ func Launcher(shellName, name, command, envVar, dir string) (string, error) {
 	default:
 		return "", ErrUnknownShell
 	}
+}
+
+// RcLine is the single line a user adds to their shell startup file to load the
+// per-account launchers: bash/zsh eval the shell-init output; fish sources it.
+func RcLine(shellName string) (string, error) {
+	switch shellName {
+	case "bash", "zsh":
+		return fmt.Sprintf(`eval "$(aiacc shell-init %s)"`, shellName), nil
+	case "fish":
+		return "aiacc shell-init fish | source", nil
+	default:
+		return "", ErrUnknownShell
+	}
+}
+
+// RcPath is the conventional startup file for a shell, absolute. It does not
+// check whether the file exists — callers create it on write.
+func RcPath(shellName string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	switch shellName {
+	case "bash":
+		return filepath.Join(home, ".bashrc"), nil
+	case "zsh":
+		return filepath.Join(home, ".zshrc"), nil
+	case "fish":
+		return filepath.Join(home, ".config", "fish", "config.fish"), nil
+	default:
+		return "", ErrUnknownShell
+	}
+}
+
+// ReloadCmd is the command that reloads a shell's startup file in place, so the
+// launchers are ready without opening a new terminal.
+func ReloadCmd(shellName, rcPath string) string {
+	if shellName == "fish" {
+		return "source " + rcPath
+	}
+	return "source " + rcPath
 }
 
 // validateDir rejects empty input and any byte below 0x20 (control characters),
