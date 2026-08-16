@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
+	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/shell"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
 	"github.com/spf13/cobra"
@@ -17,65 +18,215 @@ import (
 func newSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Guided one-time shell setup for the launcher commands",
+		Short: "Install the launcher commands (one step — no shell reload needed)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !isTerminal(os.Stdin) {
-				// No terminal to drive the wizard — print the manual steps.
-				sh := detectShell()
-				line, _ := shell.RcLine(sh)
-				rc, _ := shell.RcPath(sh)
-				fmt.Fprintf(cmd.OutOrStdout(),
-					"Add this line to %s:\n  %s\nThen reload it:\n  %s\n",
-					tildeize(rc), line, shell.ReloadCmd(sh, tildeize(rc)))
-				return nil
+			path, err := configPath()
+			if err != nil {
+				return err
 			}
-			return runSetup()
+			res, err := doSetup(path)
+			if err != nil {
+				return err
+			}
+			// Plain, scriptable output (also the non-TTY path).
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed %d command(s) to %s:\n", len(res.Names), res.BinDir)
+			for _, n := range res.Names {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", n)
+			}
+			if res.WorksNow {
+				fmt.Fprintf(cmd.OutOrStdout(), "They work now — try: %s\n", res.Example)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Added %s to your PATH — open a new terminal, then: %s\n", res.BinDir, res.Example)
+			}
+			return nil
 		},
 	}
 }
 
-// runSetup drives the framed, step-by-step shell-setup screen: it installs the
-// launcher line into the shell startup file (step 1, the one thing it can do for
-// you) and shows the exact reload/use commands for steps 2–3.
-func runSetup() error {
-	path, err := configPath()
+// doSetup is the one-step install: it writes an executable launcher for every
+// account into a directory on PATH, so the commands work immediately with no
+// sourcing or shell reload. It only touches your shell config in the rare case
+// that no writable directory is already on PATH.
+func doSetup(cfgPath string) (tui.SetupResult, error) {
+	c, err := config.Load(cfgPath)
 	if err != nil {
-		return err
+		return tui.SetupResult{}, err
 	}
-	sh := detectShell()
-	line, err := shell.RcLine(sh)
+	binDir, onPath := launcherBinDir()
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return tui.SetupResult{}, err
+	}
+	names, err := writeAllLaunchers(c, binDir)
 	if err != nil {
-		return err
+		return tui.SetupResult{}, err
 	}
-	rc, err := shell.RcPath(sh)
-	if err != nil {
-		return err
+	if !onPath {
+		// Fallback: make binDir reachable next shell. Best-effort — the scripts
+		// are already written, so a manual PATH add still works if this can't.
+		ensureOnPath(binDir)
 	}
-	info := tui.SetupInfo{
-		Shell:          sh,
-		RcLine:         line,
-		RcPath:         tildeize(rc),
-		ReloadCmd:      shell.ReloadCmd(sh, tildeize(rc)),
-		Example:        exampleLauncher(path),
-		AlreadyPresent: fileContains(rc, line),
+	example := "aiacc"
+	if len(names) > 0 {
+		example = names[0]
 	}
-	return tui.RunSetup(info, func() error { return appendLine(rc, line) })
+	return tui.SetupResult{
+		BinDir:   tildeize(binDir),
+		Names:    names,
+		Example:  example,
+		WorksNow: onPath,
+	}, nil
 }
 
-// setupNeeded reports whether the launcher line is missing from the shell startup
-// file, so the picker can nudge the user toward `s`.
-func setupNeeded() bool {
-	sh := detectShell()
-	line, err := shell.RcLine(sh)
+// writeAllLaunchers writes one executable per launchable account into binDir and
+// returns the command names, sorted.
+func writeAllLaunchers(c *config.Config, binDir string) ([]string, error) {
+	var names []string
+	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
+		env, _ := provider.EnvVar(c, pn)
+		cmd := launchCommand(pn)
+		if cmd == "" || env == "" {
+			continue
+		}
+		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
+			dir, err := provider.AccountDir(c, pn, an)
+			if err != nil {
+				continue
+			}
+			if err := writeLauncher(binDir, an, cmd, env, dir); err != nil {
+				return names, err
+			}
+			names = append(names, an)
+		}
+	}
+	return names, nil
+}
+
+// writeLauncher writes a single executable launcher script.
+func writeLauncher(binDir, name, command, envVar, dir string) error {
+	content, err := shell.LauncherScript(command, envVar, dir)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(binDir, name), []byte(content), 0o755)
+}
+
+// syncLauncher (re)writes one account's launcher if setup has been run (the bin
+// dir exists), so `add` keeps the commands current without a manual re-setup.
+// Best-effort: a failure here never fails the add.
+func syncLauncher(cfgPath, providerName, account string) {
+	if launchCommand(providerName) == "" {
+		return
+	}
+	binDir, _ := launcherBinDir()
+	if info, err := os.Stat(binDir); err != nil || !info.IsDir() {
+		return // not set up yet; `aiacc setup` will create it
+	}
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		return
+	}
+	env, _ := provider.EnvVar(c, providerName)
+	dir, err := provider.AccountDir(c, providerName, account)
+	if err != nil || env == "" {
+		return
+	}
+	_ = writeLauncher(binDir, account, launchCommand(providerName), env, dir)
+}
+
+// removeLauncher deletes an account's launcher script if present. Best-effort.
+func removeLauncher(account string) {
+	binDir, _ := launcherBinDir()
+	_ = os.Remove(filepath.Join(binDir, account))
+}
+
+// launcherBinDir picks where to install the launchers and whether it is already
+// on PATH. It prefers a writable directory already on PATH — a HOME-owned one
+// first, then any other — so the commands work with no PATH change. If nothing on
+// PATH is writable it falls back to ~/.local/bin (created, added to PATH).
+func launcherBinDir() (string, bool) {
+	home, _ := os.UserHomeDir()
+	preferred := []string{filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin")}
+	pathDirs := filepath.SplitList(os.Getenv("PATH"))
+
+	// 1. A preferred HOME dir already on PATH and writable.
+	for _, d := range preferred {
+		if slices.Contains(pathDirs, d) && writable(d) {
+			return d, true
+		}
+	}
+	// 2. Any writable dir on PATH — HOME-owned first, then the rest in order.
+	var homeDirs, others []string
+	for _, d := range pathDirs {
+		if d != "" && strings.HasPrefix(d, home+string(os.PathSeparator)) {
+			homeDirs = append(homeDirs, d)
+		} else if d != "" {
+			others = append(others, d)
+		}
+	}
+	for _, d := range append(homeDirs, others...) {
+		if writable(d) {
+			return d, true
+		}
+	}
+	// 3. Fallback: ~/.local/bin, not yet on PATH.
+	return preferred[0], false
+}
+
+// writable reports whether dir is an existing directory we can create a file in.
+func writable(dir string) bool {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	probe := filepath.Join(dir, ".aiacc-writetest")
+	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return false
+	}
+	f.Close()
+	os.Remove(probe)
+	return true
+}
+
+// ensureOnPath adds binDir to PATH via the shell startup file, idempotently.
+func ensureOnPath(binDir string) {
+	sh := detectShell()
+	line, err := shell.PathLine(sh, binDir)
+	if err != nil {
+		return
 	}
 	rc, err := shell.RcPath(sh)
 	if err != nil {
+		return
+	}
+	_ = appendLine(rc, line)
+}
+
+// setupNeeded reports whether the launcher commands aren't installed yet, so the
+// picker can nudge toward `s`. True when there are launchable accounts but the
+// bin dir has no launcher for the first one.
+func setupNeeded() bool {
+	path, err := configPath()
+	if err != nil {
 		return false
 	}
-	return !fileContains(rc, line)
+	c, err := config.Load(path)
+	if err != nil {
+		return false
+	}
+	binDir, _ := launcherBinDir()
+	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
+		if launchCommand(pn) == "" {
+			continue
+		}
+		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
+			if _, err := os.Stat(filepath.Join(binDir, an)); err != nil {
+				return true // at least one account has no launcher installed
+			}
+		}
+	}
+	return false
 }
 
 // detectShell is the current shell's basename if aiacc supports it, else bash.
@@ -92,27 +243,7 @@ func detectShell() string {
 	}
 }
 
-// exampleLauncher is the first launchable account name (a real command the user
-// will have), shown in the setup screen's "use it" step, or "aiacc" as a
-// fallback when nothing is registered yet.
-func exampleLauncher(cfgPath string) string {
-	c, err := config.Load(cfgPath)
-	if err != nil {
-		return "aiacc"
-	}
-	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		if launchCommand(pn) == "" {
-			continue
-		}
-		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
-			return an
-		}
-	}
-	return "aiacc"
-}
-
-// appendLine adds line to rc, idempotently — an existing line is left untouched
-// so re-running never duplicates it. The parent directory is created for fish.
+// appendLine adds line to rc, idempotently, creating the file/dir if needed.
 func appendLine(rc, line string) error {
 	if fileContains(rc, line) {
 		return nil
@@ -125,7 +256,7 @@ func appendLine(rc, line string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = fmt.Fprintf(f, "\n# aiacc launchers\n%s\n", line)
+	_, err = fmt.Fprintf(f, "\n# added by aiacc\n%s\n", line)
 	return err
 }
 

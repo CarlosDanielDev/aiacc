@@ -46,7 +46,11 @@ func newAddCmd() *cobra.Command {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
-			return saveAccount(path, providerName, account, dir, quota)
+			if err := saveAccount(path, providerName, account, dir, quota); err != nil {
+				return err
+			}
+			syncLauncher(path, providerName, account) // keep the command in sync
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", "", "config directory for this account (required unless using the wizard)")
@@ -103,7 +107,11 @@ func removeAccount(path, providerName, account string) error {
 		delete(p.Accounts, account)
 		c.Providers[providerName] = p
 	}
-	return config.Save(path, c)
+	if err := config.Save(path, c); err != nil {
+		return err
+	}
+	removeLauncher(account) // drop the command too (best-effort)
+	return nil
 }
 
 func newListCmd() *cobra.Command {

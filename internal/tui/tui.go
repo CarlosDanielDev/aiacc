@@ -290,135 +290,67 @@ func RenderRemove(r Row, cols int) string {
 
 // --- Shell setup --------------------------------------------------------------
 
-// SetupInfo is what the setup screen needs to explain and perform the one-time
-// install of the launcher commands into the user's shell startup file.
-type SetupInfo struct {
-	Shell          string // bash | zsh | fish
-	RcLine         string // the line to add to the startup file
-	RcPath         string // display path of that startup file (~ form)
-	ReloadCmd      string // command that reloads it in place
-	Example        string // an example launcher command, or "aiacc"
-	AlreadyPresent bool   // the line is already in the startup file
+// SetupResult is what a one-step `aiacc setup` installed, for the result screen.
+type SetupResult struct {
+	BinDir   string   // display path the launchers were written to
+	Names    []string // installed command names
+	Example  string   // an example command to try
+	WorksNow bool     // BinDir is on PATH → usable immediately, no reload
 }
 
-// setupState is the render state of the setup screen.
-type setupState int
-
-const (
-	setupAsk     setupState = iota // step 1 pending — offer to install
-	setupPresent                   // step 1 already done before we started
-	setupDone                      // just installed step 1
-	setupErr                       // install failed
-)
-
-func stepLine(n int, label string, done bool, w int) string {
-	mark, ink := "·", inkGrey
-	if done {
-		mark, ink = "✓", inkGreen
-	}
-	return boxRow([]seg{pad(2), {mark + " ", ink}, {"Step " + strconv.Itoa(n) + " · " + label, inkWhite}}, w)
-}
-
-// RenderSetup returns the framed, step-by-step shell-setup screen. Step 1 (add
-// the line) is the only step aiacc can do for you; steps 2–3 are shell actions it
-// can't perform in your parent shell, so it prints the exact commands. state and
-// doneErr drive which phase is shown. Pure, for tests.
-func RenderSetup(info SetupInfo, state setupState, doneErr error, cols int) string {
+// RenderSetupResult returns the framed outcome of a one-step setup: what was
+// installed and whether it works now. Pure, for tests.
+func RenderSetupResult(r SetupResult, cols int) string {
 	w := innerWidth(cols)
-	step1Done := state == setupPresent || state == setupDone
-
 	lines := []string{
-		boxTop("aiacc — shell setup", w), boxBlank(w),
-		boxRow([]seg{pad(2), {"shell   ", inkGrey}, {info.Shell, inkWhite}}, w),
-		boxRow([]seg{pad(2), {"file    ", inkGrey}, {info.RcPath, inkWhite}}, w),
+		boxTop("aiacc — setup", w), boxBlank(w),
+		boxRow([]seg{pad(2), {"✓ ", inkGreen}, {strconv.Itoa(len(r.Names)) + " command(s) installed in", inkWhite}}, w),
+		boxRow([]seg{pad(4), {r.BinDir, inkGrey}}, w),
 		boxBlank(w),
 	}
-
-	if state == setupErr {
-		msg := "unknown error"
-		if doneErr != nil {
-			msg = doneErr.Error()
+	for i, n := range r.Names {
+		if i >= 8 { // don't let an absurd count tear the frame
+			lines = append(lines, boxRow([]seg{pad(4), {"…and " + strconv.Itoa(len(r.Names)-8) + " more", inkDim}}, w))
+			break
 		}
-		lines = append(lines,
-			boxRow([]seg{pad(2), {"⚠ Couldn't write the file:", inkRed}}, w),
-			boxRow([]seg{pad(4), {trunc(msg, w-6), inkGrey}}, w),
-			boxBlank(w),
-			boxRow([]seg{pad(2), {"Add this line by hand, then reload:", inkWhite}}, w),
-			boxRow([]seg{pad(4), {info.RcLine, inkBlue}}, w),
-			boxBottom(w),
-		)
-		return frame(lines, legendLine([][2]string{{"q", "ok"}}), cols, w)
+		lines = append(lines, boxRow([]seg{pad(4), {n, inkBlue}}, w))
 	}
-
-	// Step 1 — add the launcher line.
-	lines = append(lines, stepLine(1, "add the launcher line", step1Done, w))
-	if !step1Done {
-		lines = append(lines, boxRow([]seg{pad(4), {info.RcLine, inkBlue}}, w))
+	lines = append(lines, boxBlank(w))
+	if r.WorksNow {
+		lines = append(lines, boxRow([]seg{pad(2), {"They work now — try: ", inkWhite}, {r.Example, inkBlue}}, w))
+	} else {
+		lines = append(lines, boxRow([]seg{pad(2), {"Open a new terminal, then: ", inkWhite}, {r.Example, inkBlue}}, w))
 	}
-	// Step 2 — reload this shell (aiacc can't do this in your parent shell).
-	lines = append(lines, stepLine(2, "reload this shell", false, w))
-	lines = append(lines, boxRow([]seg{pad(4), {info.ReloadCmd, inkBlue}}, w))
-	// Step 3 — use it.
-	lines = append(lines, stepLine(3, "use it", false, w))
-	lines = append(lines, boxRow([]seg{pad(4), {info.Example, inkBlue}}, w))
 	lines = append(lines, boxBottom(w))
-
-	var legend string
-	switch {
-	case step1Done:
-		legend = legendLine([][2]string{{"", "step 1 done — run step 2, then"}, {"q", "close"}})
-	default:
-		legend = legendLine([][2]string{{"i", "do step 1 for me"}, {"q", "cancel"}})
-	}
-	return frame(lines, legend, cols, w)
+	return frame(lines, legendLine([][2]string{{"q", "done"}}), cols, w)
 }
 
-// driveSetup is the setup-screen loop, decoupled from /dev/tty for tests. install
-// performs step 1 (writing the line) and returns nil on success.
-func driveSetup(info SetupInfo, install func() error, cols int, in io.Reader, out io.Writer) error {
-	state := setupAsk
-	if info.AlreadyPresent {
-		state = setupPresent
-	}
-	var doneErr error
-	r := bufio.NewReader(in)
+// driveSetupResult shows the result and waits for an exit key.
+func driveSetupResult(r SetupResult, cols int, in io.Reader, out io.Writer) error {
+	rd := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, RenderSetup(info, state, doneErr, cols))
-		k, err := readKey(r)
+		fmt.Fprint(out, RenderSetupResult(r, cols))
+		k, err := readKey(rd)
 		if err != nil {
 			if err == io.EOF {
 				return nil
 			}
 			return err
 		}
-		switch state {
-		case setupAsk:
-			switch k {
-			case keyInstall:
-				if doneErr = install(); doneErr != nil {
-					state = setupErr
-				} else {
-					state = setupDone
-				}
-			case keyQuit:
-				return nil
-			}
-		default: // setupPresent, setupDone, setupErr — any exit key leaves
-			if k == keyQuit || k == keyEnter {
-				return nil
-			}
+		if k == keyQuit || k == keyEnter {
+			return nil
 		}
 	}
 }
 
-// RunSetup shows the shell-setup screen on /dev/tty.
-func RunSetup(info SetupInfo, install func() error) error {
+// RunSetupResult shows the setup result screen on /dev/tty.
+func RunSetupResult(r SetupResult) error {
 	tty, cols, restore, err := openRawTTY()
 	if err != nil {
 		return err
 	}
 	defer restore()
-	return driveSetup(info, install, cols, tty, tty)
+	return driveSetupResult(r, cols, tty, tty)
 }
 
 // --- Add profile --------------------------------------------------------------
@@ -583,7 +515,6 @@ const (
 	keyAdd
 	keyRemove
 	keySetup
-	keyInstall
 	keyYes
 	keyNo
 	keyQuit
@@ -747,8 +678,6 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyRemove, nil
 	case 's', 'S':
 		return keySetup, nil
-	case 'i', 'I':
-		return keyInstall, nil
 	case 'y', 'Y':
 		return keyYes, nil
 	case 'n', 'N':
