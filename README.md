@@ -1,24 +1,63 @@
-# aiacc — one command per Claude account
+<div align="center">
 
-Keep several Claude Code accounts side by side — personal, work, a client's — each
-in its own isolated config directory, and launch any of them by name:
+# aiacc
 
-```sh
+### One command per Claude account.
+
+Keep your **personal**, **work**, and **client** Claude Code accounts side by
+side — each in its own isolated config — and launch any of them by name.
+
+[![Release](https://img.shields.io/github/v/release/CarlosDanielDev/aiacc?sort=semver&color=6c8ebf)](https://github.com/CarlosDanielDev/aiacc/releases)
+[![CI](https://github.com/CarlosDanielDev/aiacc/actions/workflows/ci.yml/badge.svg)](https://github.com/CarlosDanielDev/aiacc/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/CarlosDanielDev/aiacc?color=00ADD8)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Linux-lightgrey)
+
+</div>
+
+```console
 $ claude-work        # opens Claude Code signed in as your work account
-$ claude-personal    # …and this one is a different account entirely
+$ claude-personal    # …a different account entirely — no re-login, no juggling
 ```
 
-The whole idea is one generic mechanism: **each account is an isolated config
-directory, selected by an environment variable.** Claude Code reads
-`CLAUDE_CONFIG_DIR`; point it at `~/.claude-work` and Claude runs as your work
-account, point it at `~/.claude-personal` and it's the personal one. `aiacc`
-registers those directories and gives you a launcher command per account that
-runs `CLAUDE_CONFIG_DIR=<dir> claude` for you — scoped to that one launch, with no
-global state to get out of sync. **aiacc never reads, stores, or transmits your
-credentials** — each account's config directory holds its own; aiacc only points
-an env var at it and runs the CLI.
+Bare `aiacc` opens an interactive launcher:
 
-## Install
+```text
+╭─ aiacc — launch a profile ───────────────────╮
+│                                              │
+│ ▸ claude-work           carlos@work.com      │
+│   claude-personal       me@gmail.com         │
+│   ⚠ old                 dir missing          │
+╰──────────────────────────────────────────────╯
+  ↑↓ move   ⏎ launch   a add   r rename   d remove   q quit
+```
+
+---
+
+## ✨ Why aiacc
+
+- **🔀 One command per account** — `claude-work` opens Claude Code signed into that account. No env juggling, no re-login.
+- **⚡ One-step setup** — `aiacc setup` installs the commands onto your `PATH`; they work *immediately*, in the shell you're already in. No sourcing, no reload.
+- **🧭 Interactive picker** — a bare `aiacc` gives you an arrow-key list to launch, add, rename, or remove accounts.
+- **🔒 Never touches your credentials** — aiacc only points an environment variable at a config directory; each account's login stays in its own dir.
+- **🪶 Zero dependencies** — a single static Go binary. Nothing to install alongside it.
+- **🛟 Hard to misuse** — junk names can't be entered, broken profiles can't be launched, and destructive actions ask first.
+
+<details>
+<summary><b>How it works</b> (one generic mechanism)</summary>
+
+<br>
+
+Each account is an **isolated config directory, selected by an environment
+variable.** Claude Code reads `CLAUDE_CONFIG_DIR`; point it at `~/.claude-work`
+and Claude runs as your work account, at `~/.claude-personal` and it's the
+personal one. `aiacc` registers those directories and installs a launcher command
+per account that runs `CLAUDE_CONFIG_DIR=<dir> claude` for you — scoped to that
+one launch, with no global state to get out of sync.
+
+</details>
+
+## 📦 Install
 
 ```sh
 # Go toolchain
@@ -31,64 +70,79 @@ curl -fsSL https://raw.githubusercontent.com/CarlosDanielDev/aiacc/main/install.
 brew install CarlosDanielDev/tap/aiacc
 ```
 
-## Quickstart
+## 🚀 Quick start
 
 ```sh
-# Add a couple of accounts. Run `aiacc` and press `a`, or use the flags:
-$ aiacc add claude claude-work --dir ~/.claude-work
-$ aiacc add claude claude-personal --dir ~/.claude-personal
+# 1 · Add a couple of accounts (run `aiacc` and press `a`, or use flags):
+aiacc add claude claude-work     --dir ~/.claude-work
+aiacc add claude claude-personal --dir ~/.claude-personal
 
-# Run aiacc with no arguments: an interactive launcher. Arrow keys / j·k move,
-# enter launches the selected account's Claude Code, a adds, r renames, d removes, q quits.
-$ aiacc
+# 2 · Install the launcher commands — one step, works right away:
+aiacc setup
 
-# Install the shortcut commands once (see Shell setup), then launch by name:
-$ claude-work
-$ claude-personal
+# 3 · Launch by name:
+claude-work
 ```
 
-The name you give an account **is** its launcher command, so name it how you want
-to type it: `claude-work`, `claude-client-x`, whatever. Names are limited to
-letters, digits, `-` and `_` (they have to be valid shell command names).
+> The name you give an account **is** its launcher command — so name it how you
+> want to type it (`claude-work`, `claude-client-x`, …). Names are limited to
+> letters, digits, `-` and `_`, since they must be valid shell command names.
 
-## Shell setup — one step
+The first time you launch a fresh account, Claude Code opens signed out — run
+`/login` inside it once, and that account's directory remembers it from then on.
+
+## ⚡ Setup, in one step
 
 ```sh
-$ aiacc setup
+aiacc setup
 ```
 
-That's it. `aiacc setup` installs a small executable per account (`claude-work`,
-…) into a directory on your `PATH`, so the commands work **immediately, in the
-shell you're already in** — no sourcing, no reload, no new terminal. It's
-idempotent (safe to re-run), `aiacc add` / `aiacc remove` keep the commands in
-sync automatically, and the picker nudges you toward it (`s`) until it's done.
+That's the whole thing. `aiacc setup` installs a small executable per account
+(`claude-work`, …) into a directory on your `PATH`, so the commands work
+**immediately, in the shell you're already in** — no sourcing, no reload, no new
+terminal. It's idempotent (safe to re-run), and `aiacc add` / `aiacc remove` /
+`aiacc rename` keep the commands in sync automatically.
 
-In the rare case that no writable directory is already on your `PATH`, aiacc
-installs into `~/.local/bin` and adds that to your `PATH` — the one situation
-where you'll need to open a new terminal to finish.
+> In the rare case that no writable directory is already on your `PATH`, aiacc
+> installs into `~/.local/bin` and adds it to your `PATH` — the one situation
+> where you'll open a new terminal to finish.
 
-Prefer shell functions instead of executables? `aiacc shell-init <shell>` still
-prints them (`eval "$(aiacc shell-init bash)"`, or `aiacc shell-init fish |
-source`), if you'd rather add a line to your startup file yourself.
+<details>
+<summary>Prefer shell functions over executables?</summary>
 
-What it emits, for example under bash:
+<br>
+
+`aiacc shell-init <shell>` prints them, if you'd rather add a line to your startup
+file yourself:
 
 ```sh
-claude-work() { CLAUDE_CONFIG_DIR='/home/you/.claude-work' command claude "$@"; }
-claude-personal() { CLAUDE_CONFIG_DIR='/home/you/.claude-personal' command claude "$@"; }
+eval "$(aiacc shell-init bash)"        # ~/.bashrc
+eval "$(aiacc shell-init zsh)"         # ~/.zshrc
+aiacc shell-init fish | source         # ~/.config/fish/config.fish
 ```
 
-Add a new account and its command appears the next time you open a shell (or
-re-run the `shell-init` line). You never need the shortcuts to use aiacc — a bare
-`aiacc` launches from the picker regardless — they're just there for speed. The
-first time you launch a fresh account, Claude Code opens signed out; run `/login`
-inside it once and that account's directory remembers it from then on.
+</details>
 
-## Configuration
+## 🎛️ Commands
+
+| Command | What it does |
+|---|---|
+| `aiacc` | The interactive picker (front door). Piped/redirected, it prints help instead. |
+| **`<account>`** &nbsp;e.g. `claude-work` | Launch Claude Code in that account (installed by `aiacc setup`). |
+| `aiacc setup` | One-step install of the launcher commands onto your `PATH` — they work immediately. |
+| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. |
+| `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
+| `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
+| `aiacc list` | Table of providers and their accounts. |
+| `aiacc status` | Which config dir each provider's env var currently points at. |
+| `aiacc usage [provider]` | Token totals per account, from local session logs. |
+| `aiacc shell-init <bash\|zsh\|fish>` | Print the per-account launcher **functions** (alternative to `setup`). |
+
+## ⚙️ Configuration
 
 State lives in a single TOML file at `~/.config/aiacc/config.toml`
-(`$XDG_CONFIG_HOME` is honored if set). The `add` / `remove` commands write it for
-you, but it's plain text you can edit by hand:
+(`$XDG_CONFIG_HOME` is honored). `add` / `remove` / `rename` write it for you, but
+it's plain text you can edit by hand:
 
 ```toml
 [providers.claude]
@@ -101,41 +155,25 @@ dir = "~/.claude-personal"
 dir = "~/.claude-work"
 ```
 
-A leading `~` in a `dir` is expanded to your home directory. A missing config file
-is treated as empty, so read-only commands work before you register anything.
+A leading `~` in a `dir` expands to your home directory. A missing config file is
+treated as empty, so read-only commands work before you register anything.
 
-## Providers
+## 🔌 Providers
 
-A provider is `{name, env_var}` plus its accounts. Claude Code is the built-in
-preset: `claude` maps to `CLAUDE_CONFIG_DIR`, and aiacc knows to launch the
-`claude` CLI for it. That's the one with a launcher today.
+A provider is `{name, env_var}` plus its accounts. **Claude Code** is the built-in
+preset — `claude` maps to `CLAUDE_CONFIG_DIR`, and aiacc knows to launch the
+`claude` CLI for it.
 
-Any other CLI that selects its config through an environment variable can still be
-registered — set the provider's `env_var` in the config — and it shows up in the
-picker. It just can't be launched yet (the picker marks it `no launcher`), because
-aiacc only knows the `claude` command so far. Launch commands for other providers
-are a natural next addition.
+Any other CLI that selects its config through an environment variable can be
+registered too (set the provider's `env_var`) and appears in the picker — it just
+can't be launched yet (marked `no launcher`), since aiacc only knows the `claude`
+command so far. Launch commands for other providers are a natural next step.
 
-## Command reference
-
-| Command | Effect |
-|---|---|
-| `aiacc` | Launch the interactive picker (the front door). Needs a terminal; piped or redirected, it prints help instead. |
-| `<account>` (e.g. `claude-work`) | Launcher function from `shell-init`; opens Claude Code in that account. |
-| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen when run with no arguments in a terminal); creates the directory if missing. |
-| `aiacc rename <provider> <old> <new>` | Rename an account and its launcher command, keeping its directory. (Or press `r` in the picker.) |
-| `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. (Or press `d` in the picker.) |
-| `aiacc setup` | One-step install of the launcher commands as executables on your PATH — they work immediately, no reload. |
-| `aiacc list` | Table of providers and their accounts. |
-| `aiacc status` | Which config dir each provider's env var currently points at. |
-| `aiacc usage [provider]` | Token totals per account from local session logs. |
-| `aiacc shell-init <bash\|zsh\|fish>` | Print the per-account launcher functions to add to your startup file. |
-
-## Contributing
+## 🤝 Contributing
 
 Public and open to contributions. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [architecture decision records](docs/adr/) first.
 
-## License
+## 📄 License
 
-[MIT](LICENSE).
+[MIT](LICENSE) © [CarlosDanielDev](https://github.com/CarlosDanielDev)
