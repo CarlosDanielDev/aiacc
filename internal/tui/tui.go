@@ -69,6 +69,7 @@ const (
 	Cancelled ResultKind = iota // backed out (q / Esc / Ctrl-C / EOF)
 	Launch                      // launch Index's profile
 	Add                         // pressed `a`; the caller runs the add screen
+	Rename                      // pressed `r`; the caller runs the rename screen on Index
 	Remove                      // confirmed removing Index
 	Setup                       // pressed `s`; the caller runs shell setup
 )
@@ -263,7 +264,7 @@ func Render(rows []Row, cursor int, setupNeeded bool, cols int) string {
 	}
 
 	lines = append(lines, boxBottom(w))
-	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"d", "remove"}}
+	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"d", "remove"}}
 	if setupNeeded {
 		pairs = append(pairs, [2]string{"s", "setup"})
 	}
@@ -503,6 +504,74 @@ func trimLastByte(s string) string {
 	return s[:len(s)-1]
 }
 
+// --- Rename profile -----------------------------------------------------------
+
+// RenderRename returns the rename screen: a single name field prefilled with the
+// current name, plus a hint. Pure, for tests.
+func RenderRename(oldName, buf, hint string, cols int) string {
+	w := innerWidth(cols)
+	lines := []string{
+		boxTop("aiacc — rename profile", w), boxBlank(w),
+		boxRow([]seg{pad(2), {"from  ", inkGrey}, {oldName, inkDim}}, w),
+		boxRow([]seg{pad(2), {"to    ", inkWhite}, {buf, inkWhite}, {"▏", inkPink}}, w),
+		boxBlank(w),
+	}
+	if hint != "" {
+		lines = append(lines, boxRow([]seg{pad(2), {"⚠ " + trunc(hint, w-4), inkRed}}, w))
+	} else {
+		lines = append(lines, boxRow([]seg{pad(2), {"the command becomes: " + launchName(buf), inkBlue}}, w))
+	}
+	lines = append(lines, boxBottom(w))
+	return frame(lines, legendLine([][2]string{{"", "edit name"}, {"⏎", "rename"}, {"esc", "cancel"}}), cols, w)
+}
+
+func launchName(buf string) string {
+	if buf == "" {
+		return "<name>"
+	}
+	return buf
+}
+
+// driveRename edits the name of a profile. taken is the set of other account
+// names; the new name must be valid and not already in use. Returns the new name,
+// or "" when cancelled (including an unchanged name — the caller no-ops either).
+func driveRename(oldName string, taken map[string]bool, cols int, in io.Reader, out io.Writer) (string, error) {
+	buf, hint := oldName, ""
+	r := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, RenderRename(oldName, buf, hint, cols))
+		b, err := r.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				return "", nil
+			}
+			return "", err
+		}
+		switch b {
+		case 0x1b, 3: // Esc / Ctrl-C
+			return "", nil
+		case '\r', '\n':
+			switch {
+			case buf == oldName:
+				return "", nil // unchanged — nothing to do
+			case !validName(buf):
+				hint = "name: a letter first, then letters, digits, - or _"
+			case taken[buf]:
+				hint = "a profile named " + buf + " already exists"
+			default:
+				return buf, nil
+			}
+		case 0x7f, 0x08:
+			buf, hint = trimLastByte(buf), ""
+		default:
+			if nameByte(b) {
+				buf += string(b)
+			}
+			hint = ""
+		}
+	}
+}
+
 // --- Terminal driving ---------------------------------------------------------
 
 type key int
@@ -513,6 +582,7 @@ const (
 	keyDown
 	keyEnter
 	keyAdd
+	keyRename
 	keyRemove
 	keySetup
 	keyYes
@@ -581,6 +651,22 @@ func RunAdd(currentLogin string) (AddResult, error) {
 	return driveAdd(currentLogin, cols, tty, tty)
 }
 
+// RunRename shows the rename screen on /dev/tty. taken is the set of other
+// account names the new one may not collide with. Returns the new name, or "" if
+// cancelled/unchanged.
+func RunRename(oldName string, taken []string) (string, error) {
+	set := make(map[string]bool, len(taken))
+	for _, n := range taken {
+		set[n] = true
+	}
+	tty, cols, restore, err := openRawTTY()
+	if err != nil {
+		return "", err
+	}
+	defer restore()
+	return driveRename(oldName, set, cols, tty, tty)
+}
+
 // drive is the launcher render/key loop, decoupled from /dev/tty for tests. The
 // cursor visits every row so any profile can be removed, but Enter only launches
 // a launchable one — the guard is on the action, not the cursor.
@@ -625,6 +711,10 @@ func drive(rows []Row, setupNeeded bool, cols int, in io.Reader, out io.Writer) 
 			}
 		case keyAdd:
 			return Result{Kind: Add}, nil
+		case keyRename:
+			if cursor >= 0 {
+				return Result{Kind: Rename, Index: cursor}, nil
+			}
 		case keySetup:
 			return Result{Kind: Setup}, nil
 		case keyQuit:
@@ -674,6 +764,8 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyQuit, nil
 	case 'a', 'A':
 		return keyAdd, nil
+	case 'r', 'R':
+		return keyRename, nil
 	case 'd', 'D':
 		return keyRemove, nil
 	case 's', 'S':

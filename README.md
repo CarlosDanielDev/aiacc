@@ -39,7 +39,7 @@ $ aiacc add claude claude-work --dir ~/.claude-work
 $ aiacc add claude claude-personal --dir ~/.claude-personal
 
 # Run aiacc with no arguments: an interactive launcher. Arrow keys / j·k move,
-# enter launches the selected account's Claude Code, a adds, d removes, q quits.
+# enter launches the selected account's Claude Code, a adds, r renames, d removes, q quits.
 $ aiacc
 
 # Install the shortcut commands once (see Shell setup), then launch by name:
@@ -123,6 +123,7 @@ are a natural next addition.
 | `aiacc` | Launch the interactive picker (the front door). Needs a terminal; piped or redirected, it prints help instead. |
 | `<account>` (e.g. `claude-work`) | Launcher function from `shell-init`; opens Claude Code in that account. |
 | `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen when run with no arguments in a terminal); creates the directory if missing. |
+| `aiacc rename <provider> <old> <new>` | Rename an account and its launcher command, keeping its directory. (Or press `r` in the picker.) |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. (Or press `d` in the picker.) |
 | `aiacc setup` | One-step install of the launcher commands as executables on your PATH — they work immediately, no reload. |
 | `aiacc list` | Table of providers and their accounts. |

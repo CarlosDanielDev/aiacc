@@ -62,6 +62,42 @@ func TestShellInitPrintsLaunchers(t *testing.T) {
 	}
 }
 
+func TestRenameAccountMovesEntry(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	seedConfig(t, path, dir, 0) // provider claude, account "work"
+
+	if err := renameAccount(path, "claude", "work", "client-x"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Providers["claude"].Accounts["work"]; ok {
+		t.Fatal("old name still present")
+	}
+	got, ok := c.Providers["claude"].Accounts["client-x"]
+	if !ok || got.Dir != dir {
+		t.Fatalf("new name missing or dir lost: %+v", c.Providers["claude"].Accounts)
+	}
+}
+
+func TestRenameAccountRefusesCollision(t *testing.T) {
+	path := withTempConfig(t)
+	c := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]config.Account{
+			"work": {Dir: t.TempDir()}, "personal": {Dir: t.TempDir()},
+		}},
+	}}
+	if err := config.Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameAccount(path, "claude", "work", "personal"); err == nil {
+		t.Fatal("expected error renaming onto an existing account")
+	}
+}
+
 func TestStatusMarksActiveAccount(t *testing.T) {
 	path := withTempConfig(t)
 	dir := t.TempDir()
