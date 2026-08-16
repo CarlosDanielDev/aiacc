@@ -133,6 +133,7 @@ aiacc shell-init fish | source         # ~/.config/fish/config.fish
 | `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
+| `aiacc handoff <provider> <from> <to>` | Copy a session from one account to another to resume it there. `--session <id>`, `--launch`. |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
 | `aiacc usage [provider]` | Token totals per account, from local session logs. |
@@ -157,6 +158,26 @@ dir = "~/.claude-work"
 
 A leading `~` in a `dir` expands to your home directory. A missing config file is
 treated as empty, so read-only commands work before you register anything.
+
+## 🔗 Share a session across accounts
+
+Hit a usage limit mid-conversation? Hand the exact session to another account and
+keep going:
+
+```console
+$ aiacc handoff claude claude-work claude-personal
+Handed off session 2f1c… → claude-personal
+  "Fix the launcher"
+Resume it:
+  cd ~/projects/aiacc && claude-personal --resume 2f1c…
+```
+
+Claude Code keeps each session as a transcript at
+`<config-dir>/projects/<cwd>/<id>.jsonl`. `handoff` copies that transcript into
+the target account (preserving its project directory) and prints the exact resume
+command — `--launch` runs it for you. **Only the transcript moves; credentials are
+never touched, and each account's usage stays separate.** It defaults to the most
+recent session; `--session <id>` picks a specific one.
 
 ## 🔌 Providers
 

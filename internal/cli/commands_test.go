@@ -98,6 +98,49 @@ func TestRenameAccountRefusesCollision(t *testing.T) {
 	}
 }
 
+func TestHandoffCopiesSessionAndPrintsResume(t *testing.T) {
+	path := withTempConfig(t)
+	fromDir, toDir := t.TempDir(), t.TempDir()
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]config.Account{
+			"work":     {Dir: fromDir},
+			"personal": {Dir: toDir},
+		}},
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Seed a session under the "work" account.
+	sdir := filepath.Join(fromDir, "projects", "-Users-x-proj")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := "abc123de-0000-0000-0000-000000000000"
+	line := `{"type":"user","cwd":"/Users/x/proj","lastPrompt":"hello"}` + "\n"
+	if err := os.WriteFile(filepath.Join(sdir, sid+".jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newHandoffCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"claude", "work", "personal"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	// Copied into the target account's projects, same project dir.
+	if _, err := os.Stat(filepath.Join(toDir, "projects", "-Users-x-proj", sid+".jsonl")); err != nil {
+		t.Fatalf("session not copied to target: %v", err)
+	}
+	// Resume instructions point at the recorded cwd and the target launcher.
+	s := out.String()
+	for _, want := range []string{"personal --resume " + sid, "cd /Users/x/proj"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("output missing %q:\n%s", want, s)
+		}
+	}
+}
+
 func TestStatusMarksActiveAccount(t *testing.T) {
 	path := withTempConfig(t)
 	dir := t.TempDir()
