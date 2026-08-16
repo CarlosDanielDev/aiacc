@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unicode/utf8"
 )
 
@@ -148,8 +149,54 @@ func render(segs []seg, width int) string {
 // Heavy box-drawing for a hard, cyber-terminal frame.
 const (
 	glTL, glTR, glBL, glBR = "┏", "┓", "┗", "┛"
+	glML, glMR             = "┣", "┫"
 	glH, glV               = "━", "┃"
 )
+
+// boxDivider is an inner section rule.
+func boxDivider(w int) string {
+	return paint(glML+strings.Repeat(glH, w)+glMR, inkBorder)
+}
+
+// boxRaw places already-coloured content (with known visible width) into a row,
+// padding to the frame width. Used for the gradient logo, whose ANSI escapes
+// render() cannot measure.
+func boxRaw(content string, visibleW, w int) string {
+	return paint(glV, inkBorder) + content + strings.Repeat(" ", max(0, w-visibleW)) + paint(glV, inkBorder)
+}
+
+// boxRowHi is a highlighted (reverse-video) row — the selection "glow".
+func boxRowHi(text string, w int) string {
+	body := render([]seg{{text, ""}}, w) // plain, padded/truncated to exactly w
+	if color {
+		body = "\x1b[7m" + body + "\x1b[27m"
+	}
+	return paint(glV, inkBorder) + body + paint(glV, inkBorder)
+}
+
+// neonRamp is the logo's colour sweep: magenta → red → cyan.
+var neonRamp = []string{"38;5;201", "38;5;198", "38;5;196", "38;5;202", "38;5;51", "38;5;45"}
+
+// logoRows is a half-block "AIACC" wordmark.
+var logoRows = []string{
+	"▄▀█ █ ▄▀█ █▀▀ █▀▀",
+	"█▀█ █ █▀█ █▄▄ █▄▄",
+}
+
+// gradient colours each non-space rune of s along ramp, offset by shift.
+func gradient(s string, ramp []string, shift int) string {
+	var b strings.Builder
+	i := 0
+	for _, r := range s {
+		if r == ' ' {
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteString(paint(string(r), ramp[(i+shift)%len(ramp)]))
+		i++
+	}
+	return b.String()
+}
 
 // boxTop draws the top border: a red heavy rule with the title inset in white.
 func boxTop(title string, w int) string {
@@ -185,18 +232,22 @@ func trunc(s string, n int) string {
 
 // frame centres the built lines in the terminal, adds a clear+home, and appends
 // a key legend below the box. Shared by the launcher, add, and remove screens.
+// frame repaints in place: cursor home, each line cleared to its end, then
+// everything below the frame cleared. No full-screen erase, so an animated
+// redraw doesn't flicker and a shrinking frame leaves no residue.
 func frame(lines []string, legend string, cols, innerW int) string {
 	lines = append(lines, "", legend)
 	left := max(0, (cols-(innerW+2))/2)
 	pref := strings.Repeat(" ", left)
 	var b strings.Builder
-	b.WriteString(clearHome)
+	b.WriteString("\x1b[H")
 	b.WriteString("\r\n")
 	for _, ln := range lines {
 		b.WriteString(pref)
 		b.WriteString(ln)
-		b.WriteString("\r\n")
+		b.WriteString("\x1b[K\r\n") // clear to end of line (erase stale tails)
 	}
+	b.WriteString("\x1b[J") // clear everything below the frame
 	return b.String()
 }
 
@@ -215,14 +266,30 @@ func legendLine(pairs [][2]string) string {
 // true (the shortcut commands aren't installed) it shows a one-line nudge toward
 // `s`. Pure, for tests.
 func Render(rows []Row, cursor int, setupNeeded bool, cols int) string {
+	return renderFrame(rows, cursor, setupNeeded, 0, cols)
+}
+
+// renderFrame is Render with an animation phase (colour sweep offset). Static
+// callers pass 0; the live loop advances it for the shimmering logo/border.
+func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) string {
 	w := innerWidth(cols)
 	const nameCol = 22
 
-	lines := []string{boxTop("aiacc — launch a profile", w), boxBlank(w)}
+	lines := []string{boxTop("aiacc", w), boxBlank(w)}
+
+	// Header: gradient AIACC wordmark + tagline.
+	for i, lg := range logoRows {
+		lines = append(lines, boxRaw("   "+gradient(lg, neonRamp, phase+i), 3+runeLen(lg), w))
+	}
+	lines = append(lines,
+		boxRow([]seg{pad(3), {"// launch a profile", inkBlue}}, w),
+		boxDivider(w),
+		boxBlank(w),
+	)
 
 	if setupNeeded {
 		lines = append(lines,
-			boxRow([]seg{pad(2), {"press ", inkDim}, {"s", inkYellow}, {" to install the shortcut commands", inkDim}}, w),
+			boxRow([]seg{pad(2), {"⚡ press ", inkYellow}, {"s", inkWhite}, {" to install the shortcut commands", inkYellow}}, w),
 			boxBlank(w),
 		)
 	}
@@ -239,52 +306,69 @@ func Render(rows []Row, cursor int, setupNeeded bool, cols int) string {
 		focused := i == cursor
 		blocked := !r.launchable()
 
-		cur := seg{"  ", ""}
-		if focused {
-			cur = seg{"▸ ", inkPink}
-		}
-		warn := ""
-		nameInk := inkGrey
-		switch {
-		case blocked:
-			warn, nameInk = "⚠ ", inkRed
-		case focused:
-			nameInk = inkWhite
-		}
-		// The account name is the launcher command, and the identity, so it is
-		// the row's label. The provider is an implementation detail (which env
-		// var / CLI) — shown as a dim tag only when it isn't the default claude.
 		name := r.Account
 		if r.Provider != "claude" {
 			name += " (" + r.Provider + ")"
 		}
-
-		var info seg
-		switch {
-		case blocked:
-			info = seg{r.blockedReason(), inkRed}
-		case r.Email == "":
-			info = seg{"not logged in", inkYellow}
-		default:
-			info = seg{trunc(r.Email, w-nameCol-4), inkGrey}
+		warn := ""
+		if blocked {
+			warn = "⚠ "
 		}
 
+		var infoText string
+		infoInk := inkGrey
+		switch {
+		case blocked:
+			infoText, infoInk = r.blockedReason(), inkRed
+		case r.Email == "":
+			infoText, infoInk = "not logged in", inkYellow
+		default:
+			infoText = trunc(r.Email, w-nameCol-4)
+		}
+
+		if focused {
+			// Selection glow: the whole row reversed, cursor arrow inline.
+			gap := max(1, nameCol-runeLen(warn)-runeLen(name))
+			text := "▸ " + warn + name + strings.Repeat(" ", gap) + infoText
+			lines = append(lines, boxRowHi(text, w))
+			continue
+		}
+		nameInk := inkGrey
+		if blocked {
+			nameInk = inkRed
+		}
 		lines = append(lines, boxRow([]seg{
-			cur,
+			pad(2),
 			{warn, inkRed},
 			{name, nameInk},
 			pad(nameCol - runeLen(warn) - runeLen(name)),
-			info,
+			{infoText, infoInk},
 		}, w))
 	}
 
-	lines = append(lines, boxBottom(w))
+	// Status bar.
+	lines = append(lines, boxBlank(w), boxDivider(w))
+	status := []seg{pad(2), {"◆ ", inkPink}, {plural(len(rows), "profile"), inkWhite}, {"   ", ""}}
+	if setupNeeded {
+		status = append(status, seg{"⚡ setup pending", inkYellow})
+	} else {
+		status = append(status, seg{"✓ ready", inkGreen})
+	}
+	lines = append(lines, boxRow(status, w), boxBottom(w))
+
 	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"h", "hand off"}, {"d", "remove"}}
 	if setupNeeded {
 		pairs = append(pairs, [2]string{"s", "setup"})
 	}
 	pairs = append(pairs, [2]string{"q", "quit"})
 	return frame(lines, legendLine(pairs), cols, w)
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
 }
 
 // RenderRemove is the confirm screen for removing a profile. Removing only
@@ -786,7 +870,49 @@ func Run(rows []Row, setupNeeded bool) (Result, error) {
 		return Result{Kind: Cancelled}, err
 	}
 	defer restore()
-	return drive(rows, setupNeeded, cols, tty, tty)
+	return animate(rows, setupNeeded, cols, tty)
+}
+
+// animate is the live picker loop: it reads keys in a goroutine and repaints on a
+// ticker so the logo shimmers. Shares the key-state machine with drive().
+func animate(rows []Row, setupNeeded bool, cols int, tty *os.File) (Result, error) {
+	st := pickerState{cursor: initialCursor(rows), confirm: -1}
+	keys := make(chan key)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		r := bufio.NewReader(tty)
+		for {
+			k, err := readKey(r)
+			if err != nil {
+				return
+			}
+			select {
+			case keys <- k:
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	ticker := time.NewTicker(90 * time.Millisecond)
+	defer ticker.Stop()
+	phase := 0
+	for {
+		if st.confirm >= 0 {
+			fmt.Fprint(tty, RenderRemove(rows[st.confirm], cols))
+		} else {
+			fmt.Fprint(tty, renderFrame(rows, st.cursor, setupNeeded, phase, cols))
+		}
+		select {
+		case k := <-keys:
+			if res, done := st.handle(rows, k); done {
+				return res, nil
+			}
+		case <-ticker.C:
+			phase++
+		}
+	}
 }
 
 // RunAdd shows the framed add screen on /dev/tty. currentLogin (may be "") is
@@ -816,18 +942,67 @@ func RunRename(oldName string, taken []string) (string, error) {
 	return driveRename(oldName, set, cols, tty, tty)
 }
 
-// drive is the launcher render/key loop, decoupled from /dev/tty for tests. The
-// cursor visits every row so any profile can be removed, but Enter only launches
-// a launchable one — the guard is on the action, not the cursor.
+// pickerState is the cursor + remove-confirm state shared by the testable drive
+// loop and the animated Run loop.
+type pickerState struct {
+	cursor  int
+	confirm int // >=0 while confirming removal of that row
+}
+
+// handle applies one keypress. It returns (result, true) when the picker is done,
+// or (_, false) to keep looping. The cursor visits every row so any profile can
+// be removed, but Enter only launches a launchable one — the guard is on the
+// action, not the cursor. Removal needs an explicit y; Enter is inert there.
+func (s *pickerState) handle(rows []Row, k key) (Result, bool) {
+	if s.confirm >= 0 {
+		switch k {
+		case keyYes:
+			return Result{Kind: Remove, Index: s.confirm}, true
+		case keyNo, keyQuit:
+			s.confirm = -1
+		}
+		return Result{}, false
+	}
+	switch k {
+	case keyUp:
+		s.cursor = step(rows, s.cursor, -1)
+	case keyDown:
+		s.cursor = step(rows, s.cursor, +1)
+	case keyEnter:
+		if s.cursor >= 0 && rows[s.cursor].launchable() {
+			return Result{Kind: Launch, Index: s.cursor}, true
+		}
+	case keyRemove:
+		if s.cursor >= 0 {
+			s.confirm = s.cursor
+		}
+	case keyAdd:
+		return Result{Kind: Add}, true
+	case keyRename:
+		if s.cursor >= 0 {
+			return Result{Kind: Rename, Index: s.cursor}, true
+		}
+	case keyHandoff:
+		if s.cursor >= 0 {
+			return Result{Kind: Handoff, Index: s.cursor}, true
+		}
+	case keySetup:
+		return Result{Kind: Setup}, true
+	case keyQuit:
+		return Result{Kind: Cancelled}, true
+	}
+	return Result{}, false
+}
+
+// drive is the non-animated launcher loop, decoupled from /dev/tty for tests.
 func drive(rows []Row, setupNeeded bool, cols int, in io.Reader, out io.Writer) (Result, error) {
-	cursor := initialCursor(rows)
-	confirm := -1 // >=0 while confirming removal of that row
+	st := pickerState{cursor: initialCursor(rows), confirm: -1}
 	r := bufio.NewReader(in)
 	for {
-		if confirm >= 0 {
-			fmt.Fprint(out, RenderRemove(rows[confirm], cols))
+		if st.confirm >= 0 {
+			fmt.Fprint(out, RenderRemove(rows[st.confirm], cols))
 		} else {
-			fmt.Fprint(out, Render(rows, cursor, setupNeeded, cols))
+			fmt.Fprint(out, Render(rows, st.cursor, setupNeeded, cols))
 		}
 		k, err := readKey(r)
 		if err != nil {
@@ -836,42 +1011,8 @@ func drive(rows []Row, setupNeeded bool, cols int, in io.Reader, out io.Writer) 
 			}
 			return Result{Kind: Cancelled}, err
 		}
-		if confirm >= 0 {
-			switch k {
-			case keyYes:
-				return Result{Kind: Remove, Index: confirm}, nil
-			case keyNo, keyQuit: // n / Esc / q / Ctrl-C back out — Enter is inert
-				confirm = -1
-			}
-			continue
-		}
-		switch k {
-		case keyUp:
-			cursor = step(rows, cursor, -1)
-		case keyDown:
-			cursor = step(rows, cursor, +1)
-		case keyEnter:
-			if cursor >= 0 && rows[cursor].launchable() {
-				return Result{Kind: Launch, Index: cursor}, nil
-			}
-		case keyRemove:
-			if cursor >= 0 {
-				confirm = cursor
-			}
-		case keyAdd:
-			return Result{Kind: Add}, nil
-		case keyRename:
-			if cursor >= 0 {
-				return Result{Kind: Rename, Index: cursor}, nil
-			}
-		case keyHandoff:
-			if cursor >= 0 {
-				return Result{Kind: Handoff, Index: cursor}, nil
-			}
-		case keySetup:
-			return Result{Kind: Setup}, nil
-		case keyQuit:
-			return Result{Kind: Cancelled}, nil
+		if res, done := st.handle(rows, k); done {
+			return res, nil
 		}
 	}
 }
