@@ -39,9 +39,9 @@ Bare `aiacc` opens an interactive launcher:
 ```
 
 > Cyberpunk / _Akira_ skin — neon on black behind a blood-red frame, with a
-> **live shimmering** `AIACC` logo (magenta → red → cyan sweep) and a reverse-video
-> glow on the selected row. Add / rename / remove / hand off / setup all happen
-> in-screen. Honors `NO_COLOR`.
+> **live shimmering** `AIACC` logo (magenta → red → cyan sweep) that **glitches**
+> in short data-tear bursts, and a reverse-video glow on the selected row. Add /
+> rename / remove / hand off / setup all happen in-screen. Honors `NO_COLOR`.
 
 ---
 
@@ -170,6 +170,90 @@ dir = "~/.claude-work"
 A leading `~` in a `dir` expands to your home directory. A missing config file is
 treated as empty, so read-only commands work before you register anything.
 
+## 🎬 Tutorials
+
+<details open>
+<summary><b>1 · Two accounts in a minute</b></summary>
+
+<br>
+
+```sh
+# Register work + personal (each gets its own isolated config dir):
+aiacc add claude claude-work     --dir ~/.claude-work
+aiacc add claude claude-personal --dir ~/.claude-personal
+
+# Install the launcher commands (one step, works immediately):
+aiacc setup
+
+# Launch — the first run opens Claude signed out; do /login once:
+claude-work        # → /login as work
+claude-personal    # → /login as personal
+```
+
+From now on, `claude-work` always opens Claude Code as work, `claude-personal` as
+personal. No switching, no re-login.
+
+</details>
+
+<details>
+<summary><b>2 · Hit a usage limit? Continue on your other account</b></summary>
+
+<br>
+
+You're deep in a conversation on `claude-work` and it hits the cap. Hand the exact
+session to `claude-personal` and keep going:
+
+```sh
+aiacc handoff              # interactive: pick source → session → target
+# or go straight there:
+aiacc handoff claude claude-work claude-personal --launch
+```
+
+It copies just the session transcript into the other account and resumes it — same
+context, now billed to personal. (In the picker, press `h` on the source account.)
+
+</details>
+
+<details>
+<summary><b>3 · Rename a command</b></summary>
+
+<br>
+
+Named it `claude-work` but want `claude-acme`? In the picker, highlight it and
+press `r` — or:
+
+```sh
+aiacc rename claude claude-work claude-acme
+```
+
+The account, its directory, and the launcher command all move together; the old
+`claude-work` command is removed.
+
+</details>
+
+<details>
+<summary><b>4 · Add a client account later</b></summary>
+
+<br>
+
+```sh
+aiacc add claude claude-acme --dir ~/.claude-acme
+```
+
+The `claude-acme` command is created immediately (no re-`setup` needed), and shows
+up in the picker next time you run `aiacc`.
+
+</details>
+
+### ⌨️ Picker keys
+
+| Key | Action | Key | Action |
+|:--:|---|:--:|---|
+| `↑ ↓` / `j k` | move | `a` | add a profile |
+| `⏎` | launch the selected profile | `r` | rename |
+| `h` | hand off a session | `d` | remove (asks first) |
+| `s` | run setup | `q` / `esc` | quit |
+
 ## 🔗 Share a session across accounts
 
 Hit a usage limit mid-conversation? Hand the exact session to another account and
@@ -200,6 +284,40 @@ Any other CLI that selects its config through an environment variable can be
 registered too (set the provider's `env_var`) and appears in the picker — it just
 can't be launched yet (marked `no launcher`), since aiacc only knows the `claude`
 command so far. Launch commands for other providers are a natural next step.
+
+## 🩺 Troubleshooting
+
+<details>
+<summary><code>claude-work: command not found</code></summary>
+
+<br>
+
+The launcher commands aren't installed yet, or the shell they were installed for
+isn't this one. Run `aiacc setup` (it prints where it put them and whether they
+work now). If it had to add a directory to your `PATH`, open a new terminal.
+
+</details>
+
+<details>
+<summary>Upgraded from an old version and see <code>unknown flag: --shell</code></summary>
+
+<br>
+
+A pre-v0.7 shell hook is still loaded. Just run `aiacc` (it prints the fix) or open
+a new terminal — the launcher commands replace the old hook.
+
+</details>
+
+<details>
+<summary>A profile shows <code>⚠ no launcher</code> in the picker</summary>
+
+<br>
+
+That provider isn't Claude, and aiacc only knows how to launch the `claude` CLI so
+far. The profile is still registered; launch commands for other providers are a
+planned addition.
+
+</details>
 
 ## 🤝 Contributing
 

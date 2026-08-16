@@ -83,6 +83,25 @@ func TestDriveHandoffKey(t *testing.T) {
 	}
 }
 
+// TestLogoGlitchBurst: the static render (phase 0) is clean, and a glitch-phase
+// render differs and contains a glitch glyph — without changing the frame width.
+func TestLogoGlitchBurst(t *testing.T) {
+	rows := sample()
+	clean := renderFrame(rows, 0, false, 0, 58)
+	glitch := renderFrame(rows, 0, false, 13, 58) // 13%14 >= 12 → glitch burst
+	if clean == glitch {
+		t.Fatal("glitch phase did not alter the frame")
+	}
+	if !strings.ContainsAny(glitch, string(glitchChars)) {
+		t.Fatalf("no glitch glyph in a glitch-phase render:\n%s", glitch)
+	}
+	// Width invariant still holds under glitch (checked broadly by TestFramesStaySquare;
+	// here just ensure the logo rows didn't change rune-width).
+	if visibleLen(strings.SplitN(clean, "\r\n", 6)[3]) != visibleLen(strings.SplitN(glitch, "\r\n", 6)[3]) {
+		t.Fatal("glitch changed a logo row's visible width")
+	}
+}
+
 // --- Generic list + message ---------------------------------------------------
 
 func list(t *testing.T, keys string, items []ListItem) int {

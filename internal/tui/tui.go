@@ -198,6 +198,44 @@ func gradient(s string, ramp []string, shift int) string {
 	return b.String()
 }
 
+var glitchChars = []rune("▓▒░█▚▞╱╲▘▝")
+
+// glitchLogo is a corrupted render of one logo row: a deterministic subset of
+// cells is swapped for glitch glyphs in clashing neon, for an Akira data-tear
+// flicker. Deterministic in phase so the render stays testable, and every
+// substitute is a single column so the frame never tears.
+func glitchLogo(s string, phase int) string {
+	var b strings.Builder
+	i := 0
+	for _, r := range s {
+		if r == ' ' {
+			b.WriteByte(' ')
+			continue
+		}
+		h := (phase*131 + i*17) & 0xff
+		switch {
+		case h < 50: // ~20% of cells corrupt this frame
+			b.WriteString(paint(string(glitchChars[h%len(glitchChars)]), inkBlue))
+		case h < 80: // a channel-split flash
+			b.WriteString(paint(string(r), inkWhite))
+		default:
+			b.WriteString(paint(string(r), neonRamp[(i+phase)%len(neonRamp)]))
+		}
+		i++
+	}
+	return b.String()
+}
+
+// logoArt returns the (possibly glitched) coloured logo row for a phase. It
+// glitches in a short burst near the end of each ~14-frame cycle; phase 0 (the
+// static render) is always clean.
+func logoArt(row string, phase int) string {
+	if phase%14 >= 12 {
+		return glitchLogo(row, phase)
+	}
+	return gradient(row, neonRamp, phase)
+}
+
 // boxTop draws the top border: a red heavy rule with the title inset in white.
 func boxTop(title string, w int) string {
 	t := " " + strings.ToUpper(title) + " "
@@ -277,9 +315,9 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) stri
 
 	lines := []string{boxTop("aiacc", w), boxBlank(w)}
 
-	// Header: gradient AIACC wordmark + tagline.
+	// Header: AIACC wordmark (gradient, with a periodic glitch burst) + tagline.
 	for i, lg := range logoRows {
-		lines = append(lines, boxRaw("   "+gradient(lg, neonRamp, phase+i), 3+runeLen(lg), w))
+		lines = append(lines, boxRaw("   "+logoArt(lg, phase+i), 3+runeLen(lg), w))
 	}
 	lines = append(lines,
 		boxRow([]seg{pad(3), {"// launch a profile", inkBlue}}, w),
