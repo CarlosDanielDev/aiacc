@@ -131,7 +131,7 @@ func TestDriveListSelectMoveCancel(t *testing.T) {
 
 func TestRenderListShowsItems(t *testing.T) {
 	out := RenderList("pick a thing", []ListItem{{Primary: "alpha", Secondary: "detail"}}, 0, 80)
-	for _, want := range []string{"PICK A THING", "alpha", "detail", "▸"} {
+	for _, want := range []string{"PICK A THING", "alpha", "detail", ">"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list render missing %q:\n%s", want, out)
 		}
@@ -267,7 +267,7 @@ func TestRenderRemoveShowsAccount(t *testing.T) {
 
 func TestRenderShowsProfilesAndLogin(t *testing.T) {
 	out := Render(sample(), 0, false, 80)
-	for _, want := range []string{"▸", "work", "w@co.com", "launch a profile", "profiles"} {
+	for _, want := range []string{">", "work", "w@co.com", "launch a profile", "profiles"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q:\n%s", want, out)
 		}
