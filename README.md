@@ -23,17 +23,25 @@ $ claude-personal    # …a different account entirely — no re-login, no juggl
 Bare `aiacc` opens an interactive launcher:
 
 ```text
-┏━ AIACC — LAUNCH A PROFILE ━━━━━━━━━━━━━━━━━━━━┓
+┏━ AIACC ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃                                              ┃
-┃ ▸ claude-work           carlos@work.com      ┃
-┃   claude-personal       me@gmail.com         ┃
-┃   ⚠ old                 dir missing          ┃
+┃   ▄▀█ █ ▄▀█ █▀▀ █▀▀                          ┃
+┃   █▀█ █ █▀█ █▄▄ █▄▄                          ┃
+┃   // launch a profile                        ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃  ▸ claude-work          carlos@work.io       ┃
+┃    claude-personal      not logged in        ┃
+┃    ⚠ old                dir missing          ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃  ◆ 3 profiles   ✓ ready                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
   ↑↓ move  ⏎ launch  a add  r rename  h hand off  d remove  q quit
 ```
 
-> Cyberpunk / _Akira_ skin — neon on black behind a blood-red frame. Add / rename
-> / remove / hand off / setup all happen in-screen. Honors `NO_COLOR`.
+> Cyberpunk / _Akira_ skin — neon on black behind a blood-red frame, with a
+> **live shimmering** `AIACC` logo (magenta → red → cyan sweep) and a reverse-video
+> glow on the selected row. Add / rename / remove / hand off / setup all happen
+> in-screen. Honors `NO_COLOR`.
 
 ---
 

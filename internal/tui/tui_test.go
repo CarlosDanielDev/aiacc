@@ -248,7 +248,7 @@ func TestRenderRemoveShowsAccount(t *testing.T) {
 
 func TestRenderShowsProfilesAndLogin(t *testing.T) {
 	out := Render(sample(), 0, false, 80)
-	for _, want := range []string{"▸", "work", "w@co.com", "LAUNCH A PROFILE"} {
+	for _, want := range []string{"▸", "work", "w@co.com", "launch a profile", "profiles"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q:\n%s", want, out)
 		}
@@ -393,7 +393,8 @@ func TestRenderRenameShowsNames(t *testing.T) {
 
 // --- Layout self-test ---------------------------------------------------------
 
-var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+// strip every CSI escape (colour m-codes plus cursor/erase H, K, J).
+var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
 
 func visibleLen(s string) int { return utf8.RuneCountInString(ansi.ReplaceAllString(s, "")) }
 
@@ -423,7 +424,7 @@ func TestFramesStaySquare(t *testing.T) {
 			wid := -1
 			for _, ln := range strings.Split(out, "\r\n") {
 				trimmed := strings.TrimLeft(ansi.ReplaceAllString(ln, ""), " ")
-				if !strings.ContainsAny(firstRune(trimmed), "┏┃┗") {
+				if !strings.ContainsAny(firstRune(trimmed), "┏┃┗┣") {
 					continue
 				}
 				if n := visibleLen(ln); wid == -1 {
