@@ -114,6 +114,55 @@ func removeAccount(path, providerName, account string) error {
 	return nil
 }
 
+func newRenameCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rename <provider> <old> <new>",
+		Short: "Rename an account (and its launcher command)",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(_ *cobra.Command, args []string) error {
+			path, err := configPath()
+			if err != nil {
+				return err
+			}
+			if err := renameAccount(path, args[0], args[1], args[2]); err != nil {
+				return err
+			}
+			removeLauncher(args[1])              // drop the old command
+			syncLauncher(path, args[0], args[2]) // install the new one
+			return nil
+		},
+	}
+}
+
+// renameAccount changes an account's name (which is also its launcher command),
+// keeping its directory and quota. It refuses to overwrite an existing name, and
+// swaps the launcher script so no stale command is left behind. Used by both
+// `rename` and the picker's `r`.
+func renameAccount(path, providerName, oldName, newName string) error {
+	if newName == oldName {
+		return nil
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	p, ok := c.Providers[providerName]
+	if !ok {
+		return fmt.Errorf("unknown provider %q", providerName)
+	}
+	acct, ok := p.Accounts[oldName]
+	if !ok {
+		return fmt.Errorf("unknown account %q", oldName)
+	}
+	if _, exists := p.Accounts[newName]; exists {
+		return fmt.Errorf("account %q already exists", newName)
+	}
+	p.Accounts[newName] = acct
+	delete(p.Accounts, oldName)
+	c.Providers[providerName] = p
+	return config.Save(path, c)
+}
+
 func newListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",

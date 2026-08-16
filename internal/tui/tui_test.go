@@ -70,6 +70,13 @@ func TestDriveSetupKey(t *testing.T) {
 	}
 }
 
+func TestDriveRenameKey(t *testing.T) {
+	// Cursor starts on the first row (0); r renames it.
+	if res := drv(t, "r", sample()); res.Kind != Rename || res.Index != 0 {
+		t.Fatalf("got %+v, want Rename 0", res)
+	}
+}
+
 func TestRenderShowsSetupNudgeOnlyWhenNeeded(t *testing.T) {
 	const nudge = "press "
 	if on := Render(sample(), 0, true, 80); !strings.Contains(on, "s") || !strings.Contains(on, "setup") {
@@ -277,6 +284,62 @@ func TestRenderAddShowsFieldsAndLogin(t *testing.T) {
 	}
 }
 
+// --- Rename profile -----------------------------------------------------------
+
+func rename(t *testing.T, old, keys string, taken map[string]bool) string {
+	t.Helper()
+	out, err := driveRename(old, taken, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("driveRename: %v", err)
+	}
+	return out
+}
+
+func TestRenameEditAndConfirm(t *testing.T) {
+	// Backspace "work" to "wo", type "-x" → "wo-x", enter.
+	if got := rename(t, "work", "\x7f\x7f-x\r", nil); got != "wo-x" {
+		t.Fatalf("got %q, want wo-x", got)
+	}
+}
+
+func TestRenameUnchangedIsNoOp(t *testing.T) {
+	if got := rename(t, "work", "\r", nil); got != "" {
+		t.Fatalf("got %q, want \"\" (unchanged → no-op)", got)
+	}
+}
+
+func TestRenameEscCancels(t *testing.T) {
+	if got := rename(t, "work", "zzz\x1b", nil); got != "" {
+		t.Fatalf("got %q, want cancelled", got)
+	}
+}
+
+// TestRenameBlocksCollision: enter is refused while the new name is already
+// taken; after changing to a free name it succeeds.
+func TestRenameBlocksCollision(t *testing.T) {
+	// "work" -> backspace all, type "personal" (taken) → enter blocked → append
+	// "2" → "personal2" (free) → enter.
+	if got := rename(t, "work", "\x7f\x7f\x7f\x7fpersonal\r2\r", map[string]bool{"personal": true}); got != "personal2" {
+		t.Fatalf("got %q, want personal2", got)
+	}
+}
+
+func TestRenameRejectsJunk(t *testing.T) {
+	// "work" -> backspace all, type "ok?!x" (junk filtered → "okx"), enter.
+	if got := rename(t, "work", "\x7f\x7f\x7f\x7fok?!x\r", nil); got != "okx" {
+		t.Fatalf("got %q, want okx", got)
+	}
+}
+
+func TestRenderRenameShowsNames(t *testing.T) {
+	out := RenderRename("work", "wo", "", 80)
+	for _, want := range []string{"rename profile", "from", "work", "the command becomes: wo"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rename render missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // --- Layout self-test ---------------------------------------------------------
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -303,6 +366,7 @@ func TestFramesStaySquare(t *testing.T) {
 		frames["picker"] = Render(rows, 0, true, cols)
 		frames["add"] = RenderAdd("me@example.com", "work", "", 0, "bad name", cols)
 		frames["remove"] = RenderRemove(Row{Provider: "claude", Account: "work"}, cols)
+		frames["rename"] = RenderRename("work", "work-2", "", cols)
 		frames["setup"] = RenderSetupResult(setupResult(), cols)
 		for name, out := range frames {
 			wid := -1

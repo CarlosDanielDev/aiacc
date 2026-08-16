@@ -43,6 +43,26 @@ func runPicker(filter string) error {
 				return err
 			}
 			continue
+		case tui.Rename:
+			row := rows[res.Index]
+			var taken []string
+			for j, r := range rows {
+				if j != res.Index {
+					taken = append(taken, r.Account)
+				}
+			}
+			newName, err := tui.RunRename(row.Account, taken)
+			if err != nil {
+				return err
+			}
+			if newName != "" {
+				if err := renameAccount(path, row.Provider, row.Account, newName); err != nil {
+					return err
+				}
+				removeLauncher(row.Account)               // drop old command
+				syncLauncher(path, row.Provider, newName) // install new one
+			}
+			continue
 		case tui.Setup:
 			res, err := doSetup(path)
 			if err != nil {
