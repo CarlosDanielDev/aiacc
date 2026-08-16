@@ -53,8 +53,20 @@ letters, digits, `-` and `_` (they have to be valid shell command names).
 
 ## Shell setup
 
-`aiacc shell-init <shell>` prints one launcher function per account. Add it to
-your shell startup file so the commands exist in every new shell:
+To type `claude-work` from anywhere, the launcher functions need to load in your
+shell. Let aiacc do it:
+
+```sh
+$ aiacc setup
+```
+
+`aiacc setup` is a guided, step-by-step screen: it detects your shell, adds the
+one line to the right startup file for you (press `i`), then shows the exact
+command to reload and the exact command to try. It's idempotent — safe to re-run
+— and the picker nudges you toward it (`s`) until it's done.
+
+Prefer to do it by hand? `aiacc shell-init <shell>` prints the launcher functions;
+add the matching line to your startup file yourself:
 
 ```sh
 # ~/.bashrc
@@ -120,6 +132,7 @@ are a natural next addition.
 | `<account>` (e.g. `claude-work`) | Launcher function from `shell-init`; opens Claude Code in that account. |
 | `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen when run with no arguments in a terminal); creates the directory if missing. |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. (Or press `d` in the picker.) |
+| `aiacc setup` | Guided, step-by-step install of the launcher commands into your shell startup file. |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
 | `aiacc usage [provider]` | Token totals per account from local session logs. |

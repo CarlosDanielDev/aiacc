@@ -31,7 +31,7 @@ func runPicker(filter string) error {
 		}
 		rows := collectRows(c, filter)
 
-		res, err := tui.Run(rows)
+		res, err := tui.Run(rows, setupNeeded())
 		if err != nil {
 			return err
 		}
@@ -40,6 +40,11 @@ func runPicker(filter string) error {
 			return nil
 		case tui.Add:
 			if err := runAddTUI(path); err != nil {
+				return err
+			}
+			continue
+		case tui.Setup:
+			if err := runSetup(); err != nil {
 				return err
 			}
 			continue

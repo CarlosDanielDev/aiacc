@@ -70,6 +70,7 @@ const (
 	Launch                      // launch Index's profile
 	Add                         // pressed `a`; the caller runs the add screen
 	Remove                      // confirmed removing Index
+	Setup                       // pressed `s`; the caller runs shell setup
 )
 
 // Result is what Run/drive returns. Index is meaningful for Launch and Remove.
@@ -194,12 +195,21 @@ func legendLine(pairs [][2]string) string {
 }
 
 // Render returns the launcher frame: one line per profile — a cursor mark, the
-// provider·account, and a quiet login/status on the right. Pure, for tests.
-func Render(rows []Row, cursor, cols int) string {
+// provider·account, and a quiet login/status on the right. When setupNeeded is
+// true (the shortcut commands aren't installed) it shows a one-line nudge toward
+// `s`. Pure, for tests.
+func Render(rows []Row, cursor int, setupNeeded bool, cols int) string {
 	w := innerWidth(cols)
 	const nameCol = 22
 
 	lines := []string{boxTop("aiacc — launch a profile", w), boxBlank(w)}
+
+	if setupNeeded {
+		lines = append(lines,
+			boxRow([]seg{pad(2), {"press ", inkDim}, {"s", inkYellow}, {" to install the shortcut commands", inkDim}}, w),
+			boxBlank(w),
+		)
+	}
 
 	if len(rows) == 0 {
 		lines = append(lines,
@@ -253,8 +263,12 @@ func Render(rows []Row, cursor, cols int) string {
 	}
 
 	lines = append(lines, boxBottom(w))
-	legend := legendLine([][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"d", "remove"}, {"q", "quit"}})
-	return frame(lines, legend, cols, w)
+	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"d", "remove"}}
+	if setupNeeded {
+		pairs = append(pairs, [2]string{"s", "setup"})
+	}
+	pairs = append(pairs, [2]string{"q", "quit"})
+	return frame(lines, legendLine(pairs), cols, w)
 }
 
 // RenderRemove is the confirm screen for removing a profile. Removing only
@@ -272,6 +286,139 @@ func RenderRemove(r Row, cols int) string {
 	}
 	legend := legendLine([][2]string{{"y", "remove"}, {"n", "cancel"}})
 	return frame(lines, legend, cols, w)
+}
+
+// --- Shell setup --------------------------------------------------------------
+
+// SetupInfo is what the setup screen needs to explain and perform the one-time
+// install of the launcher commands into the user's shell startup file.
+type SetupInfo struct {
+	Shell          string // bash | zsh | fish
+	RcLine         string // the line to add to the startup file
+	RcPath         string // display path of that startup file (~ form)
+	ReloadCmd      string // command that reloads it in place
+	Example        string // an example launcher command, or "aiacc"
+	AlreadyPresent bool   // the line is already in the startup file
+}
+
+// setupState is the render state of the setup screen.
+type setupState int
+
+const (
+	setupAsk     setupState = iota // step 1 pending — offer to install
+	setupPresent                   // step 1 already done before we started
+	setupDone                      // just installed step 1
+	setupErr                       // install failed
+)
+
+func stepLine(n int, label string, done bool, w int) string {
+	mark, ink := "·", inkGrey
+	if done {
+		mark, ink = "✓", inkGreen
+	}
+	return boxRow([]seg{pad(2), {mark + " ", ink}, {"Step " + strconv.Itoa(n) + " · " + label, inkWhite}}, w)
+}
+
+// RenderSetup returns the framed, step-by-step shell-setup screen. Step 1 (add
+// the line) is the only step aiacc can do for you; steps 2–3 are shell actions it
+// can't perform in your parent shell, so it prints the exact commands. state and
+// doneErr drive which phase is shown. Pure, for tests.
+func RenderSetup(info SetupInfo, state setupState, doneErr error, cols int) string {
+	w := innerWidth(cols)
+	step1Done := state == setupPresent || state == setupDone
+
+	lines := []string{
+		boxTop("aiacc — shell setup", w), boxBlank(w),
+		boxRow([]seg{pad(2), {"shell   ", inkGrey}, {info.Shell, inkWhite}}, w),
+		boxRow([]seg{pad(2), {"file    ", inkGrey}, {info.RcPath, inkWhite}}, w),
+		boxBlank(w),
+	}
+
+	if state == setupErr {
+		msg := "unknown error"
+		if doneErr != nil {
+			msg = doneErr.Error()
+		}
+		lines = append(lines,
+			boxRow([]seg{pad(2), {"⚠ Couldn't write the file:", inkRed}}, w),
+			boxRow([]seg{pad(4), {trunc(msg, w-6), inkGrey}}, w),
+			boxBlank(w),
+			boxRow([]seg{pad(2), {"Add this line by hand, then reload:", inkWhite}}, w),
+			boxRow([]seg{pad(4), {info.RcLine, inkBlue}}, w),
+			boxBottom(w),
+		)
+		return frame(lines, legendLine([][2]string{{"q", "ok"}}), cols, w)
+	}
+
+	// Step 1 — add the launcher line.
+	lines = append(lines, stepLine(1, "add the launcher line", step1Done, w))
+	if !step1Done {
+		lines = append(lines, boxRow([]seg{pad(4), {info.RcLine, inkBlue}}, w))
+	}
+	// Step 2 — reload this shell (aiacc can't do this in your parent shell).
+	lines = append(lines, stepLine(2, "reload this shell", false, w))
+	lines = append(lines, boxRow([]seg{pad(4), {info.ReloadCmd, inkBlue}}, w))
+	// Step 3 — use it.
+	lines = append(lines, stepLine(3, "use it", false, w))
+	lines = append(lines, boxRow([]seg{pad(4), {info.Example, inkBlue}}, w))
+	lines = append(lines, boxBottom(w))
+
+	var legend string
+	switch {
+	case step1Done:
+		legend = legendLine([][2]string{{"", "step 1 done — run step 2, then"}, {"q", "close"}})
+	default:
+		legend = legendLine([][2]string{{"i", "do step 1 for me"}, {"q", "cancel"}})
+	}
+	return frame(lines, legend, cols, w)
+}
+
+// driveSetup is the setup-screen loop, decoupled from /dev/tty for tests. install
+// performs step 1 (writing the line) and returns nil on success.
+func driveSetup(info SetupInfo, install func() error, cols int, in io.Reader, out io.Writer) error {
+	state := setupAsk
+	if info.AlreadyPresent {
+		state = setupPresent
+	}
+	var doneErr error
+	r := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, RenderSetup(info, state, doneErr, cols))
+		k, err := readKey(r)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		switch state {
+		case setupAsk:
+			switch k {
+			case keyInstall:
+				if doneErr = install(); doneErr != nil {
+					state = setupErr
+				} else {
+					state = setupDone
+				}
+			case keyQuit:
+				return nil
+			}
+		default: // setupPresent, setupDone, setupErr — any exit key leaves
+			if k == keyQuit || k == keyEnter {
+				return nil
+			}
+		}
+	}
+}
+
+// RunSetup shows the shell-setup screen on /dev/tty.
+func RunSetup(info SetupInfo, install func() error) error {
+	tty, cols, restore, err := openRawTTY()
+	if err != nil {
+		return err
+	}
+	defer restore()
+	return driveSetup(info, install, cols, tty, tty)
 }
 
 // --- Add profile --------------------------------------------------------------
@@ -435,6 +582,8 @@ const (
 	keyEnter
 	keyAdd
 	keyRemove
+	keySetup
+	keyInstall
 	keyYes
 	keyNo
 	keyQuit
@@ -480,13 +629,14 @@ func openRawTTY() (*os.File, int, func(), error) {
 }
 
 // Run shows the profile launcher on /dev/tty and returns the user's Result.
-func Run(rows []Row) (Result, error) {
+// setupNeeded surfaces the "install the shortcut commands" nudge.
+func Run(rows []Row, setupNeeded bool) (Result, error) {
 	tty, cols, restore, err := openRawTTY()
 	if err != nil {
 		return Result{Kind: Cancelled}, err
 	}
 	defer restore()
-	return drive(rows, cols, tty, tty)
+	return drive(rows, setupNeeded, cols, tty, tty)
 }
 
 // RunAdd shows the framed add screen on /dev/tty. currentLogin (may be "") is
@@ -503,7 +653,7 @@ func RunAdd(currentLogin string) (AddResult, error) {
 // drive is the launcher render/key loop, decoupled from /dev/tty for tests. The
 // cursor visits every row so any profile can be removed, but Enter only launches
 // a launchable one — the guard is on the action, not the cursor.
-func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
+func drive(rows []Row, setupNeeded bool, cols int, in io.Reader, out io.Writer) (Result, error) {
 	cursor := initialCursor(rows)
 	confirm := -1 // >=0 while confirming removal of that row
 	r := bufio.NewReader(in)
@@ -511,7 +661,7 @@ func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
 		if confirm >= 0 {
 			fmt.Fprint(out, RenderRemove(rows[confirm], cols))
 		} else {
-			fmt.Fprint(out, Render(rows, cursor, cols))
+			fmt.Fprint(out, Render(rows, cursor, setupNeeded, cols))
 		}
 		k, err := readKey(r)
 		if err != nil {
@@ -544,6 +694,8 @@ func drive(rows []Row, cols int, in io.Reader, out io.Writer) (Result, error) {
 			}
 		case keyAdd:
 			return Result{Kind: Add}, nil
+		case keySetup:
+			return Result{Kind: Setup}, nil
 		case keyQuit:
 			return Result{Kind: Cancelled}, nil
 		}
@@ -593,6 +745,10 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyAdd, nil
 	case 'd', 'D':
 		return keyRemove, nil
+	case 's', 'S':
+		return keySetup, nil
+	case 'i', 'I':
+		return keyInstall, nil
 	case 'y', 'Y':
 		return keyYes, nil
 	case 'n', 'N':
