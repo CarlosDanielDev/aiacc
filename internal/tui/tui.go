@@ -91,20 +91,20 @@ const (
 // color is off when NO_COLOR is set (https://no-color.org).
 var color = os.Getenv("NO_COLOR") == ""
 
-// Cyberpunk / Akira palette: neon on black, with the iconic blood-red accent.
+// Hacker / matrix phosphor palette: green on black, cyan for interaction.
 const (
-	inkDim    = "38;5;240" // dim grey-blue
-	inkGreen  = "38;5;48"  // neon green — active / ready
-	inkYellow = "38;5;220" // neon amber — warnings, "not logged in"
-	inkRed    = "38;5;196" // Akira red — the frame, blocked, danger
-	inkBlue   = "38;5;51"  // neon cyan — commands, paths
+	inkDim    = "38;5;238" // near-black green-grey
+	inkGreen  = "38;5;46"  // bright phosphor green — active / ready / prompt
+	inkYellow = "38;5;220" // amber — warnings, "not logged in"
+	inkRed    = "38;5;196" // alert red — blocked, danger
+	inkBlue   = "38;5;51"  // cyan — keys, commands, paths
 	inkGrey   = "38;5;245" // muted label
 	inkWhite  = "38;5;231" // bright white
-	inkPink   = "38;5;201" // neon magenta — cursor, caret
+	inkPink   = "38;5;48"  // spring green — cursor, caret
 )
 
-// inkBorder is the frame colour — Akira red.
-const inkBorder = inkRed
+// inkBorder is the frame colour — a solid terminal green.
+const inkBorder = "38;5;34"
 
 // seg is a run of text with an optional colour. Keeping colour separate from
 // text lets width calculations run on visible runes, so ANSI escapes never leak
@@ -174,8 +174,8 @@ func boxRowHi(text string, w int) string {
 	return paint(glV, inkBorder) + body + paint(glV, inkBorder)
 }
 
-// neonRamp is the logo's colour sweep: magenta → red → cyan.
-var neonRamp = []string{"38;5;201", "38;5;198", "38;5;196", "38;5;202", "38;5;51", "38;5;45"}
+// neonRamp is the logo's phosphor sweep: dark green → bright green → cyan.
+var neonRamp = []string{"38;5;22", "38;5;28", "38;5;34", "38;5;40", "38;5;46", "38;5;48", "38;5;51"}
 
 // logoRows is a half-block "AIACC" wordmark.
 var logoRows = []string{
@@ -319,8 +319,12 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) stri
 	for i, lg := range logoRows {
 		lines = append(lines, boxRaw("   "+logoArt(lg, phase+i), 3+runeLen(lg), w))
 	}
+	caret := " "
+	if (phase/6)%2 == 0 {
+		caret = "▊" // blinking block cursor
+	}
 	lines = append(lines,
-		boxRow([]seg{pad(3), {"// launch a profile", inkBlue}}, w),
+		boxRow([]seg{pad(3), {"> ", inkGreen}, {"launch a profile ", inkBlue}, {caret, inkGreen}}, w),
 		boxDivider(w),
 		boxBlank(w),
 	)
@@ -365,9 +369,9 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) stri
 		}
 
 		if focused {
-			// Selection glow: the whole row reversed, cursor arrow inline.
+			// Selection glow: the whole row reversed, prompt cursor inline.
 			gap := max(1, nameCol-runeLen(warn)-runeLen(name))
-			text := "▸ " + warn + name + strings.Repeat(" ", gap) + infoText
+			text := "> " + warn + name + strings.Repeat(" ", gap) + infoText
 			lines = append(lines, boxRowHi(text, w))
 			continue
 		}
@@ -384,13 +388,13 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) stri
 		}, w))
 	}
 
-	// Status bar.
+	// Status bar — terminal readout.
 	lines = append(lines, boxBlank(w), boxDivider(w))
-	status := []seg{pad(2), {"◆ ", inkPink}, {plural(len(rows), "profile"), inkWhite}, {"   ", ""}}
+	status := []seg{pad(2), {"» ", inkGreen}, {plural(len(rows), "profile"), inkGrey}, {"  ::  ", inkDim}}
 	if setupNeeded {
-		status = append(status, seg{"⚡ setup pending", inkYellow})
+		status = append(status, seg{"⚡ SETUP REQUIRED", inkYellow})
 	} else {
-		status = append(status, seg{"✓ ready", inkGreen})
+		status = append(status, seg{"✓ READY", inkGreen})
 	}
 	lines = append(lines, boxRow(status, w), boxBottom(w))
 
@@ -729,7 +733,7 @@ func RenderList(title string, items []ListItem, cursor, cols int) string {
 		focused := i == cursor
 		cur := seg{"  ", ""}
 		if focused {
-			cur = seg{"▸ ", inkPink}
+			cur = seg{"> ", inkGreen}
 		}
 		ink := inkGrey
 		if focused {

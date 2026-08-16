@@ -38,10 +38,12 @@ Bare `aiacc` opens an interactive launcher:
   ↑↓ move  ⏎ launch  a add  r rename  h hand off  d remove  q quit
 ```
 
-> Cyberpunk / _Akira_ skin — neon on black behind a blood-red frame, with a
-> **live shimmering** `AIACC` logo (magenta → red → cyan sweep) that **glitches**
-> in short data-tear bursts, and a reverse-video glow on the selected row. Add /
-> rename / remove / hand off / setup all happen in-screen. Honors `NO_COLOR`.
+> Hacker / matrix-terminal skin — **phosphor green on black**, a `>` prompt with
+> a blinking cursor and cyan hotkeys, a `» N profiles :: ✓ READY` status readout,
+> and a **live** `AIACC` logo (dark-green → bright-green → cyan sweep) that
+> **glitches** in short data-tear bursts, plus a reverse-video glow on the
+> selected row. Add / rename / remove / hand off / setup all happen in-screen.
+> Honors `NO_COLOR`.
 
 ---
 
