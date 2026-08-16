@@ -77,6 +77,57 @@ func TestDriveRenameKey(t *testing.T) {
 	}
 }
 
+func TestDriveHandoffKey(t *testing.T) {
+	if res := drv(t, "h", sample()); res.Kind != Handoff || res.Index != 0 {
+		t.Fatalf("got %+v, want Handoff 0", res)
+	}
+}
+
+// --- Generic list + message ---------------------------------------------------
+
+func list(t *testing.T, keys string, items []ListItem) int {
+	t.Helper()
+	i, err := driveList("pick", items, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("driveList: %v", err)
+	}
+	return i
+}
+
+func TestDriveListSelectMoveCancel(t *testing.T) {
+	items := []ListItem{{Primary: "a"}, {Primary: "b"}, {Primary: "c"}}
+	if i := list(t, "\r", items); i != 0 {
+		t.Fatalf("enter → %d, want 0", i)
+	}
+	if i := list(t, "\x1b[B\x1b[B\r", items); i != 2 {
+		t.Fatalf("down down enter → %d, want 2", i)
+	}
+	if i := list(t, "\x1b[B\x1b[A\x1b[A\r", items); i != 0 { // clamps at top
+		t.Fatalf("up past top → %d, want 0", i)
+	}
+	if i := list(t, "q", items); i != -1 {
+		t.Fatalf("quit → %d, want -1", i)
+	}
+}
+
+func TestRenderListShowsItems(t *testing.T) {
+	out := RenderList("pick a thing", []ListItem{{Primary: "alpha", Secondary: "detail"}}, 0, 80)
+	for _, want := range []string{"PICK A THING", "alpha", "detail", "▸"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list render missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderMessageShowsBody(t *testing.T) {
+	out := RenderMessage("done", []Line{{Text: "all good", Color: Green}}, 80)
+	for _, want := range []string{"DONE", "all good", "close"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("message render missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRenderShowsSetupNudgeOnlyWhenNeeded(t *testing.T) {
 	const nudge = "press "
 	if on := Render(sample(), 0, true, 80); !strings.Contains(on, "s") || !strings.Contains(on, "setup") {
@@ -105,7 +156,7 @@ func TestDriveSetupResultExits(t *testing.T) {
 
 func TestRenderSetupResultWorksNow(t *testing.T) {
 	out := RenderSetupResult(setupResult(), 80)
-	for _, want := range []string{"setup", "2 command", "~/.local/bin", "claude-work", "claude-personal", "work now"} {
+	for _, want := range []string{"SETUP", "2 command", "~/.local/bin", "claude-work", "claude-personal", "work now"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("setup result missing %q:\n%s", want, out)
 		}
@@ -186,7 +237,7 @@ func TestDriveRemoveReachesBlockedRow(t *testing.T) {
 
 func TestRenderRemoveShowsAccount(t *testing.T) {
 	out := RenderRemove(Row{Provider: "claude", Account: "work"}, 80)
-	for _, want := range []string{"remove profile", "work", "left on disk", "y", "cancel"} {
+	for _, want := range []string{"REMOVE PROFILE", "work", "left on disk", "y", "cancel"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("remove render missing %q:\n%s", want, out)
 		}
@@ -197,7 +248,7 @@ func TestRenderRemoveShowsAccount(t *testing.T) {
 
 func TestRenderShowsProfilesAndLogin(t *testing.T) {
 	out := Render(sample(), 0, false, 80)
-	for _, want := range []string{"▸", "work", "w@co.com", "launch a profile"} {
+	for _, want := range []string{"▸", "work", "w@co.com", "LAUNCH A PROFILE"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q:\n%s", want, out)
 		}
@@ -277,7 +328,7 @@ func TestAddCustomDirViaTab(t *testing.T) {
 
 func TestRenderAddShowsFieldsAndLogin(t *testing.T) {
 	out := RenderAdd("me@x.com", "wo", "", 0, "", 80)
-	for _, want := range []string{"add profile", "name", "wo", "~/.claude-wo", "me@x.com", "launches as: wo"} {
+	for _, want := range []string{"ADD PROFILE", "name", "wo", "~/.claude-wo", "me@x.com", "launches as: wo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("add render missing %q:\n%s", want, out)
 		}
@@ -333,7 +384,7 @@ func TestRenameRejectsJunk(t *testing.T) {
 
 func TestRenderRenameShowsNames(t *testing.T) {
 	out := RenderRename("work", "wo", "", 80)
-	for _, want := range []string{"rename profile", "from", "work", "the command becomes: wo"} {
+	for _, want := range []string{"RENAME PROFILE", "from", "work", "the command becomes: wo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rename render missing %q:\n%s", want, out)
 		}
@@ -372,7 +423,7 @@ func TestFramesStaySquare(t *testing.T) {
 			wid := -1
 			for _, ln := range strings.Split(out, "\r\n") {
 				trimmed := strings.TrimLeft(ansi.ReplaceAllString(ln, ""), " ")
-				if !strings.ContainsAny(firstRune(trimmed), "╭│├╰") {
+				if !strings.ContainsAny(firstRune(trimmed), "┏┃┗") {
 					continue
 				}
 				if n := visibleLen(ln); wid == -1 {

@@ -70,6 +70,7 @@ const (
 	Launch                      // launch Index's profile
 	Add                         // pressed `a`; the caller runs the add screen
 	Rename                      // pressed `r`; the caller runs the rename screen on Index
+	Handoff                     // pressed `h`; the caller runs the handoff flow from Index
 	Remove                      // confirmed removing Index
 	Setup                       // pressed `s`; the caller runs shell setup
 )
@@ -89,16 +90,20 @@ const (
 // color is off when NO_COLOR is set (https://no-color.org).
 var color = os.Getenv("NO_COLOR") == ""
 
+// Cyberpunk / Akira palette: neon on black, with the iconic blood-red accent.
 const (
-	inkDim    = "2"
-	inkGreen  = "38;5;78"
-	inkYellow = "38;5;221"
-	inkRed    = "38;5;203"
-	inkBlue   = "38;5;111"
-	inkGrey   = "38;5;244"
-	inkWhite  = "38;5;255"
-	inkPink   = "38;5;218"
+	inkDim    = "38;5;240" // dim grey-blue
+	inkGreen  = "38;5;48"  // neon green — active / ready
+	inkYellow = "38;5;220" // neon amber — warnings, "not logged in"
+	inkRed    = "38;5;196" // Akira red — the frame, blocked, danger
+	inkBlue   = "38;5;51"  // neon cyan — commands, paths
+	inkGrey   = "38;5;245" // muted label
+	inkWhite  = "38;5;231" // bright white
+	inkPink   = "38;5;201" // neon magenta — cursor, caret
 )
+
+// inkBorder is the frame colour — Akira red.
+const inkBorder = inkRed
 
 // seg is a run of text with an optional colour. Keeping colour separate from
 // text lets width calculations run on visible runes, so ANSI escapes never leak
@@ -140,13 +145,23 @@ func render(segs []seg, width int) string {
 	return b.String()
 }
 
+// Heavy box-drawing for a hard, cyber-terminal frame.
+const (
+	glTL, glTR, glBL, glBR = "┏", "┓", "┗", "┛"
+	glH, glV               = "━", "┃"
+)
+
+// boxTop draws the top border: a red heavy rule with the title inset in white.
 func boxTop(title string, w int) string {
-	t := " " + title + " "
-	return "╭─" + t + strings.Repeat("─", max(0, w-utf8.RuneCountInString(t)-1)) + "╮"
+	t := " " + strings.ToUpper(title) + " "
+	dashes := strings.Repeat(glH, max(0, w-utf8.RuneCountInString(t)-1))
+	return paint(glTL+glH, inkBorder) + paint(t, inkWhite) + paint(dashes+glTR, inkBorder)
 }
-func boxBottom(w int) string { return "╰" + strings.Repeat("─", w) + "╯" }
+func boxBottom(w int) string {
+	return paint(glBL+strings.Repeat(glH, w)+glBR, inkBorder)
+}
 func boxRow(segs []seg, w int) string {
-	return "│" + render(segs, w) + "│"
+	return paint(glV, inkBorder) + render(segs, w) + paint(glV, inkBorder)
 }
 func boxBlank(w int) string { return boxRow(nil, w) }
 
@@ -189,7 +204,7 @@ func legendLine(pairs [][2]string) string {
 	var b strings.Builder
 	b.WriteString("  ")
 	for _, p := range pairs {
-		b.WriteString(paint(p[0], inkWhite))
+		b.WriteString(paint(p[0], inkBlue)) // neon-cyan keys
 		b.WriteString(paint(" "+p[1]+"   ", inkDim))
 	}
 	return b.String()
@@ -264,7 +279,7 @@ func Render(rows []Row, cursor int, setupNeeded bool, cols int) string {
 	}
 
 	lines = append(lines, boxBottom(w))
-	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"d", "remove"}}
+	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"h", "hand off"}, {"d", "remove"}}
 	if setupNeeded {
 		pairs = append(pairs, [2]string{"s", "setup"})
 	}
@@ -572,6 +587,139 @@ func driveRename(oldName string, taken map[string]bool, cols int, in io.Reader, 
 	}
 }
 
+// --- Generic list + message screens ------------------------------------------
+
+// ListItem is one row of a generic selection list.
+type ListItem struct {
+	Primary   string // the main label
+	Secondary string // a dim detail on the right (optional)
+}
+
+// RenderList returns a framed single-column selection list. Pure, for tests.
+func RenderList(title string, items []ListItem, cursor, cols int) string {
+	w := innerWidth(cols)
+	const primCol = 20
+	lines := []string{boxTop(title, w), boxBlank(w)}
+	if len(items) == 0 {
+		lines = append(lines, boxRow([]seg{pad(2), {"nothing to choose", inkDim}}, w), boxBlank(w))
+	}
+	for i, it := range items {
+		focused := i == cursor
+		cur := seg{"  ", ""}
+		if focused {
+			cur = seg{"▸ ", inkPink}
+		}
+		ink := inkGrey
+		if focused {
+			ink = inkWhite
+		}
+		row := []seg{cur, {trunc(it.Primary, primCol), ink}}
+		if it.Secondary != "" {
+			row = append(row, pad(primCol-runeLen(trunc(it.Primary, primCol))+1), seg{it.Secondary, inkDim})
+		}
+		lines = append(lines, boxRow(row, w))
+	}
+	lines = append(lines, boxBottom(w))
+	return frame(lines, legendLine([][2]string{{"↑↓", "move"}, {"⏎", "select"}, {"q", "cancel"}}), cols, w)
+}
+
+// driveList is the selection loop, decoupled from /dev/tty for tests. Returns the
+// chosen index, or -1 if cancelled.
+func driveList(title string, items []ListItem, cols int, in io.Reader, out io.Writer) (int, error) {
+	cursor := 0
+	if len(items) == 0 {
+		cursor = -1
+	}
+	r := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, RenderList(title, items, cursor, cols))
+		k, err := readKey(r)
+		if err != nil {
+			if err == io.EOF {
+				return -1, nil
+			}
+			return -1, err
+		}
+		switch k {
+		case keyUp:
+			if cursor > 0 {
+				cursor--
+			}
+		case keyDown:
+			if cursor >= 0 && cursor < len(items)-1 {
+				cursor++
+			}
+		case keyEnter:
+			if cursor >= 0 {
+				return cursor, nil
+			}
+		case keyQuit:
+			return -1, nil
+		}
+	}
+}
+
+// RunList shows a selection list on /dev/tty and returns the chosen index or -1.
+func RunList(title string, items []ListItem) (int, error) {
+	tty, cols, restore, err := openRawTTY()
+	if err != nil {
+		return -1, err
+	}
+	defer restore()
+	return driveList(title, items, cols, tty, tty)
+}
+
+// Line is one body line of a framed message. Color is an exported palette name
+// (White, Grey, …) or "" for the default.
+type Line struct {
+	Text  string
+	Color string
+}
+
+// Exported palette for callers building message bodies.
+const (
+	White = inkWhite
+	Grey  = inkGrey
+	Green = inkGreen
+	Blue  = inkBlue
+	Red   = inkRed
+	Dim   = inkDim
+)
+
+// RenderMessage returns a framed message with a title and body lines. Pure.
+func RenderMessage(title string, body []Line, cols int) string {
+	w := innerWidth(cols)
+	lines := []string{boxTop(title, w), boxBlank(w)}
+	for _, l := range body {
+		lines = append(lines, boxRow([]seg{pad(2), {l.Text, l.Color}}, w))
+	}
+	lines = append(lines, boxBottom(w))
+	return frame(lines, legendLine([][2]string{{"q", "close"}}), cols, w)
+}
+
+// RunMessage shows a framed message on /dev/tty until an exit key.
+func RunMessage(title string, body []Line) error {
+	tty, cols, restore, err := openRawTTY()
+	if err != nil {
+		return err
+	}
+	defer restore()
+	r := bufio.NewReader(tty)
+	for {
+		fmt.Fprint(tty, RenderMessage(title, body, cols))
+		k, err := readKey(r)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if k == keyQuit || k == keyEnter {
+			return nil
+		}
+	}
+}
+
 // --- Terminal driving ---------------------------------------------------------
 
 type key int
@@ -583,6 +731,7 @@ const (
 	keyEnter
 	keyAdd
 	keyRename
+	keyHandoff
 	keyRemove
 	keySetup
 	keyYes
@@ -715,6 +864,10 @@ func drive(rows []Row, setupNeeded bool, cols int, in io.Reader, out io.Writer) 
 			if cursor >= 0 {
 				return Result{Kind: Rename, Index: cursor}, nil
 			}
+		case keyHandoff:
+			if cursor >= 0 {
+				return Result{Kind: Handoff, Index: cursor}, nil
+			}
 		case keySetup:
 			return Result{Kind: Setup}, nil
 		case keyQuit:
@@ -766,6 +919,8 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyAdd, nil
 	case 'r', 'R':
 		return keyRename, nil
+	case 'h', 'H':
+		return keyHandoff, nil
 	case 'd', 'D':
 		return keyRemove, nil
 	case 's', 'S':
