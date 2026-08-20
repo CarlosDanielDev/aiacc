@@ -88,7 +88,7 @@ func writeAllLaunchers(c *config.Config, binDir string) ([]string, error) {
 	var names []string
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		env, _ := provider.EnvVar(c, pn)
-		cmd := launchCommand(pn)
+		cmd := launchCommand(c, pn)
 		if cmd == "" || env == "" {
 			continue
 		}
@@ -119,9 +119,6 @@ func writeLauncher(binDir, name, command, envVar, dir string) error {
 // dir exists), so `add` keeps the commands current without a manual re-setup.
 // Best-effort: a failure here never fails the add.
 func syncLauncher(cfgPath, providerName, account string) {
-	if launchCommand(providerName) == "" {
-		return
-	}
 	binDir, _ := launcherBinDir()
 	if info, err := os.Stat(binDir); err != nil || !info.IsDir() {
 		return // not set up yet; `aiacc setup` will create it
@@ -130,12 +127,13 @@ func syncLauncher(cfgPath, providerName, account string) {
 	if err != nil {
 		return
 	}
+	cmd := launchCommand(c, providerName)
 	env, _ := provider.EnvVar(c, providerName)
 	dir, err := provider.AccountDir(c, providerName, account)
-	if err != nil || env == "" {
+	if err != nil || cmd == "" || env == "" {
 		return
 	}
-	_ = writeLauncher(binDir, account, launchCommand(providerName), env, dir)
+	_ = writeLauncher(binDir, account, cmd, env, dir)
 }
 
 // removeLauncher deletes an account's launcher script if present. Best-effort.
@@ -221,7 +219,7 @@ func setupNeeded() bool {
 	}
 	binDir, _ := launcherBinDir()
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		if launchCommand(pn) == "" {
+		if launchCommand(c, pn) == "" {
 			continue
 		}
 		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {

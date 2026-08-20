@@ -2,10 +2,11 @@
 
 # aiacc
 
-### One command per Claude account.
+### One command per AI-CLI account.
 
-Keep your **personal**, **work**, and **client** Claude Code accounts side by
-side — each in its own isolated config — and launch any of them by name.
+Keep your **personal**, **work**, and **client** accounts for **Claude Code**,
+**Codex**, and any other AI CLI side by side — each in its own isolated config —
+and launch any of them by name.
 
 [![Release](https://img.shields.io/github/v/release/CarlosDanielDev/aiacc?sort=semver&color=6c8ebf)](https://github.com/CarlosDanielDev/aiacc/releases)
 [![CI](https://github.com/CarlosDanielDev/aiacc/actions/workflows/ci.yml/badge.svg)](https://github.com/CarlosDanielDev/aiacc/actions/workflows/ci.yml)
@@ -143,7 +144,7 @@ aiacc shell-init fish | source         # ~/.config/fish/config.fish
 | `aiacc` | The interactive picker (front door). Piped/redirected, it prints help instead. |
 | **`<account>`** &nbsp;e.g. `claude-work` | Launch Claude Code in that account (installed by `aiacc setup`). |
 | `aiacc setup` | One-step install of the launcher commands onto your `PATH` — they work immediately. |
-| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. |
+| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
@@ -276,16 +277,28 @@ command — `--launch` runs it for you. **Only the transcript moves; credentials
 never touched, and each account's usage stays separate.** It defaults to the most
 recent session; `--session <id>` picks a specific one.
 
-## 🔌 Providers
+## 🔌 Providers — any AI CLI
 
-A provider is `{name, env_var}` plus its accounts. **Claude Code** is the built-in
-preset — `claude` maps to `CLAUDE_CONFIG_DIR`, and aiacc knows to launch the
-`claude` CLI for it.
+A provider is `{env_var, command}` plus its accounts: aiacc isolates each account
+in its own directory, points the CLI's config-dir env var at that directory, and
+runs the command there. **Built-in presets:**
 
-Any other CLI that selects its config through an environment variable can be
-registered too (set the provider's `env_var`) and appears in the picker — it just
-can't be launched yet (marked `no launcher`), since aiacc only knows the `claude`
-command so far. Launch commands for other providers are a natural next step.
+| Provider | Env var | Command |
+|---|---|---|
+| `claude` | `CLAUDE_CONFIG_DIR` | `claude` |
+| `codex`  | `CODEX_HOME`        | `codex`  |
+
+Any other CLI that selects its config through an environment variable works too —
+just give the env var and command the first time you add one for that provider:
+
+```sh
+aiacc add glab work --dir ~/.glab-work --env GLAB_CONFIG_DIR --command glab
+#         provider account                    ^env var        ^cli to launch
+# → a `work` command that runs: GLAB_CONFIG_DIR=~/.glab-work glab
+```
+
+> Session hand-off is Claude-specific for now — it reads Claude Code's transcript
+> format. Launch, add, rename, remove, and setup work for every provider.
 
 ## 🩺 Troubleshooting
 

@@ -199,7 +199,7 @@ type acctRef struct{ provider, account, dir string }
 func claudeAccounts(c *config.Config) []acctRef {
 	var out []acctRef
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		if launchCommand(pn) == "" {
+		if launchCommand(c, pn) == "" {
 			continue
 		}
 		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {

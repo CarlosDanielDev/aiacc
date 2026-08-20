@@ -114,14 +114,11 @@ func setEnv(env []string, key, val string) []string {
 	return append(out, key+"="+val)
 }
 
-// launchCommand is the CLI aiacc runs for a provider. Claude Code is the built-in
-// launcher; other providers have none yet (their rows stay in the list but can't
-// be launched until one is added).
-func launchCommand(providerName string) string {
-	if providerName == "claude" {
-		return "claude"
-	}
-	return ""
+// launchCommand is the CLI aiacc runs for a provider, resolved from config or a
+// built-in preset. "" means no launcher is configured (the row shows blocked).
+func launchCommand(c *config.Config, providerName string) string {
+	cmd, _ := provider.Command(c, providerName)
+	return cmd
 }
 
 // runAddTUI shows the framed add screen and, on confirm, creates the config dir
@@ -139,7 +136,7 @@ func runAddTUI(cfgPath string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := saveAccount(cfgPath, "claude", res.Name, res.Dir, 0); err != nil {
+	if err := saveAccount(cfgPath, "claude", res.Name, res.Dir, 0, "", ""); err != nil {
 		return err
 	}
 	syncLauncher(cfgPath, "claude", res.Name) // keep the command in sync (best-effort)
@@ -208,7 +205,7 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 				Dir:       dir,
 				DirExists: statErr == nil,
 				EnvVar:    env,
-				Command:   launchCommand(pn),
+				Command:   launchCommand(c, pn),
 			})
 		}
 	}
