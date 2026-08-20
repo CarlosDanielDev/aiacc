@@ -17,6 +17,7 @@ type Account struct {
 
 type Provider struct {
 	EnvVar   string             `toml:"env_var"`
+	Command  string             `toml:"command,omitempty"`
 	Accounts map[string]Account `toml:"accounts"`
 }
 

@@ -56,7 +56,7 @@ func launchers(shellName string) (string, error) {
 	}
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		env, _ := provider.EnvVar(c, pn)
-		cmd := launchCommand(pn)
+		cmd := launchCommand(c, pn)
 		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
 			dir, err := provider.AccountDir(c, pn, an)
 			if err != nil {

@@ -62,6 +62,29 @@ func TestShellInitPrintsLaunchers(t *testing.T) {
 	}
 }
 
+func TestSaveAccountFillsPresetAndCustomProvider(t *testing.T) {
+	path := withTempConfig(t)
+
+	// Codex is a built-in preset → env var and command filled automatically.
+	if err := saveAccount(path, "codex", "work", "/x", 0, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// A custom provider gets its env var + command from the flags.
+	if err := saveAccount(path, "glab", "me", "/y", 0, "GLAB_CONFIG_DIR", "glab"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := c.Providers["codex"]; p.EnvVar != "CODEX_HOME" || p.Command != "codex" {
+		t.Fatalf("codex preset not applied: %+v", p)
+	}
+	if p := c.Providers["glab"]; p.EnvVar != "GLAB_CONFIG_DIR" || p.Command != "glab" {
+		t.Fatalf("custom provider not stored: %+v", p)
+	}
+}
+
 func TestRenameAccountMovesEntry(t *testing.T) {
 	path := withTempConfig(t)
 	dir := t.TempDir()

@@ -17,12 +17,15 @@ import (
 var configPath = config.DefaultPath
 
 func newAddCmd() *cobra.Command {
-	var dir string
+	var dir, envVar, command string
 	var quota int
 	cmd := &cobra.Command{
 		Use:   "add [provider] [account]",
 		Short: "Register an account (interactive wizard when run with no arguments)",
-		Args:  cobra.MaximumNArgs(2),
+		Long: "Register an account. Claude and Codex are built-in; any other CLI that " +
+			"selects its config through an environment variable works too — give " +
+			"--env <ENV_VAR> and --command <cli> the first time you add one for that provider.",
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := configPath()
 			if err != nil {
@@ -46,7 +49,7 @@ func newAddCmd() *cobra.Command {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
-			if err := saveAccount(path, providerName, account, dir, quota); err != nil {
+			if err := saveAccount(path, providerName, account, dir, quota, envVar, command); err != nil {
 				return err
 			}
 			syncLauncher(path, providerName, account) // keep the command in sync
@@ -55,25 +58,37 @@ func newAddCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&dir, "dir", "", "config directory for this account (required unless using the wizard)")
 	cmd.Flags().IntVar(&quota, "quota", 0, "optional manual plan size")
+	cmd.Flags().StringVar(&envVar, "env", "", "config-dir env var for a custom (non-preset) provider")
+	cmd.Flags().StringVar(&command, "command", "", "CLI to launch for a custom (non-preset) provider")
 	return cmd
 }
 
 // saveAccount registers (provider, account) at dir in the config file at path,
-// merging the provider's preset env var. Used by both `add` and the wizard.
-func saveAccount(path, providerName, account, dir string, quota int) error {
+// filling the provider's env var and launch command from the flags, else the
+// preset, else leaving them empty for the user to set. Used by `add` and the
+// wizard.
+func saveAccount(path, providerName, account, dir string, quota int, envOverride, cmdOverride string) error {
 	c, err := config.Load(path)
 	if err != nil {
 		return err
 	}
-	// An unknown provider with no preset gets an empty env_var; the user defines
-	// it later (switching is where a missing one errors).
-	env, _ := provider.EnvVar(c, providerName)
+	env := envOverride
+	if env == "" {
+		env, _ = provider.EnvVar(c, providerName) // preset, else ""
+	}
+	cmd := cmdOverride
+	if cmd == "" {
+		cmd, _ = provider.Command(c, providerName) // preset, else ""
+	}
 	p := c.Providers[providerName]
 	if p.Accounts == nil {
 		p.Accounts = map[string]config.Account{}
 	}
 	if p.EnvVar == "" {
 		p.EnvVar = env
+	}
+	if p.Command == "" {
+		p.Command = cmd
 	}
 	p.Accounts[account] = config.Account{Dir: dir, Quota: quota}
 	c.Providers[providerName] = p

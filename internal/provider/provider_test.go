@@ -24,6 +24,29 @@ func TestEnvVarUnknownProvider(t *testing.T) {
 	}
 }
 
+func TestCommandPresetConfigCustomUnknown(t *testing.T) {
+	empty := &config.Config{Providers: map[string]config.Provider{}}
+
+	// Preset (codex is built in).
+	if got, err := Command(empty, "codex"); err != nil || got != "codex" {
+		t.Fatalf("Command(codex) = %q, %v; want codex", got, err)
+	}
+	// Config overrides the preset.
+	over := &config.Config{Providers: map[string]config.Provider{"claude": {Command: "claude-beta"}}}
+	if got, _ := Command(over, "claude"); got != "claude-beta" {
+		t.Fatalf("config override = %q, want claude-beta", got)
+	}
+	// Registered custom provider with no command yet → "" (no launcher), no error.
+	custom := &config.Config{Providers: map[string]config.Provider{"foo": {EnvVar: "FOO_DIR"}}}
+	if got, err := Command(custom, "foo"); err != nil || got != "" {
+		t.Fatalf("Command(foo) = %q, %v; want \"\", nil", got, err)
+	}
+	// Entirely unknown provider → error.
+	if _, err := Command(empty, "nope"); !errors.Is(err, ErrUnknownProvider) {
+		t.Fatalf("want ErrUnknownProvider, got %v", err)
+	}
+}
+
 func TestAccountDirExpandsHome(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	c := &config.Config{Providers: map[string]config.Provider{

@@ -43,7 +43,7 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := saveAccount(cfgPath, "claude", name, dir, 0); err != nil {
+	if err := saveAccount(cfgPath, "claude", name, dir, 0, "", ""); err != nil {
 		return err
 	}
 
@@ -64,7 +64,7 @@ func ask(r *bufio.Reader, out io.Writer, label string) string {
 // currentClaudeDir is the active Claude config dir: $CLAUDE_CONFIG_DIR if set,
 // else ~/.claude.
 func currentClaudeDir() string {
-	if d := os.Getenv(provider.Presets["claude"]); d != "" {
+	if d := os.Getenv(provider.Presets["claude"].EnvVar); d != "" {
 		return d
 	}
 	home, err := os.UserHomeDir()
