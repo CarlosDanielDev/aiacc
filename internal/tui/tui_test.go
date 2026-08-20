@@ -297,7 +297,7 @@ func TestRenderEmptyState(t *testing.T) {
 
 func add(t *testing.T, keys string) AddResult {
 	t.Helper()
-	res, err := driveAdd("", 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	res, err := driveAdd("", "claude", 80, bytes.NewBufferString(keys), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("driveAdd: %v", err)
 	}
@@ -345,9 +345,20 @@ func TestAddCustomDirViaTab(t *testing.T) {
 	}
 }
 
+func TestAddProviderSetsDirDefault(t *testing.T) {
+	// The default dir follows the chosen provider, not always claude.
+	res, err := driveAdd("", "codex", 80, bytes.NewBufferString("work\r"), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	if !res.OK || res.Dir != "~/.codex-work" {
+		t.Fatalf("got %+v, want dir=~/.codex-work", res)
+	}
+}
+
 func TestRenderAddShowsFieldsAndLogin(t *testing.T) {
-	out := RenderAdd("me@x.com", "wo", "", 0, "", 80)
-	for _, want := range []string{"ADD PROFILE", "name", "wo", "~/.claude-wo", "me@x.com", "launches as: wo"} {
+	out := RenderAdd("me@x.com", "claude", "wo", "", 0, "", 80)
+	for _, want := range []string{"ADD PROFILE", "provider", "claude", "name", "wo", "~/.claude-wo", "me@x.com", "launches as: wo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("add render missing %q:\n%s", want, out)
 		}
@@ -435,7 +446,7 @@ func TestFramesStaySquare(t *testing.T) {
 	frames := map[string]string{}
 	for _, cols := range []int{20, 40, 80, 200} {
 		frames["picker"] = Render(rows, 0, true, cols)
-		frames["add"] = RenderAdd("me@example.com", "work", "", 0, "bad name", cols)
+		frames["add"] = RenderAdd("me@example.com", "claude", "work", "", 0, "bad name", cols)
 		frames["remove"] = RenderRemove(Row{Provider: "claude", Account: "work"}, cols)
 		frames["rename"] = RenderRename("work", "work-2", "", cols)
 		frames["setup"] = RenderSetupResult(setupResult(), cols)

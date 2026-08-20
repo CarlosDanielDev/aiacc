@@ -297,6 +297,10 @@ aiacc add glab work --dir ~/.glab-work --env GLAB_CONFIG_DIR --command glab
 # → a `work` command that runs: GLAB_CONFIG_DIR=~/.glab-work glab
 ```
 
+In the picker, pressing `a` lets you choose the provider (presets + any you've
+already configured) and defaults the directory to `~/.<provider>-<name>`. A
+brand-new custom provider is added with the `--env`/`--command` form above.
+
 > Session hand-off is Claude-specific for now — it reads Claude Code's transcript
 > format. Launch, add, rename, remove, and setup work for every provider.
 

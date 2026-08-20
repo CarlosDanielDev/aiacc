@@ -528,26 +528,32 @@ func nameByte(b byte) bool {
 }
 func printableByte(b byte) bool { return b >= 0x20 && b < 0x7f }
 
-func defaultDir(name string) string {
-	if name == "" {
-		return "~/.claude-<name>"
+func defaultDir(provider, name string) string {
+	p := provider
+	if p == "" {
+		p = "profile"
 	}
-	return "~/.claude-" + name
+	if name == "" {
+		return "~/." + p + "-<name>"
+	}
+	return "~/." + p + "-" + name
 }
 
-// RenderAdd returns the add-profile frame: a live name field, a dir field that
-// defaults to ~/.claude-<name> until edited, the current login for context, and
-// an optional hint. field is 0 for name, 1 for dir. Pure, for tests.
-func RenderAdd(currentLogin, name, dir string, field int, hint string, cols int) string {
+// RenderAdd returns the add-profile frame: the target provider, a live name
+// field, a dir field that defaults to ~/.<provider>-<name> until edited, the
+// current login for context, and an optional hint. field is 0 for name, 1 for
+// dir. Pure, for tests.
+func RenderAdd(currentLogin, provider, name, dir string, field int, hint string, cols int) string {
 	w := innerWidth(cols)
 	lines := []string{boxTop("aiacc — add profile", w), boxBlank(w)}
 
+	lines = append(lines, boxRow([]seg{pad(2), {"provider  ", inkGrey}, {provider, inkBlue}}, w))
 	if currentLogin != "" {
 		lines = append(lines,
-			boxRow([]seg{pad(2), {"current  ", inkGrey}, {trunc(currentLogin, w-11), inkDim}}, w),
-			boxBlank(w),
+			boxRow([]seg{pad(2), {"current   ", inkGrey}, {trunc(currentLogin, w-12), inkDim}}, w),
 		)
 	}
+	lines = append(lines, boxBlank(w))
 
 	nameCaret, dirCaret := "", ""
 	if field == 0 {
@@ -568,7 +574,7 @@ func RenderAdd(currentLogin, name, dir string, field int, hint string, cols int)
 
 	dirSeg := seg{dir, inkWhite}
 	if dir == "" {
-		dirSeg = seg{defaultDir(name), inkDim}
+		dirSeg = seg{defaultDir(provider, name), inkDim}
 	}
 	lines = append(lines, boxRow([]seg{
 		pad(2), {"dir   ", dirLabelInk}, dirSeg, {dirCaret, inkPink},
@@ -593,11 +599,11 @@ func RenderAdd(currentLogin, name, dir string, field int, hint string, cols int)
 
 // driveAdd is the add-screen input loop, decoupled from /dev/tty for tests. It
 // filters keystrokes so the name field can only ever hold command-safe chars.
-func driveAdd(currentLogin string, cols int, in io.Reader, out io.Writer) (AddResult, error) {
+func driveAdd(currentLogin, provider string, cols int, in io.Reader, out io.Writer) (AddResult, error) {
 	name, dir, field, hint := "", "", 0, ""
 	r := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, RenderAdd(currentLogin, name, dir, field, hint, cols))
+		fmt.Fprint(out, RenderAdd(currentLogin, provider, name, dir, field, hint, cols))
 		b, err := r.ReadByte()
 		if err != nil {
 			if err == io.EOF {
@@ -617,7 +623,7 @@ func driveAdd(currentLogin string, cols int, in io.Reader, out io.Writer) (AddRe
 			}
 			d := dir
 			if d == "" {
-				d = "~/.claude-" + name
+				d = defaultDir(provider, name)
 			}
 			return AddResult{Name: name, Dir: d, OK: true}, nil
 		case 0x7f, 0x08: // Backspace / Delete
@@ -957,15 +963,15 @@ func animate(rows []Row, setupNeeded bool, cols int, tty *os.File) (Result, erro
 	}
 }
 
-// RunAdd shows the framed add screen on /dev/tty. currentLogin (may be "") is
-// shown for context.
-func RunAdd(currentLogin string) (AddResult, error) {
+// RunAdd shows the framed add screen on /dev/tty for the given provider.
+// currentLogin (may be "") is shown for context.
+func RunAdd(currentLogin, provider string) (AddResult, error) {
 	tty, cols, restore, err := openRawTTY()
 	if err != nil {
 		return AddResult{}, err
 	}
 	defer restore()
-	return driveAdd(currentLogin, cols, tty, tty)
+	return driveAdd(currentLogin, provider, cols, tty, tty)
 }
 
 // RunRename shows the rename screen on /dev/tty. taken is the set of other
