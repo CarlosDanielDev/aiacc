@@ -296,6 +296,10 @@ up in the picker next time you run `aiacc`.
 | `h` | hand off a session | `d` | remove (asks first) |
 | `s` | run setup | `q` / `esc` | quit |
 
+On any screen that ends in a command to run — the hand-off result, for one —
+**`ctrl-c` copies it** to your clipboard instead of closing (`q` still closes).
+Uses `pbcopy`, `wl-copy`, `xclip` or `xsel`, whichever you have.
+
 ## 🔗 Share a session across accounts
 
 Hit a usage limit mid-conversation? Hand the exact session to another account and
@@ -312,7 +316,7 @@ Resume it:
 Claude Code keeps each session as a transcript at
 `<config-dir>/projects/<cwd>/<id>.jsonl`. `handoff` copies that transcript into
 the target account (preserving its project directory) and prints the exact resume
-command — `--launch` runs it for you. **Only the transcript moves; credentials are
+command — `--launch` runs it for you, or `ctrl-c` on the result screen copies it. **Only the transcript moves; credentials are
 never touched, and each account's usage stays separate.** It defaults to the most
 recent session; `--session <id>` picks a specific one.
 

@@ -653,7 +653,7 @@ func driveSetupResult(r SetupResult, g *geom, in io.Reader, out io.Writer) error
 			}
 			return err
 		}
-		if k == keyQuit || k == keyEnter {
+		if k == keyQuit || k == keyEnter || k == keyCopy {
 			return nil
 		}
 	}
@@ -968,7 +968,7 @@ func driveList(title string, items []ListItem, g *geom, in io.Reader, out io.Wri
 			if cursor >= 0 {
 				return cursor, nil
 			}
-		case keyQuit:
+		case keyQuit, keyCopy:
 			return -1, nil
 		}
 	}
@@ -1003,13 +1003,27 @@ const (
 
 // RenderMessage returns a framed message with a title and body lines. Pure.
 func RenderMessage(title string, body []Line, sz Size) string {
+	return renderMessage(title, body, Line{}, sz)
+}
+
+// renderMessage is RenderMessage with a transient status note under the body —
+// the confirmation that Ctrl-C put the commands on the clipboard, or the reason
+// it couldn't. Empty note renders the plain screen.
+func renderMessage(title string, body []Line, note Line, sz Size) string {
 	w := innerWidth(sz.cols())
 	lines := []string{boxTop(title, w), boxBlank(w)}
 	for _, l := range body {
 		lines = append(lines, boxRow([]seg{pad(2), {l.Text, l.Color}}, w))
 	}
+	if note.Text != "" {
+		lines = append(lines, boxBlank(w), boxRow([]seg{pad(2), {trunc(note.Text, w-4), note.Color}}, w))
+	}
 	lines = append(lines, boxBottom(w))
-	return frame(lines, legendLine([][2]string{{"q", "close"}}), sz, w)
+	keys := [][2]string{{"q", "close"}}
+	if copyText(body) != "" {
+		keys = [][2]string{{"^C", "copy"}, {"q", "close"}}
+	}
+	return frame(lines, legendLine(keys), sz, w)
 }
 
 // RunMessage shows a framed message on /dev/tty until an exit key.
@@ -1020,8 +1034,9 @@ func RunMessage(title string, body []Line) error {
 	}
 	defer restore()
 	r := bufio.NewReader(tty)
+	var note Line
 	for {
-		fmt.Fprint(tty, repaint(g)+RenderMessage(title, body, g.get()))
+		fmt.Fprint(tty, repaint(g)+renderMessage(title, body, note, g.get()))
 		k, err := readKey(r)
 		if err != nil {
 			if err == io.EOF {
@@ -1029,8 +1044,22 @@ func RunMessage(title string, body []Line) error {
 			}
 			return err
 		}
-		if k == keyQuit || k == keyEnter {
+		switch k {
+		case keyQuit, keyEnter:
 			return nil
+		case keyCopy:
+			// Ctrl-C on a screen whose whole point is a command you're about to
+			// run: copy it rather than close, which is what the key means
+			// everywhere else text is on screen. `q` still closes.
+			text := copyText(body)
+			switch {
+			case text == "":
+				return nil // nothing to copy — fall back to closing
+			case clipCopy(text):
+				note = Line{Text: "✓ copied to clipboard", Color: Green}
+			default:
+				note = Line{Text: "no clipboard tool (pbcopy/wl-copy/xclip/xsel)", Color: Red}
+			}
 		}
 	}
 }
@@ -1049,6 +1078,7 @@ const (
 	keyHandoff
 	keyRemove
 	keySetup
+	keyCopy
 	keyYes
 	keyNo
 	keyQuit
@@ -1255,7 +1285,7 @@ func (s *pickerState) handle(rows []Row, k key) (Result, bool) {
 		switch k {
 		case keyYes:
 			return Result{Kind: Remove, Index: s.confirm}, true
-		case keyNo, keyQuit:
+		case keyNo, keyQuit, keyCopy:
 			s.confirm = -1
 		}
 		return Result{}, false
@@ -1285,7 +1315,7 @@ func (s *pickerState) handle(rows []Row, k key) (Result, bool) {
 		}
 	case keySetup:
 		return Result{Kind: Setup}, true
-	case keyQuit:
+	case keyQuit, keyCopy: // nothing to copy here — Ctrl-C keeps its usual meaning
 		return Result{Kind: Cancelled}, true
 	}
 	return Result{}, false
@@ -1353,8 +1383,11 @@ func readKey(r *bufio.Reader) (key, error) {
 	switch b {
 	case '\r', '\n':
 		return keyEnter, nil
-	case 'q', 'Q', 3: // 3 = Ctrl-C (a byte under -isig)
+	case 'q', 'Q':
 		return keyQuit, nil
+	case 3: // Ctrl-C, delivered as a byte under -isig. Screens that have
+		// something worth copying take it; everywhere else it still quits.
+		return keyCopy, nil
 	case 'a', 'A':
 		return keyAdd, nil
 	case 'r', 'R':
