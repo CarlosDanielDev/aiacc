@@ -38,6 +38,12 @@ func newSetupCmd() *cobra.Command {
 			for _, n := range res.Names {
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", n)
 			}
+			if res.Shared > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "Shared your skills, sub-agents, commands and hooks with %d profile(s).\n", res.Shared)
+			}
+			if res.Conflicts > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "%d entry(s) left alone (a profile owns them) — `aiacc link --replace` takes them over.\n", res.Conflicts)
+			}
 			if res.WorksNow {
 				fmt.Fprintf(cmd.OutOrStdout(), "They work now — try: %s\n", res.Example)
 			} else {
@@ -65,6 +71,11 @@ func doSetup(cfgPath string) (tui.SetupResult, error) {
 	if err != nil {
 		return tui.SetupResult{}, err
 	}
+	// A launcher that starts the CLI with none of your skills, sub-agents or
+	// slash commands is only half installed — share them into every profile as
+	// part of the same one step. Never destructive: an entry a profile owns is
+	// reported, not replaced (`aiacc link --replace` opts into that).
+	sharedProfiles, sharedConflicts := sharedSummary(c)
 	if !onPath {
 		// Fallback: make binDir reachable next shell. Best-effort — the scripts
 		// are already written, so a manual PATH add still works if this can't.
@@ -75,10 +86,12 @@ func doSetup(cfgPath string) (tui.SetupResult, error) {
 		example = names[0]
 	}
 	return tui.SetupResult{
-		BinDir:   tildeize(binDir),
-		Names:    names,
-		Example:  example,
-		WorksNow: onPath,
+		BinDir:    tildeize(binDir),
+		Names:     names,
+		Example:   example,
+		WorksNow:  onPath,
+		Shared:    sharedProfiles,
+		Conflicts: sharedConflicts,
 	}, nil
 }
 

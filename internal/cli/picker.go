@@ -152,6 +152,7 @@ func runAddTUI(cfgPath string) error {
 		return err
 	}
 	syncLauncher(cfgPath, prov, res.Name) // keep the command in sync (best-effort)
+	linkProfile(prov, dir)                // same skills/agents as the bare CLI
 	return nil
 }
 

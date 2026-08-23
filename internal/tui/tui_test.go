@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -18,7 +19,7 @@ func sample() []Row {
 
 func drv(t *testing.T, keys string, rows []Row) Result {
 	t.Helper()
-	res, err := drive(rows, false, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	res, err := drive(rows, false, fixedGeom(80, 24), bytes.NewBufferString(keys), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("drive: %v", err)
 	}
@@ -87,8 +88,8 @@ func TestDriveHandoffKey(t *testing.T) {
 // render differs and contains a glitch glyph — without changing the frame width.
 func TestLogoGlitchBurst(t *testing.T) {
 	rows := sample()
-	clean := renderFrame(rows, 0, false, 0, 58)
-	glitch := renderFrame(rows, 0, false, 13, 58) // 13%14 >= 12 → glitch burst
+	clean := renderFrame(rows, 0, false, 0, Size{Cols: 58, Rows: 24})
+	glitch := renderFrame(rows, 0, false, 13, Size{Cols: 58, Rows: 24}) // 13%14 >= 12 → glitch burst
 	if clean == glitch {
 		t.Fatal("glitch phase did not alter the frame")
 	}
@@ -106,7 +107,7 @@ func TestLogoGlitchBurst(t *testing.T) {
 
 func list(t *testing.T, keys string, items []ListItem) int {
 	t.Helper()
-	i, err := driveList("pick", items, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	i, err := driveList("pick", items, fixedGeom(80, 24), bytes.NewBufferString(keys), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("driveList: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestDriveListSelectMoveCancel(t *testing.T) {
 }
 
 func TestRenderListShowsItems(t *testing.T) {
-	out := RenderList("pick a thing", []ListItem{{Primary: "alpha", Secondary: "detail"}}, 0, 80)
+	out := RenderList("pick a thing", []ListItem{{Primary: "alpha", Secondary: "detail"}}, 0, Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"PICK A THING", "alpha", "detail", ">"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list render missing %q:\n%s", want, out)
@@ -139,7 +140,7 @@ func TestRenderListShowsItems(t *testing.T) {
 }
 
 func TestRenderMessageShowsBody(t *testing.T) {
-	out := RenderMessage("done", []Line{{Text: "all good", Color: Green}}, 80)
+	out := RenderMessage("done", []Line{{Text: "all good", Color: Green}}, Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"DONE", "all good", "close"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("message render missing %q:\n%s", want, out)
@@ -149,10 +150,10 @@ func TestRenderMessageShowsBody(t *testing.T) {
 
 func TestRenderShowsSetupNudgeOnlyWhenNeeded(t *testing.T) {
 	const nudge = "press "
-	if on := Render(sample(), 0, true, 80); !strings.Contains(on, "s") || !strings.Contains(on, "setup") {
+	if on := Render(sample(), 0, true, Size{Cols: 80, Rows: 24}); !strings.Contains(on, "s") || !strings.Contains(on, "setup") {
 		t.Errorf("setup nudge/legend missing when needed:\n%s", on)
 	}
-	off := Render(sample(), 0, false, 80)
+	off := Render(sample(), 0, false, Size{Cols: 80, Rows: 24})
 	if strings.Contains(off, nudge+"s to install") {
 		t.Errorf("setup nudge shown when not needed:\n%s", off)
 	}
@@ -168,13 +169,13 @@ func setupResult() SetupResult {
 }
 
 func TestDriveSetupResultExits(t *testing.T) {
-	if err := driveSetupResult(setupResult(), 80, bytes.NewBufferString("q"), &bytes.Buffer{}); err != nil {
+	if err := driveSetupResult(setupResult(), fixedGeom(80, 24), bytes.NewBufferString("q"), &bytes.Buffer{}); err != nil {
 		t.Fatalf("driveSetupResult: %v", err)
 	}
 }
 
 func TestRenderSetupResultWorksNow(t *testing.T) {
-	out := RenderSetupResult(setupResult(), 80)
+	out := RenderSetupResult(setupResult(), Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"SETUP", "2 command", "~/.local/bin", "claude-work", "claude-personal", "work now"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("setup result missing %q:\n%s", want, out)
@@ -185,7 +186,7 @@ func TestRenderSetupResultWorksNow(t *testing.T) {
 func TestRenderSetupResultNeedsNewTerminal(t *testing.T) {
 	r := setupResult()
 	r.WorksNow = false
-	out := RenderSetupResult(r, 80)
+	out := RenderSetupResult(r, Size{Cols: 80, Rows: 24})
 	if !strings.Contains(out, "new terminal") {
 		t.Errorf("expected new-terminal guidance when not on PATH:\n%s", out)
 	}
@@ -255,7 +256,7 @@ func TestDriveRemoveReachesBlockedRow(t *testing.T) {
 }
 
 func TestRenderRemoveShowsAccount(t *testing.T) {
-	out := RenderRemove(Row{Provider: "claude", Account: "work"}, 80)
+	out := RenderRemove(Row{Provider: "claude", Account: "work"}, Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"REMOVE PROFILE", "work", "left on disk", "y", "cancel"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("remove render missing %q:\n%s", want, out)
@@ -266,7 +267,7 @@ func TestRenderRemoveShowsAccount(t *testing.T) {
 // --- Render -------------------------------------------------------------------
 
 func TestRenderShowsProfilesAndLogin(t *testing.T) {
-	out := Render(sample(), 0, false, 80)
+	out := Render(sample(), 0, false, Size{Cols: 80, Rows: 24})
 	for _, want := range []string{">", "work", "w@co.com", "launch a profile", "profiles"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q:\n%s", want, out)
@@ -279,7 +280,7 @@ func TestRenderBlockedBadges(t *testing.T) {
 		{Provider: "claude", Account: "gone", DirExists: false, EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude"}, // dir missing
 		{Provider: "openai", Account: "x", DirExists: true, EnvVar: "OPENAI_CONFIG", Command: ""},               // no launcher
 	}
-	out := Render(rows, -1, false, 80)
+	out := Render(rows, -1, false, Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"dir missing", "no launcher"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing blocked badge %q:\n%s", want, out)
@@ -288,7 +289,7 @@ func TestRenderBlockedBadges(t *testing.T) {
 }
 
 func TestRenderEmptyState(t *testing.T) {
-	if out := Render(nil, -1, false, 80); !strings.Contains(out, "No profiles yet") {
+	if out := Render(nil, -1, false, Size{Cols: 80, Rows: 24}); !strings.Contains(out, "No profiles yet") {
 		t.Errorf("empty state missing guidance:\n%s", out)
 	}
 }
@@ -297,7 +298,7 @@ func TestRenderEmptyState(t *testing.T) {
 
 func add(t *testing.T, keys string) AddResult {
 	t.Helper()
-	res, err := driveAdd("", "claude", 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	res, err := driveAdd("", "claude", fixedGeom(80, 24), bytes.NewBufferString(keys), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("driveAdd: %v", err)
 	}
@@ -347,7 +348,7 @@ func TestAddCustomDirViaTab(t *testing.T) {
 
 func TestAddProviderSetsDirDefault(t *testing.T) {
 	// The default dir follows the chosen provider, not always claude.
-	res, err := driveAdd("", "codex", 80, bytes.NewBufferString("work\r"), &bytes.Buffer{})
+	res, err := driveAdd("", "codex", fixedGeom(80, 24), bytes.NewBufferString("work\r"), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("driveAdd: %v", err)
 	}
@@ -357,7 +358,7 @@ func TestAddProviderSetsDirDefault(t *testing.T) {
 }
 
 func TestRenderAddShowsFieldsAndLogin(t *testing.T) {
-	out := RenderAdd("me@x.com", "claude", "wo", "", 0, "", 80)
+	out := RenderAdd("me@x.com", "claude", "wo", "", 0, "", Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"ADD PROFILE", "provider", "claude", "name", "wo", "~/.claude-wo", "me@x.com", "launches as: wo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("add render missing %q:\n%s", want, out)
@@ -369,7 +370,7 @@ func TestRenderAddShowsFieldsAndLogin(t *testing.T) {
 
 func rename(t *testing.T, old, keys string, taken map[string]bool) string {
 	t.Helper()
-	out, err := driveRename(old, taken, 80, bytes.NewBufferString(keys), &bytes.Buffer{})
+	out, err := driveRename(old, taken, fixedGeom(80, 24), bytes.NewBufferString(keys), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("driveRename: %v", err)
 	}
@@ -413,7 +414,7 @@ func TestRenameRejectsJunk(t *testing.T) {
 }
 
 func TestRenderRenameShowsNames(t *testing.T) {
-	out := RenderRename("work", "wo", "", 80)
+	out := RenderRename("work", "wo", "", Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"RENAME PROFILE", "from", "work", "the command becomes: wo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rename render missing %q:\n%s", want, out)
@@ -445,11 +446,11 @@ func TestFramesStaySquare(t *testing.T) {
 	)
 	frames := map[string]string{}
 	for _, cols := range []int{20, 40, 80, 200} {
-		frames["picker"] = Render(rows, 0, true, cols)
-		frames["add"] = RenderAdd("me@example.com", "claude", "work", "", 0, "bad name", cols)
-		frames["remove"] = RenderRemove(Row{Provider: "claude", Account: "work"}, cols)
-		frames["rename"] = RenderRename("work", "work-2", "", cols)
-		frames["setup"] = RenderSetupResult(setupResult(), cols)
+		frames["picker"] = Render(rows, 0, true, Size{Cols: cols, Rows: 24})
+		frames["add"] = RenderAdd("me@example.com", "claude", "work", "", 0, "bad name", Size{Cols: cols, Rows: 24})
+		frames["remove"] = RenderRemove(Row{Provider: "claude", Account: "work"}, Size{Cols: cols, Rows: 24})
+		frames["rename"] = RenderRename("work", "work-2", "", Size{Cols: cols, Rows: 24})
+		frames["setup"] = RenderSetupResult(setupResult(), Size{Cols: cols, Rows: 24})
 		for name, out := range frames {
 			wid := -1
 			for _, ln := range strings.Split(out, "\r\n") {
@@ -464,8 +465,95 @@ func TestFramesStaySquare(t *testing.T) {
 				}
 			}
 			if wid == -1 {
-				t.Fatalf("%s cols=%d: no framed lines found", name, cols)
+				t.Fatalf("%s cols=%d: no framed lines found", name, Size{Cols: cols, Rows: 24})
 			}
 		}
+	}
+}
+
+// TestFramesFitTerminal is the poka-yoke that TestFramesStaySquare can't be: a
+// frame may be perfectly square and still be wider or taller than the terminal
+// showing it — at which point every line wraps, each following row lands low,
+// and the box tears. Nothing a screen renders may exceed the screen.
+func TestFramesFitTerminal(t *testing.T) {
+	var many []Row
+	for i := range 40 {
+		many = append(many, Row{
+			Provider: "claude", Account: "profile-" + strconv.Itoa(i),
+			Email: "someone.with.a.long.address@example.com", DirExists: true,
+			EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude",
+		})
+	}
+	items := make([]ListItem, 40)
+	for i := range items {
+		items[i] = ListItem{Primary: "session-" + strconv.Itoa(i), Secondary: "2026-01-01 · a long title"}
+	}
+	body := make([]Line, 4)
+	for i := range body {
+		body[i] = Line{Text: "a message line that is quite long indeed", Color: White}
+	}
+
+	for _, sz := range []Size{{20, 10}, {24, 12}, {40, 14}, {60, 8}, {80, 24}, {200, 60}} {
+		frames := map[string]string{
+			"picker": Render(many, 20, true, sz),
+			"list":   RenderList("pick a session", items, 20, sz),
+			"remove": RenderRemove(many[0], sz),
+			"add":    RenderAdd("me@example.com", "claude", "work", "", 0, "bad name", sz),
+			"rename": RenderRename("work", "work-2", "", sz),
+			"setup":  RenderSetupResult(setupResult(), sz),
+			"msg":    RenderMessage("aiacc — shared assets", body, sz),
+		}
+		for name, out := range frames {
+			// One newline per emitted row: the cursor must never be pushed past
+			// the last row, which would scroll the screen out from under the
+			// cursor-home repaint.
+			if used := strings.Count(out, "\r\n"); used >= sz.Rows {
+				t.Errorf("%s %dx%d: %d rows emitted into a %d-row terminal", name, sz.Cols, sz.Rows, used, sz.Rows)
+			}
+			for _, ln := range strings.Split(out, "\r\n") {
+				if n := visibleLen(ln); n > sz.Cols {
+					t.Errorf("%s %dx%d: line is %d wide:\n%q", name, sz.Cols, sz.Rows, n, ln)
+					break
+				}
+			}
+		}
+	}
+}
+
+// TestPickerWindowsLongList: a list taller than the terminal scrolls inside the
+// frame, keeping the cursor visible and saying how much is out of view.
+func TestPickerWindowsLongList(t *testing.T) {
+	var rows []Row
+	for i := range 30 {
+		rows = append(rows, Row{Provider: "claude", Account: "p" + strconv.Itoa(i),
+			DirExists: true, EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude"})
+	}
+	out := Render(rows, 25, false, Size{Cols: 80, Rows: 24})
+	if !strings.Contains(out, "p25") {
+		t.Fatal("cursor row scrolled out of view")
+	}
+	if !strings.Contains(out, "above") || !strings.Contains(out, "below") {
+		t.Fatalf("no out-of-view readout:\n%s", out)
+	}
+	if strings.Contains(out, "p0 ") {
+		t.Fatal("the whole list was rendered instead of a window")
+	}
+}
+
+// TestGeomTracksResize: a repaint after a resize starts with a full erase, once.
+func TestGeomTracksResize(t *testing.T) {
+	g := fixedGeom(80, 24)
+	if repaint(g) != "" {
+		t.Fatal("a steady terminal should repaint in place")
+	}
+	g.set(Size{Cols: 40, Rows: 12})
+	if g.get() != (Size{Cols: 40, Rows: 12}) {
+		t.Fatalf("resize not picked up: %+v", g.get())
+	}
+	if repaint(g) != clearHome {
+		t.Fatal("a resized terminal must be erased once")
+	}
+	if repaint(g) != "" {
+		t.Fatal("the erase must not repeat on every later frame")
 	}
 }

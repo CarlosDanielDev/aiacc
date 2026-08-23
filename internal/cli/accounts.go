@@ -53,6 +53,7 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			syncLauncher(path, providerName, account) // keep the command in sync
+			linkProfile(providerName, dir)            // same skills/agents as the bare CLI
 			return nil
 		},
 	}

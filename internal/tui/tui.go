@@ -236,10 +236,15 @@ func logoArt(row string, phase int) string {
 	return gradient(row, neonRamp, phase)
 }
 
-// boxTop draws the top border: a red heavy rule with the title inset in white.
+// boxTop draws the top border: a heavy rule with the title inset in white. The
+// title is clamped like any other row — a title longer than the frame is the one
+// piece of content that could still push a border out, so it is cut, not kept.
 func boxTop(title string, w int) string {
 	t := " " + strings.ToUpper(title) + " "
-	dashes := strings.Repeat(glH, max(0, w-utf8.RuneCountInString(t)-1))
+	if runeLen(t) > w-1 {
+		t = trunc(t, max(0, w-1))
+	}
+	dashes := strings.Repeat(glH, max(0, w-runeLen(t)-1))
 	return paint(glTL+glH, inkBorder) + paint(t, inkWhite) + paint(dashes+glTR, inkBorder)
 }
 func boxBottom(w int) string {
@@ -250,13 +255,62 @@ func boxRow(segs []seg, w int) string {
 }
 func boxBlank(w int) string { return boxRow(nil, w) }
 
-func innerWidth(cols int) int {
-	const base, floor = 46, 30
-	w := base
-	if cols-4 < w {
-		w = cols - 4
+// Size is the terminal geometry a frame renders into. Zero values fall back to a
+// conventional 80x24, so a pure render is always well-defined (tests, pipes, a
+// terminal that won't report its size).
+type Size struct{ Cols, Rows int }
+
+func (s Size) cols() int {
+	if s.Cols <= 0 {
+		return 80
 	}
-	return max(floor, w)
+	return s.Cols
+}
+
+func (s Size) rows() int {
+	if s.Rows <= 0 {
+		return 24
+	}
+	return s.Rows
+}
+
+// innerWidth is the frame's inner width in a terminal that wide. It grows with
+// the terminal up to a comfortable maximum — and, the part that matters, never
+// exceeds what the terminal can actually show. A box wider than the screen wraps,
+// and a wrapped box tears: every following line lands one row low and the borders
+// come apart. Clamping here is poka-yoke on that whole class of breakage.
+func innerWidth(cols int) int {
+	const narrowest, widest = 30, 60
+	w := min(max(cols-4, narrowest), widest) // 1 margin + 1 border each side
+	return max(8, min(w, cols-2))            // never wider than the terminal
+}
+
+// window returns the bounds of a scrolling viewport over n items, budget tall,
+// that keeps cursor in view. It is the vertical twin of innerWidth's clamp: a
+// list taller than the terminal scrolls the screen and tears the frame, so the
+// list is windowed instead.
+func window(n, cursor, budget int) (int, int) {
+	if budget <= 0 || budget >= n {
+		return 0, n
+	}
+	start := cursor - budget/2
+	start = max(0, min(start, n-budget))
+	return start, start + budget
+}
+
+// moreLine is the "there is more above/below" readout for a windowed list.
+func moreLine(start, end, n int) []seg {
+	out := []seg{pad(2)}
+	if start > 0 {
+		out = append(out, seg{"▲ " + strconv.Itoa(start) + " above", inkDim})
+	}
+	if start > 0 && end < n {
+		out = append(out, seg{"  ·  ", inkDim})
+	}
+	if end < n {
+		out = append(out, seg{"▼ " + strconv.Itoa(n-end) + " below", inkDim})
+	}
+	return out
 }
 
 func runeLen(s string) int { return utf8.RuneCountInString(s) }
@@ -273,10 +327,20 @@ func trunc(s string, n int) string {
 // frame repaints in place: cursor home, each line cleared to its end, then
 // everything below the frame cleared. No full-screen erase, so an animated
 // redraw doesn't flicker and a shrinking frame leaves no residue.
-func frame(lines []string, legend string, cols, innerW int) string {
-	lines = append(lines, "", legend)
-	left := max(0, (cols-(innerW+2))/2)
+func frame(lines []string, lg legend, sz Size, innerW int) string {
+	left := max(0, (sz.cols()-(innerW+2))/2)
 	pref := strings.Repeat(" ", left)
+	// The last clamp, after every per-screen one: what is emitted always fits the
+	// terminal. Overflowing the bottom scrolls the screen, which desynchronises
+	// the cursor-home repaint and tears every frame after it.
+	// The legend may wrap, but only so far: on a short screen the box matters
+	// more than the labels, so past two rows it drops to bare hotkeys.
+	legendRows := lg.lines(sz.cols() - left)
+	if maxLegend := max(1, min(2, sz.rows()-6)); len(legendRows) > maxLegend {
+		legendRows = lg.keysOnly(sz.cols() - left)
+	}
+	lines = append(fit(lines, sz.rows()-3-len(legendRows)), "")
+	lines = append(lines, legendRows...)
 	var b strings.Builder
 	b.WriteString("\x1b[H")
 	b.WriteString("\r\n")
@@ -289,49 +353,127 @@ func frame(lines []string, legend string, cols, innerW int) string {
 	return b.String()
 }
 
-func legendLine(pairs [][2]string) string {
+// fit clamps a framed body to n lines, keeping the top and the closing rows. The
+// middle is what goes: a terminal too short for its content shows less content —
+// never a box with no bottom. This is the backstop; each screen sizes its own
+// variable-length part first, so in practice it only fires on absurd geometry.
+func fit(lines []string, n int) []string {
+	n = max(n, 2)
+	if len(lines) <= n {
+		return lines
+	}
+	keep := min(2, n-1) // the status row and the bottom border
+	out := make([]string, 0, n)
+	out = append(out, lines[:n-keep]...)
+	return append(out, lines[len(lines)-keep:]...)
+}
+
+// legend is the key legend shown under the box, kept as key/label pairs so it can
+// be laid out against whatever width the terminal actually has.
+type legend [][2]string
+
+func legendLine(pairs [][2]string) legend { return legend(pairs) }
+
+// lines lays the legend out in width columns. It is the one thing drawn outside
+// the box, so the frame's own width clamp doesn't cover it — and a legend that
+// runs past the edge wraps, costing an unaccounted screen row and pushing the
+// next repaint out of alignment. It wraps on purpose instead, degrading to bare
+// keys when even one labelled key won't fit.
+func (l legend) lines(width int) []string {
+	if width <= 4 {
+		return nil
+	}
+	var out []string
+	var cur strings.Builder
+	curLen := 0
+	for _, p := range l {
+		n := runeLen(p[0]) + 1 + runeLen(p[1]) + 3
+		if n > width-2 {
+			return l.keysOnly(width)
+		}
+		if curLen == 0 {
+			cur.WriteString("  ")
+			curLen = 2
+		} else if curLen+n > width {
+			out = append(out, cur.String())
+			cur.Reset()
+			cur.WriteString("  ")
+			curLen = 2
+		}
+		cur.WriteString(paint(p[0], inkBlue)) // neon-cyan keys
+		cur.WriteString(paint(" "+p[1]+"   ", inkDim))
+		curLen += n
+	}
+	if curLen > 0 {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// keysOnly is the narrowest legend: the hotkeys with no labels, cut to fit.
+func (l legend) keysOnly(width int) []string {
 	var b strings.Builder
 	b.WriteString("  ")
-	for _, p := range pairs {
-		b.WriteString(paint(p[0], inkBlue)) // neon-cyan keys
-		b.WriteString(paint(" "+p[1]+"   ", inkDim))
+	n := 2
+	for _, p := range l {
+		if p[0] == "" {
+			continue
+		}
+		if n+runeLen(p[0])+1 > width {
+			break
+		}
+		b.WriteString(paint(p[0], inkBlue) + " ")
+		n += runeLen(p[0]) + 1
 	}
-	return b.String()
+	return []string{b.String()}
 }
 
 // Render returns the launcher frame: one line per profile — a cursor mark, the
 // provider·account, and a quiet login/status on the right. When setupNeeded is
 // true (the shortcut commands aren't installed) it shows a one-line nudge toward
 // `s`. Pure, for tests.
-func Render(rows []Row, cursor int, setupNeeded bool, cols int) string {
-	return renderFrame(rows, cursor, setupNeeded, 0, cols)
+func Render(rows []Row, cursor int, setupNeeded bool, sz Size) string {
+	return renderFrame(rows, cursor, setupNeeded, 0, sz)
 }
 
 // renderFrame is Render with an animation phase (colour sweep offset). Static
 // callers pass 0; the live loop advances it for the shimmering logo/border.
-func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) string {
-	w := innerWidth(cols)
-	const nameCol = 22
+func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) string {
+	w := innerWidth(sz.cols())
+	nameCol := min(max(w/2, 10), 28) // the name column tracks the frame width
 
 	lines := []string{boxTop("aiacc", w), boxBlank(w)}
 
 	// Header: AIACC wordmark (gradient, with a periodic glitch burst) + tagline.
-	for i, lg := range logoRows {
-		lines = append(lines, boxRaw("   "+logoArt(lg, phase+i), 3+runeLen(lg), w))
-	}
+	// The wordmark is a fixed block of columns and carries colour escapes that
+	// render() cannot measure, so it is the one row that can't be clamped after
+	// the fact. In a frame too narrow for it, a plain wordmark stands in.
 	caret := " "
 	if (phase/6)%2 == 0 {
 		caret = "▊" // blinking block cursor
 	}
-	lines = append(lines,
-		boxRow([]seg{pad(3), {"> ", inkGreen}, {"launch a profile ", inkBlue}, {caret, inkGreen}}, w),
-		boxDivider(w),
-		boxBlank(w),
-	)
+	if w >= 3+runeLen(logoRows[0]) && sz.rows() >= 20 {
+		for i, lg := range logoRows {
+			lines = append(lines, boxRaw("   "+logoArt(lg, phase+i), 3+runeLen(lg), w))
+		}
+		lines = append(lines, boxRow([]seg{pad(3), {"> ", inkGreen}, {"launch a profile ", inkBlue}, {caret, inkGreen}}, w))
+	} else {
+		// Too narrow for the wordmark, or too short to spend three rows on it.
+		lines = append(lines, boxRow([]seg{pad(2), {"AIACC ", inkGreen}, {"> ", inkGreen},
+			{"launch a profile ", inkBlue}, {caret, inkGreen}}, w))
+	}
+	lines = append(lines, boxDivider(w), boxBlank(w))
 
 	if setupNeeded {
+		nudge := " to install the shortcut commands"
+		switch {
+		case w < 34:
+			nudge = " → set up"
+		case w < 46:
+			nudge = " to install commands"
+		}
 		lines = append(lines,
-			boxRow([]seg{pad(2), {"⚡ press ", inkYellow}, {"s", inkWhite}, {" to install the shortcut commands", inkYellow}}, w),
+			boxRow([]seg{pad(2), {"⚡ press ", inkYellow}, {"s", inkWhite}, {nudge, inkYellow}}, w),
 			boxBlank(w),
 		)
 	}
@@ -344,7 +486,18 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) stri
 		)
 	}
 
-	for i, r := range rows {
+	// Vertical fit: the list scrolls inside the frame rather than pushing the
+	// frame off the screen. Everything outside the list is fixed height, so the
+	// budget is whatever the terminal has left after it.
+	const fixedTail = 4 // blank + divider + status + bottom border
+	budget := max(1, sz.rows()-len(lines)-fixedTail-5)
+	start, end := 0, len(rows)
+	if budget < len(rows) {
+		start, end = window(len(rows), max(cursor, 0), max(1, budget-1)) // -1 for the "more" line
+	}
+
+	for i, r := range rows[start:end] {
+		i += start
 		focused := i == cursor
 		blocked := !r.launchable()
 
@@ -388,11 +541,19 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) stri
 		}, w))
 	}
 
+	if start > 0 || end < len(rows) {
+		lines = append(lines, boxRow(moreLine(start, end, len(rows)), w))
+	}
+
 	// Status bar — terminal readout.
 	lines = append(lines, boxBlank(w), boxDivider(w))
-	status := []seg{pad(2), {"» ", inkGreen}, {plural(len(rows), "profile"), inkGrey}, {"  ::  ", inkDim}}
+	sep, wait := "  ::  ", "⚡ SETUP REQUIRED"
+	if w < 40 { // the readout shortens rather than being cut off mid-word
+		sep, wait = " :: ", "⚡ SETUP"
+	}
+	status := []seg{pad(2), {"» ", inkGreen}, {plural(len(rows), "profile"), inkGrey}, {sep, inkDim}}
 	if setupNeeded {
-		status = append(status, seg{"⚡ SETUP REQUIRED", inkYellow})
+		status = append(status, seg{wait, inkYellow})
 	} else {
 		status = append(status, seg{"✓ READY", inkGreen})
 	}
@@ -403,7 +564,7 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase, cols int) stri
 		pairs = append(pairs, [2]string{"s", "setup"})
 	}
 	pairs = append(pairs, [2]string{"q", "quit"})
-	return frame(lines, legendLine(pairs), cols, w)
+	return frame(lines, legendLine(pairs), sz, w)
 }
 
 func plural(n int, word string) string {
@@ -416,8 +577,8 @@ func plural(n int, word string) string {
 // RenderRemove is the confirm screen for removing a profile. Removing only
 // unregisters it from aiacc; the config dir is left on disk, so it is reversible
 // by re-adding. It asks first — an explicit `y`, never Enter.
-func RenderRemove(r Row, cols int) string {
-	w := innerWidth(cols)
+func RenderRemove(r Row, sz Size) string {
+	w := innerWidth(sz.cols())
 	lines := []string{
 		boxTop("aiacc — remove profile", w), boxBlank(w),
 		boxRow([]seg{pad(2), {"Remove ", inkWhite}, {r.Account, inkYellow}, {" from aiacc?", inkWhite}}, w),
@@ -427,23 +588,25 @@ func RenderRemove(r Row, cols int) string {
 		boxBottom(w),
 	}
 	legend := legendLine([][2]string{{"y", "remove"}, {"n", "cancel"}})
-	return frame(lines, legend, cols, w)
+	return frame(lines, legend, sz, w)
 }
 
 // --- Shell setup --------------------------------------------------------------
 
 // SetupResult is what a one-step `aiacc setup` installed, for the result screen.
 type SetupResult struct {
-	BinDir   string   // display path the launchers were written to
-	Names    []string // installed command names
-	Example  string   // an example command to try
-	WorksNow bool     // BinDir is on PATH → usable immediately, no reload
+	BinDir    string   // display path the launchers were written to
+	Names     []string // installed command names
+	Example   string   // an example command to try
+	WorksNow  bool     // BinDir is on PATH → usable immediately, no reload
+	Shared    int      // profiles that now share your skills/agents/commands
+	Conflicts int      // entries left alone because a profile owns them
 }
 
 // RenderSetupResult returns the framed outcome of a one-step setup: what was
 // installed and whether it works now. Pure, for tests.
-func RenderSetupResult(r SetupResult, cols int) string {
-	w := innerWidth(cols)
+func RenderSetupResult(r SetupResult, sz Size) string {
+	w := innerWidth(sz.cols())
 	lines := []string{
 		boxTop("aiacc — setup", w), boxBlank(w),
 		boxRow([]seg{pad(2), {"✓ ", inkGreen}, {strconv.Itoa(len(r.Names)) + " command(s) installed in", inkWhite}}, w),
@@ -458,20 +621,31 @@ func RenderSetupResult(r SetupResult, cols int) string {
 		lines = append(lines, boxRow([]seg{pad(4), {n, inkBlue}}, w))
 	}
 	lines = append(lines, boxBlank(w))
+	if r.Shared > 0 {
+		lines = append(lines, boxRow([]seg{pad(2), {"✓ ", inkGreen},
+			{"skills · agents · commands shared with " + strconv.Itoa(r.Shared), inkWhite}}, w))
+	}
+	if r.Conflicts > 0 {
+		lines = append(lines, boxRow([]seg{pad(4),
+			{strconv.Itoa(r.Conflicts) + " left alone — aiacc link --replace", inkYellow}}, w))
+	}
+	if r.Shared > 0 || r.Conflicts > 0 {
+		lines = append(lines, boxBlank(w))
+	}
 	if r.WorksNow {
 		lines = append(lines, boxRow([]seg{pad(2), {"They work now — try: ", inkWhite}, {r.Example, inkBlue}}, w))
 	} else {
 		lines = append(lines, boxRow([]seg{pad(2), {"Open a new terminal, then: ", inkWhite}, {r.Example, inkBlue}}, w))
 	}
 	lines = append(lines, boxBottom(w))
-	return frame(lines, legendLine([][2]string{{"q", "done"}}), cols, w)
+	return frame(lines, legendLine([][2]string{{"q", "done"}}), sz, w)
 }
 
 // driveSetupResult shows the result and waits for an exit key.
-func driveSetupResult(r SetupResult, cols int, in io.Reader, out io.Writer) error {
+func driveSetupResult(r SetupResult, g *geom, in io.Reader, out io.Writer) error {
 	rd := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, RenderSetupResult(r, cols))
+		fmt.Fprint(out, repaint(g)+RenderSetupResult(r, g.get()))
 		k, err := readKey(rd)
 		if err != nil {
 			if err == io.EOF {
@@ -487,12 +661,12 @@ func driveSetupResult(r SetupResult, cols int, in io.Reader, out io.Writer) erro
 
 // RunSetupResult shows the setup result screen on /dev/tty.
 func RunSetupResult(r SetupResult) error {
-	tty, cols, restore, err := openRawTTY()
+	tty, g, restore, err := openRawTTY()
 	if err != nil {
 		return err
 	}
 	defer restore()
-	return driveSetupResult(r, cols, tty, tty)
+	return driveSetupResult(r, g, tty, tty)
 }
 
 // --- Add profile --------------------------------------------------------------
@@ -543,8 +717,8 @@ func defaultDir(provider, name string) string {
 // field, a dir field that defaults to ~/.<provider>-<name> until edited, the
 // current login for context, and an optional hint. field is 0 for name, 1 for
 // dir. Pure, for tests.
-func RenderAdd(currentLogin, provider, name, dir string, field int, hint string, cols int) string {
-	w := innerWidth(cols)
+func RenderAdd(currentLogin, provider, name, dir string, field int, hint string, sz Size) string {
+	w := innerWidth(sz.cols())
 	lines := []string{boxTop("aiacc — add profile", w), boxBlank(w)}
 
 	lines = append(lines, boxRow([]seg{pad(2), {"provider  ", inkGrey}, {provider, inkBlue}}, w))
@@ -594,16 +768,16 @@ func RenderAdd(currentLogin, provider, name, dir string, field int, hint string,
 		tip = "launches as: " + name
 	}
 	legend := legendLine([][2]string{{"", tip}, {"⇥", "field"}, {"⏎", "create"}, {"esc", "cancel"}})
-	return frame(lines, legend, cols, w)
+	return frame(lines, legend, sz, w)
 }
 
 // driveAdd is the add-screen input loop, decoupled from /dev/tty for tests. It
 // filters keystrokes so the name field can only ever hold command-safe chars.
-func driveAdd(currentLogin, provider string, cols int, in io.Reader, out io.Writer) (AddResult, error) {
+func driveAdd(currentLogin, provider string, g *geom, in io.Reader, out io.Writer) (AddResult, error) {
 	name, dir, field, hint := "", "", 0, ""
 	r := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, RenderAdd(currentLogin, provider, name, dir, field, hint, cols))
+		fmt.Fprint(out, repaint(g)+RenderAdd(currentLogin, provider, name, dir, field, hint, g.get()))
 		b, err := r.ReadByte()
 		if err != nil {
 			if err == io.EOF {
@@ -655,8 +829,8 @@ func trimLastByte(s string) string {
 
 // RenderRename returns the rename screen: a single name field prefilled with the
 // current name, plus a hint. Pure, for tests.
-func RenderRename(oldName, buf, hint string, cols int) string {
-	w := innerWidth(cols)
+func RenderRename(oldName, buf, hint string, sz Size) string {
+	w := innerWidth(sz.cols())
 	lines := []string{
 		boxTop("aiacc — rename profile", w), boxBlank(w),
 		boxRow([]seg{pad(2), {"from  ", inkGrey}, {oldName, inkDim}}, w),
@@ -669,7 +843,7 @@ func RenderRename(oldName, buf, hint string, cols int) string {
 		lines = append(lines, boxRow([]seg{pad(2), {"the command becomes: " + launchName(buf), inkBlue}}, w))
 	}
 	lines = append(lines, boxBottom(w))
-	return frame(lines, legendLine([][2]string{{"", "edit name"}, {"⏎", "rename"}, {"esc", "cancel"}}), cols, w)
+	return frame(lines, legendLine([][2]string{{"", "edit name"}, {"⏎", "rename"}, {"esc", "cancel"}}), sz, w)
 }
 
 func launchName(buf string) string {
@@ -682,11 +856,11 @@ func launchName(buf string) string {
 // driveRename edits the name of a profile. taken is the set of other account
 // names; the new name must be valid and not already in use. Returns the new name,
 // or "" when cancelled (including an unchanged name — the caller no-ops either).
-func driveRename(oldName string, taken map[string]bool, cols int, in io.Reader, out io.Writer) (string, error) {
+func driveRename(oldName string, taken map[string]bool, g *geom, in io.Reader, out io.Writer) (string, error) {
 	buf, hint := oldName, ""
 	r := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, RenderRename(oldName, buf, hint, cols))
+		fmt.Fprint(out, repaint(g)+RenderRename(oldName, buf, hint, g.get()))
 		b, err := r.ReadByte()
 		if err != nil {
 			if err == io.EOF {
@@ -728,14 +902,20 @@ type ListItem struct {
 }
 
 // RenderList returns a framed single-column selection list. Pure, for tests.
-func RenderList(title string, items []ListItem, cursor, cols int) string {
-	w := innerWidth(cols)
-	const primCol = 20
+func RenderList(title string, items []ListItem, cursor int, sz Size) string {
+	w := innerWidth(sz.cols())
+	primCol := min(max(w/2, 8), 24)
 	lines := []string{boxTop(title, w), boxBlank(w)}
 	if len(items) == 0 {
 		lines = append(lines, boxRow([]seg{pad(2), {"nothing to choose", inkDim}}, w), boxBlank(w))
 	}
-	for i, it := range items {
+	budget := max(1, sz.rows()-len(lines)-1-5) // 1 bottom border + frame chrome
+	start, end := 0, len(items)
+	if budget < len(items) {
+		start, end = window(len(items), max(cursor, 0), max(1, budget-1))
+	}
+	for i, it := range items[start:end] {
+		i += start
 		focused := i == cursor
 		cur := seg{"  ", ""}
 		if focused {
@@ -751,20 +931,23 @@ func RenderList(title string, items []ListItem, cursor, cols int) string {
 		}
 		lines = append(lines, boxRow(row, w))
 	}
+	if start > 0 || end < len(items) {
+		lines = append(lines, boxRow(moreLine(start, end, len(items)), w))
+	}
 	lines = append(lines, boxBottom(w))
-	return frame(lines, legendLine([][2]string{{"↑↓", "move"}, {"⏎", "select"}, {"q", "cancel"}}), cols, w)
+	return frame(lines, legendLine([][2]string{{"↑↓", "move"}, {"⏎", "select"}, {"q", "cancel"}}), sz, w)
 }
 
 // driveList is the selection loop, decoupled from /dev/tty for tests. Returns the
 // chosen index, or -1 if cancelled.
-func driveList(title string, items []ListItem, cols int, in io.Reader, out io.Writer) (int, error) {
+func driveList(title string, items []ListItem, g *geom, in io.Reader, out io.Writer) (int, error) {
 	cursor := 0
 	if len(items) == 0 {
 		cursor = -1
 	}
 	r := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, RenderList(title, items, cursor, cols))
+		fmt.Fprint(out, repaint(g)+RenderList(title, items, cursor, g.get()))
 		k, err := readKey(r)
 		if err != nil {
 			if err == io.EOF {
@@ -793,12 +976,12 @@ func driveList(title string, items []ListItem, cols int, in io.Reader, out io.Wr
 
 // RunList shows a selection list on /dev/tty and returns the chosen index or -1.
 func RunList(title string, items []ListItem) (int, error) {
-	tty, cols, restore, err := openRawTTY()
+	tty, g, restore, err := openRawTTY()
 	if err != nil {
 		return -1, err
 	}
 	defer restore()
-	return driveList(title, items, cols, tty, tty)
+	return driveList(title, items, g, tty, tty)
 }
 
 // Line is one body line of a framed message. Color is an exported palette name
@@ -819,26 +1002,26 @@ const (
 )
 
 // RenderMessage returns a framed message with a title and body lines. Pure.
-func RenderMessage(title string, body []Line, cols int) string {
-	w := innerWidth(cols)
+func RenderMessage(title string, body []Line, sz Size) string {
+	w := innerWidth(sz.cols())
 	lines := []string{boxTop(title, w), boxBlank(w)}
 	for _, l := range body {
 		lines = append(lines, boxRow([]seg{pad(2), {l.Text, l.Color}}, w))
 	}
 	lines = append(lines, boxBottom(w))
-	return frame(lines, legendLine([][2]string{{"q", "close"}}), cols, w)
+	return frame(lines, legendLine([][2]string{{"q", "close"}}), sz, w)
 }
 
 // RunMessage shows a framed message on /dev/tty until an exit key.
 func RunMessage(title string, body []Line) error {
-	tty, cols, restore, err := openRawTTY()
+	tty, g, restore, err := openRawTTY()
 	if err != nil {
 		return err
 	}
 	defer restore()
 	r := bufio.NewReader(tty)
 	for {
-		fmt.Fprint(tty, RenderMessage(title, body, cols))
+		fmt.Fprint(tty, repaint(g)+RenderMessage(title, body, g.get()))
 		k, err := readKey(r)
 		if err != nil {
 			if err == io.EOF {
@@ -871,23 +1054,69 @@ const (
 	keyQuit
 )
 
-// openRawTTY puts /dev/tty in raw mode and returns it, the terminal width, and a
+// geom is the terminal's live geometry. A terminal can be resized at any moment,
+// so the size is not read once and trusted: SIGWINCH re-measures it and every
+// repaint reads it back through get(). Guarded because the signal watcher and the
+// render loop are different goroutines.
+type geom struct {
+	mu      sync.Mutex
+	sz      Size
+	resized bool
+}
+
+func (g *geom) get() Size {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.sz
+}
+
+// set records a new size and flags that the screen changed shape.
+func (g *geom) set(sz Size) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if sz.Cols > 0 && sz != g.sz {
+		g.sz, g.resized = sz, true
+	}
+}
+
+// takeResized reports (and clears) whether the terminal changed shape since the
+// last repaint. A shrunk terminal leaves wrapped debris the in-place repaint
+// can't reach, so the caller does one full erase when this is true.
+func (g *geom) takeResized() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	was := g.resized
+	g.resized = false
+	return was
+}
+
+// fixedGeom is a geom that never changes — for tests and non-tty renders.
+func fixedGeom(cols, rows int) *geom { return &geom{sz: Size{Cols: cols, Rows: rows}} }
+
+// openRawTTY puts /dev/tty in raw mode and returns it, its live geometry, and a
 // restore func. A signal handler restores the tty and shows the cursor before
 // exiting on SIGTERM/HUP (or a SIGINT that slips past -isig), so no exit path
-// leaves the user in a hidden-cursor raw terminal.
-func openRawTTY() (*os.File, int, func(), error) {
+// leaves the user in a hidden-cursor raw terminal. A second handler keeps the
+// geometry current on SIGWINCH.
+func openRawTTY() (*os.File, *geom, func(), error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, nil, nil, err
 	}
 	saved, err := sttyState(tty)
 	if err != nil {
 		tty.Close()
-		return nil, 0, nil, err
+		return nil, nil, nil, err
 	}
+	// The resize watcher is torn down with the terminal: a session opens one of
+	// these per screen (picker → add → picker → …), and a watcher left running on
+	// a closed tty would re-measure a file that is gone on every later resize.
+	winch := make(chan os.Signal, 1)
 	var once sync.Once
 	restore := func() {
 		once.Do(func() {
+			signal.Stop(winch)
+			close(winch)
 			stty(tty, saved)
 			fmt.Fprint(tty, showCursor+clearHome)
 			tty.Close()
@@ -904,26 +1133,44 @@ func openRawTTY() (*os.File, int, func(), error) {
 	}()
 	if err := stty(tty, "-icanon", "-echo", "-isig", "min", "1", "time", "0"); err != nil {
 		restore()
-		return nil, 0, nil, err
+		return nil, nil, nil, err
 	}
 	fmt.Fprint(tty, hideCursor)
-	return tty, ttyCols(tty), restore, nil
+
+	g := &geom{sz: ttySize(tty)}
+	signal.Notify(winch, syscall.SIGWINCH)
+	go func() {
+		for range winch {
+			g.set(ttySize(tty))
+		}
+	}()
+	return tty, g, restore, nil
+}
+
+// repaint returns the escape prefix for the next frame: normally nothing (the
+// frame repaints in place), but a full erase right after a resize, because a
+// terminal that just shrank holds wrapped debris outside the new frame's reach.
+func repaint(g *geom) string {
+	if g.takeResized() {
+		return clearHome
+	}
+	return ""
 }
 
 // Run shows the profile launcher on /dev/tty and returns the user's Result.
 // setupNeeded surfaces the "install the shortcut commands" nudge.
 func Run(rows []Row, setupNeeded bool) (Result, error) {
-	tty, cols, restore, err := openRawTTY()
+	tty, g, restore, err := openRawTTY()
 	if err != nil {
 		return Result{Kind: Cancelled}, err
 	}
 	defer restore()
-	return animate(rows, setupNeeded, cols, tty)
+	return animate(rows, setupNeeded, g, tty)
 }
 
 // animate is the live picker loop: it reads keys in a goroutine and repaints on a
 // ticker so the logo shimmers. Shares the key-state machine with drive().
-func animate(rows []Row, setupNeeded bool, cols int, tty *os.File) (Result, error) {
+func animate(rows []Row, setupNeeded bool, g *geom, tty *os.File) (Result, error) {
 	st := pickerState{cursor: initialCursor(rows), confirm: -1}
 	keys := make(chan key)
 	done := make(chan struct{})
@@ -947,10 +1194,12 @@ func animate(rows []Row, setupNeeded bool, cols int, tty *os.File) (Result, erro
 	defer ticker.Stop()
 	phase := 0
 	for {
+		sz := g.get()
+		fmt.Fprint(tty, repaint(g))
 		if st.confirm >= 0 {
-			fmt.Fprint(tty, RenderRemove(rows[st.confirm], cols))
+			fmt.Fprint(tty, RenderRemove(rows[st.confirm], sz))
 		} else {
-			fmt.Fprint(tty, renderFrame(rows, st.cursor, setupNeeded, phase, cols))
+			fmt.Fprint(tty, renderFrame(rows, st.cursor, setupNeeded, phase, sz))
 		}
 		select {
 		case k := <-keys:
@@ -966,12 +1215,12 @@ func animate(rows []Row, setupNeeded bool, cols int, tty *os.File) (Result, erro
 // RunAdd shows the framed add screen on /dev/tty for the given provider.
 // currentLogin (may be "") is shown for context.
 func RunAdd(currentLogin, provider string) (AddResult, error) {
-	tty, cols, restore, err := openRawTTY()
+	tty, g, restore, err := openRawTTY()
 	if err != nil {
 		return AddResult{}, err
 	}
 	defer restore()
-	return driveAdd(currentLogin, provider, cols, tty, tty)
+	return driveAdd(currentLogin, provider, g, tty, tty)
 }
 
 // RunRename shows the rename screen on /dev/tty. taken is the set of other
@@ -982,12 +1231,12 @@ func RunRename(oldName string, taken []string) (string, error) {
 	for _, n := range taken {
 		set[n] = true
 	}
-	tty, cols, restore, err := openRawTTY()
+	tty, g, restore, err := openRawTTY()
 	if err != nil {
 		return "", err
 	}
 	defer restore()
-	return driveRename(oldName, set, cols, tty, tty)
+	return driveRename(oldName, set, g, tty, tty)
 }
 
 // pickerState is the cursor + remove-confirm state shared by the testable drive
@@ -1043,14 +1292,16 @@ func (s *pickerState) handle(rows []Row, k key) (Result, bool) {
 }
 
 // drive is the non-animated launcher loop, decoupled from /dev/tty for tests.
-func drive(rows []Row, setupNeeded bool, cols int, in io.Reader, out io.Writer) (Result, error) {
+func drive(rows []Row, setupNeeded bool, g *geom, in io.Reader, out io.Writer) (Result, error) {
 	st := pickerState{cursor: initialCursor(rows), confirm: -1}
 	r := bufio.NewReader(in)
 	for {
+		sz := g.get()
+		fmt.Fprint(out, repaint(g))
 		if st.confirm >= 0 {
-			fmt.Fprint(out, RenderRemove(rows[st.confirm], cols))
+			fmt.Fprint(out, RenderRemove(rows[st.confirm], sz))
 		} else {
-			fmt.Fprint(out, Render(rows, st.cursor, setupNeeded, cols))
+			fmt.Fprint(out, Render(rows, st.cursor, setupNeeded, sz))
 		}
 		k, err := readKey(r)
 		if err != nil {
@@ -1153,19 +1404,24 @@ func sttyState(tty *os.File) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// ttyCols reads the terminal width via `stty size`, falling back to 80.
-func ttyCols(tty *os.File) int {
+// ttySize reads the terminal geometry via `stty size`, falling back to 80x24.
+func ttySize(tty *os.File) Size {
+	sz := Size{Cols: 80, Rows: 24}
 	out, err := runStty(tty, "size")
 	if err != nil {
-		return 80
+		return sz
 	}
 	f := strings.Fields(out)
-	if len(f) == 2 {
-		if c, err := strconv.Atoi(f[1]); err == nil && c > 0 {
-			return c
-		}
+	if len(f) != 2 {
+		return sz
 	}
-	return 80
+	if r, err := strconv.Atoi(f[0]); err == nil && r > 0 {
+		sz.Rows = r
+	}
+	if c, err := strconv.Atoi(f[1]); err == nil && c > 0 {
+		sz.Cols = c
+	}
+	return sz
 }
 
 func stty(tty *os.File, args ...string) error {

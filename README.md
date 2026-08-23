@@ -45,6 +45,11 @@ Bare `aiacc` opens an interactive launcher:
 > **glitches** in short data-tear bursts, plus a reverse-video glow on the
 > selected row. Add / rename / remove / hand off / setup all happen in-screen.
 > Honors `NO_COLOR`.
+>
+> **Responsive** — the frame follows the terminal: it grows and narrows with
+> the width, re-measures live on resize, and a profile list taller than the
+> window scrolls *inside* the box (`▲ n above · ▼ n below`) instead of
+> spilling out of it.
 
 ---
 
@@ -53,6 +58,7 @@ Bare `aiacc` opens an interactive launcher:
 - **🔀 One command per account** — `claude-work` opens Claude Code signed into that account. No env juggling, no re-login.
 - **⚡ One-step setup** — `aiacc setup` installs the commands onto your `PATH`; they work *immediately*, in the shell you're already in. No sourcing, no reload.
 - **🧭 Interactive picker** — a bare `aiacc` gives you an arrow-key list to launch, add, rename, or remove accounts.
+- **🧩 Same skills everywhere** — every profile shares your skills, sub-agents, slash commands and hooks, so `claude-work` is the same tool as `claude`, not an empty one.
 - **🔒 Never touches your credentials** — aiacc only points an environment variable at a config directory; each account's login stays in its own dir.
 - **🪶 Zero dependencies** — a single static Go binary. Nothing to install alongside it.
 - **🛟 Hard to misuse** — junk names can't be entered, broken profiles can't be launched, and destructive actions ask first.
@@ -137,6 +143,38 @@ aiacc shell-init fish | source         # ~/.config/fish/config.fish
 
 </details>
 
+## 🧩 Same skills in every profile
+
+A profile is an isolated config directory — and *everything* the CLI discovers
+lives in that directory. Point `CLAUDE_CONFIG_DIR` somewhere new and Claude Code
+starts with no skills, no sub-agents, no slash commands and no `CLAUDE.md`: the
+same binary, a much emptier tool.
+
+`aiacc setup` fixes that in the same step, and `aiacc link` does it on demand:
+
+```sh
+aiacc link                    # share with every profile
+aiacc link claude work        # …or just one
+aiacc link --replace          # take over entries a profile already has
+```
+
+It **symlinks** your authored assets out of the CLI's own config dir, so they
+stay in one place — edit a skill once and every profile has it:
+
+| Provider | Shared |
+|---|---|
+| `claude` (`~/.claude`) | `skills/` · `agents/` · `commands/` · `hooks/` · `output-styles/` · `plugins/` · `CLAUDE.md` · `settings.json` |
+| `codex` (`~/.codex`) | `prompts/` · `AGENTS.md` |
+
+What is **never** shared: credentials, `projects/` transcripts, `history.jsonl`,
+usage counters — isolating those is the whole point of a profile.
+
+> **Nothing is overwritten.** An entry a profile already has of its own is left
+> exactly as it is and reported instead. `--replace` opts into taking it over,
+> and even then the original is renamed to `<name>.aiacc-bak` first, never
+> deleted. Custom (non-preset) providers are skipped — aiacc doesn't guess at a
+> CLI's asset layout.
+
 ## 🎛️ Commands
 
 | Command | What it does |
@@ -148,6 +186,7 @@ aiacc shell-init fish | source         # ~/.config/fish/config.fish
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
+| `aiacc link [provider] [account]` | Share your skills, sub-agents, commands and hooks with a profile (all of them by default). `--replace` takes over entries a profile owns. |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
 | `aiacc usage [provider]` | Token totals per account, from local session logs. |
