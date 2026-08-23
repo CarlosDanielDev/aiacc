@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bufio"
 	"bytes"
 	"regexp"
 	"strconv"
@@ -555,5 +556,80 @@ func TestGeomTracksResize(t *testing.T) {
 	}
 	if repaint(g) != "" {
 		t.Fatal("the erase must not repeat on every later frame")
+	}
+}
+
+// --- Ctrl-C copy ---------------------------------------------------------------
+
+// TestCopyTextPrefersCommands: a hand-off screen exists to give you a command to
+// run, so Ctrl-C copies the commands — not the prose around them.
+func TestCopyTextPrefersCommands(t *testing.T) {
+	body := []Line{
+		{Text: "✓ Copied to claude-work", Color: Green},
+		{},
+		{Text: "Resume it:", Color: White},
+		{Text: "cd /Users/carlos/kyte/ai", Color: Blue},
+		{Text: "claude-work --resume a2896e1e", Color: Blue},
+	}
+	want := "cd /Users/carlos/kyte/ai\nclaude-work --resume a2896e1e"
+	if got := copyText(body); got != want {
+		t.Fatalf("copyText = %q, want %q", got, want)
+	}
+}
+
+// TestCopyTextFallsBackToBody: a screen with no command lines still copies
+// something, so the key is never inert.
+func TestCopyTextFallsBackToBody(t *testing.T) {
+	body := []Line{{Text: "No sessions found for this account yet.", Color: Grey}, {}}
+	if got := copyText(body); got != "No sessions found for this account yet." {
+		t.Fatalf("copyText = %q", got)
+	}
+	if got := copyText(nil); got != "" {
+		t.Fatalf("empty body should copy nothing, got %q", got)
+	}
+}
+
+// TestCtrlCIsItsOwnKey: Ctrl-C arrives as a byte under -isig. It is decoded
+// separately so a screen with something to copy can take it.
+func TestCtrlCIsItsOwnKey(t *testing.T) {
+	k, err := readKey(bufio.NewReader(bytes.NewBufferString("\x03")))
+	if err != nil || k != keyCopy {
+		t.Fatalf("readKey(Ctrl-C) = %v, %v; want keyCopy", k, err)
+	}
+}
+
+// TestPickerStillQuitsOnCtrlC: the picker has nothing to copy, so Ctrl-C must
+// keep meaning "get me out of here".
+func TestPickerStillQuitsOnCtrlC(t *testing.T) {
+	if res := drv(t, "\x03", sample()); res.Kind != Cancelled {
+		t.Fatalf("got %+v, want Cancelled", res)
+	}
+	// …and it also backs out of the remove confirmation, like `n`.
+	if res := drv(t, "d\x03q", sample()); res.Kind != Cancelled {
+		t.Fatalf("Ctrl-C at the confirm prompt: got %+v, want Cancelled", res)
+	}
+}
+
+// TestMessageOffersCopyOnlyWhenThereIsSomething: the legend advertises ^C only
+// on a screen that has something to put on the clipboard.
+func TestMessageOffersCopyOnlyWhenThereIsSomething(t *testing.T) {
+	sz := Size{Cols: 80, Rows: 24}
+	with := RenderMessage("hand off · done", []Line{{Text: "claude-work --resume x", Color: Blue}}, sz)
+	if !strings.Contains(with, "^C") {
+		t.Fatalf("no copy hint on a screen with a command:\n%s", with)
+	}
+	without := RenderMessage("hand off", nil, sz)
+	if strings.Contains(without, "^C") {
+		t.Fatalf("copy hint on a screen with nothing to copy:\n%s", without)
+	}
+}
+
+// TestMessageNoteRendersUnderTheBody: the copy confirmation is shown in-screen.
+func TestMessageNoteRendersUnderTheBody(t *testing.T) {
+	out := renderMessage("hand off · done",
+		[]Line{{Text: "claude-work --resume x", Color: Blue}},
+		Line{Text: "✓ copied to clipboard", Color: Green}, Size{Cols: 80, Rows: 24})
+	if !strings.Contains(out, "copied to clipboard") {
+		t.Fatalf("note missing:\n%s", out)
 	}
 }
