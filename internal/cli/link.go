@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"maps"
@@ -17,7 +18,7 @@ import (
 )
 
 func newLinkCmd() *cobra.Command {
-	var replace bool
+	var replace, prune bool
 	cmd := &cobra.Command{
 		Use:   "link [provider] [account]",
 		Short: "Share your skills, sub-agents, commands and hooks with every profile",
@@ -27,7 +28,10 @@ func newLinkCmd() *cobra.Command {
 			"the tooling the bare `claude` has.\n\n" +
 			"Credentials, transcripts and usage stay per-account. An entry a profile " +
 			"already has of its own is left untouched; --replace takes it over, " +
-			"renaming the original to <name>.aiacc-bak first.",
+			"renaming the original to <name>.aiacc-bak first.\n\n" +
+			"--prune removes shared symlinks whose target no longer exists — the dead " +
+			"links left behind when the CLI renames or drops a config directory. It " +
+			"lists them and asks before removing anything.",
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := configPath()
@@ -37,6 +41,9 @@ func newLinkCmd() *cobra.Command {
 			c, err := config.Load(path)
 			if err != nil {
 				return err
+			}
+			if prune {
+				return runPrune(cmd, c, args)
 			}
 			results, err := linkAccounts(c, args, replace)
 			if err != nil {
@@ -50,7 +57,124 @@ func newLinkCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&replace, "replace", false, "take over entries a profile already has (originals renamed to <name>.aiacc-bak)")
+	cmd.Flags().BoolVar(&prune, "prune", false, "remove shared symlinks whose target no longer exists (asks first)")
 	return cmd
+}
+
+// runPrune lists the dead shared links, asks, and only then removes them.
+//
+// Poka-yoke: removing a symlink is not aiacc's to do silently — the user may
+// have made it by hand. So the dry pass runs first, its result is what the
+// question is about, and a bare Enter declines. Nothing to prune exits without
+// asking anything.
+func runPrune(cmd *cobra.Command, c *config.Config, args []string) error {
+	dead, err := danglingLinks(c, args)
+	if err != nil {
+		return err
+	}
+	w := cmd.OutOrStdout()
+	if len(dead) == 0 {
+		fmt.Fprintln(w, "No dead shared links.")
+		return nil
+	}
+	fmt.Fprintf(w, "%d dead shared link(s) — the target no longer exists:\n", countEntries(dead))
+	for _, r := range dead {
+		for _, e := range r.Entries {
+			fmt.Fprintf(w, "  %-16s %s\n", r.Dir, e.Name)
+		}
+	}
+	if !confirm(cmd, "Remove them?") {
+		fmt.Fprintln(w, "Left alone.")
+		return nil
+	}
+	var removed, failed int
+	for _, r := range dead {
+		names := make([]string, len(r.Entries))
+		for i, e := range r.Entries {
+			names[i] = e.Name
+		}
+		res := share.Prune(r.Base, r.dirPath, names)
+		removed += res.Count(share.Pruned)
+		failed += res.Count(share.Failed)
+	}
+	fmt.Fprintf(w, "Removed %d link(s).\n", removed)
+	if failed > 0 {
+		fmt.Fprintf(w, "%d could not be removed — check permissions on the profile dir.\n", failed)
+	}
+	return nil
+}
+
+// deadResult is one account's dangling entries, keeping the on-disk path that
+// share.Result replaces with the account name for display.
+type deadResult struct {
+	share.Result
+	dirPath string
+}
+
+// danglingLinks is the read-only pass: which shared links are dead, per account.
+func danglingLinks(c *config.Config, args []string) ([]deadResult, error) {
+	var out []deadResult
+	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
+		if len(args) >= 1 && args[0] != pn {
+			continue
+		}
+		base, entries, ok := provider.Shared(pn)
+		if !ok {
+			continue
+		}
+		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
+			if len(args) == 2 && args[1] != an {
+				continue
+			}
+			dir, err := provider.AccountDir(c, pn, an)
+			if err != nil {
+				continue
+			}
+			res := share.Check(base, dir, entries)
+			var dead []share.Entry
+			for _, e := range res.Entries {
+				if e.Status == share.Dangling {
+					dead = append(dead, e)
+				}
+			}
+			if len(dead) == 0 {
+				continue
+			}
+			out = append(out, deadResult{
+				Result:  share.Result{Base: base, Dir: an, Entries: dead},
+				dirPath: dir,
+			})
+		}
+	}
+	return out, nil
+}
+
+func countEntries(rs []deadResult) int {
+	n := 0
+	for _, r := range rs {
+		n += len(r.Entries)
+	}
+	return n
+}
+
+// confirm asks a yes/no question, defaulting to no. Without a terminal the
+// explicit --prune flag is taken as the answer: a script that passed it has
+// already decided, and blocking on a prompt nothing can answer would hang CI.
+func confirm(cmd *cobra.Command, question string) bool {
+	if !isTerminal(os.Stdin) {
+		return true
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s [y/N] ", question)
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // linkAccounts links the accounts named by args: none = every account, one =

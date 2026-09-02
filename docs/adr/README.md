@@ -21,3 +21,4 @@ instead, a later record **supersedes** it and both link each other. Status value
 - [0002](0002-generic-provider-driver.md) — Generic env-var provider driver
 - [0003](0003-shell-eval-switching.md) — Shell switching via eval hook
 - [0004](0004-plan-quota-best-effort.md) — Plan/rate-limit reporting is best-effort
+- [0005](0005-doctor-diagnoses-never-repairs.md) — Launchers resolve by name; `doctor` diagnoses, never repairs

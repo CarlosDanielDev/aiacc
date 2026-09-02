@@ -29,6 +29,20 @@ const (
 	Taken   Status = "own copy"    // the account has its own file/dir; left alone
 	Foreign Status = "linked away" // a symlink pointing somewhere else; left alone
 	Failed  Status = "failed"      // the link could not be created
+
+	// Dangling is a symlink in the account dir whose target no longer exists.
+	// It is reported apart from Absent because the two look identical from the
+	// base dir and are opposites in the account: Absent means there is nothing
+	// to share, Dangling means the profile is holding a dead link and hands it
+	// to the CLI as if it were real.
+	Dangling Status = "dangling"
+
+	// Missing is a shareable entry with no link yet — what Link would create.
+	// Only Check reports it; Link creates the link instead.
+	Missing Status = "not linked"
+
+	// Pruned is a dangling link Prune removed.
+	Pruned Status = "pruned"
 )
 
 // Entry is the outcome for one shared name.
@@ -100,6 +114,13 @@ func linkOne(baseDir, dir, name string, replace bool) Entry {
 	dst := filepath.Join(dir, name)
 
 	if _, err := os.Stat(src); err != nil {
+		// Nothing to share. Report a dead link here rather than a bare
+		// "not in base": when the CLI renames a config surface, the source
+		// disappears *and* every profile is left holding a symlink to it, and
+		// this is the only branch that can still see the second half.
+		if dangling(dst) {
+			return Entry{Name: name, Status: Dangling}
+		}
 		return Entry{Name: name, Status: Absent}
 	}
 
@@ -111,6 +132,9 @@ func linkOne(baseDir, dir, name string, replace bool) Entry {
 			return Entry{Name: name, Status: Already}
 		}
 		if !replace {
+			if dangling(dst) {
+				return Entry{Name: name, Status: Dangling}
+			}
 			return Entry{Name: name, Status: Foreign}
 		}
 		if err := os.Remove(dst); err != nil {
@@ -129,6 +153,82 @@ func linkOne(baseDir, dir, name string, replace bool) Entry {
 		return Entry{Name: name, Status: Failed, Err: err}
 	}
 	return Entry{Name: name, Status: Linked}
+}
+
+// Check reports what Link would find, changing nothing on disk. A diagnosis
+// must never repair as a side effect: `aiacc doctor` has to be safe to put in a
+// shell startup file, and a command that silently fixed what it measured would
+// hide the drift it exists to show.
+func Check(baseDir, dir string, entries []string) Result {
+	res := Result{Base: baseDir, Dir: dir}
+	if baseDir == "" || dir == "" || same(baseDir, dir) {
+		return res
+	}
+	for _, name := range entries {
+		res.Entries = append(res.Entries, checkOne(baseDir, dir, name))
+	}
+	return res
+}
+
+func checkOne(baseDir, dir, name string) Entry {
+	src := filepath.Join(baseDir, name)
+	dst := filepath.Join(dir, name)
+
+	// A dead link outranks every other reading: it is the one state that is
+	// actively wrong rather than merely unlinked.
+	if dangling(dst) {
+		return Entry{Name: name, Status: Dangling}
+	}
+	if _, err := os.Stat(src); err != nil {
+		return Entry{Name: name, Status: Absent}
+	}
+	switch info, err := os.Lstat(dst); {
+	case err != nil:
+		return Entry{Name: name, Status: Missing}
+	case info.Mode()&os.ModeSymlink != 0:
+		if target, err := os.Readlink(dst); err == nil && same(target, src) {
+			return Entry{Name: name, Status: Already}
+		}
+		return Entry{Name: name, Status: Foreign}
+	default:
+		return Entry{Name: name, Status: Taken}
+	}
+}
+
+// Prune removes the dangling symlinks among entries.
+//
+// Poka-yoke: only a symlink whose target no longer resolves is removed. A real
+// file, a directory, and a live symlink are never touched — so the worst a
+// mistaken prune can cost is a link `aiacc link` puts straight back.
+func Prune(baseDir, dir string, entries []string) Result {
+	res := Result{Base: baseDir, Dir: dir}
+	if dir == "" {
+		return res
+	}
+	for _, name := range entries {
+		dst := filepath.Join(dir, name)
+		if !dangling(dst) {
+			continue
+		}
+		if err := os.Remove(dst); err != nil {
+			res.Entries = append(res.Entries, Entry{Name: name, Status: Failed, Err: err})
+			continue
+		}
+		res.Entries = append(res.Entries, Entry{Name: name, Status: Pruned})
+	}
+	return res
+}
+
+// dangling reports whether p is a symlink whose target does not resolve. Lstat
+// sees the link itself; Stat follows it, so the pair separates "a dead link is
+// here" from "nothing is here".
+func dangling(p string) bool {
+	info, err := os.Lstat(p)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	_, err = os.Stat(p)
+	return err != nil
 }
 
 // same compares two paths after cleaning and resolving symlinks, so
