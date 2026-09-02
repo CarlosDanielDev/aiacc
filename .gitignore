@@ -20,3 +20,7 @@ coverage.*
 maestro.toml
 maestro-state.json
 maestro-state.json.lock
+
+# Code intelligence indexes (local; rebuilt on demand)
+.codegraph/
+graphify-out/
