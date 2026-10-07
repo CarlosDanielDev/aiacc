@@ -99,7 +99,7 @@ func launchProfile(row tui.Row) error {
 		return fmt.Errorf("%s not found in PATH — is it installed?", row.Command)
 	}
 	env := setEnv(os.Environ(), row.EnvVar, row.Dir)
-	return syscall.Exec(bin, []string{row.Command}, env)
+	return syscall.Exec(bin, append([]string{row.Command}, row.Args...), env)
 }
 
 // setEnv returns env with key set to val, replacing any existing entry.
@@ -137,7 +137,7 @@ func runAddTUI(cfgPath string) error {
 	if prov == "claude" {
 		login = currentClaudeLogin()
 	}
-	res, err := tui.RunAdd(login, prov)
+	res, err := tui.RunAdd(login, prov, provider.Presets[prov].SettingsFlag != "")
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func runAddTUI(cfgPath string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := saveAccount(cfgPath, prov, res.Name, res.Dir, 0, "", ""); err != nil {
+	if err := saveAccount(cfgPath, prov, res.Name, res.Dir, 0, "", "", res.Settings); err != nil {
 		return err
 	}
 	syncLauncher(cfgPath, prov, res.Name) // keep the command in sync (best-effort)
@@ -258,6 +258,7 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 				DirExists: statErr == nil,
 				EnvVar:    env,
 				Command:   launchCommand(c, pn),
+				Args:      provider.LaunchArgs(c, pn, an),
 			})
 		}
 	}

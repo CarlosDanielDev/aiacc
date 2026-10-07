@@ -23,6 +23,10 @@ type Preset struct {
 	Shared  []string // entries under BaseDir shared across every account
 	State   []string // entries under BaseDir that are per-account state, never shared
 
+	// SettingsFlag is the CLI flag that loads an extra settings file on top of
+	// the shared ones ("" = the CLI has none, so accounts cannot carry one).
+	SettingsFlag string
+
 	// Installs are where the CLI's own installers put Command outside the usual
 	// bin dirs, so PATH may not reach it.
 	Installs []string
@@ -57,7 +61,8 @@ var Presets = map[string]Preset{
 			"plugins",
 			"settings.json",
 		},
-		Installs: []string{"~/.claude/local/claude"}, // `claude migrate-installer`
+		SettingsFlag: "--settings",
+		Installs:     []string{"~/.claude/local/claude"}, // `claude migrate-installer`
 		State: []string{
 			"backups", "cache", "chrome", "daemon", "debug", "file-history",
 			"ide", "jobs", "local", "paste-cache", "projects", "security",
@@ -118,6 +123,30 @@ func AccountDir(c *config.Config, provider, account string) (string, error) {
 		return "", ErrUnknownAccount
 	}
 	return expandHome(a.Dir)
+}
+
+// SettingsFile is the account's extra settings file, expanded, or "" when it
+// has none or its provider has no flag to load one.
+func SettingsFile(c *config.Config, provider, account string) string {
+	a := c.Providers[provider].Accounts[account]
+	if a.Settings == "" || Presets[provider].SettingsFlag == "" {
+		return ""
+	}
+	path, err := expandHome(a.Settings)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+// LaunchArgs are the arguments every launcher passes the CLI ahead of the
+// user's own: the settings flag and file when the account has one, else none.
+func LaunchArgs(c *config.Config, provider, account string) []string {
+	path := SettingsFile(c, provider, account)
+	if path == "" {
+		return nil
+	}
+	return []string{Presets[provider].SettingsFlag, path}
 }
 
 func expandHome(dir string) (string, error) {

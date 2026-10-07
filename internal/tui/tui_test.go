@@ -299,7 +299,7 @@ func TestRenderEmptyState(t *testing.T) {
 
 func add(t *testing.T, keys string) AddResult {
 	t.Helper()
-	res, err := driveAdd("", "claude", fixedGeom(80, 24), bytes.NewBufferString(keys), &bytes.Buffer{})
+	res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("driveAdd: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestAddCustomDirViaTab(t *testing.T) {
 
 func TestAddProviderSetsDirDefault(t *testing.T) {
 	// The default dir follows the chosen provider, not always claude.
-	res, err := driveAdd("", "codex", fixedGeom(80, 24), bytes.NewBufferString("work\r"), &bytes.Buffer{})
+	res, err := driveAdd("", "codex", false, fixedGeom(80, 24), bytes.NewBufferString("work\r"), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("driveAdd: %v", err)
 	}
@@ -358,8 +358,39 @@ func TestAddProviderSetsDirDefault(t *testing.T) {
 	}
 }
 
+// The settings field is a third stop for a provider that supports it; the path
+// is taken verbatim, like the dir.
+func TestAddSettingsViaSecondTab(t *testing.T) {
+	res := add(t, "glm\t\t~/.claude-glm/glm.json\r")
+	if !res.OK || res.Name != "glm" || res.Dir != "~/.claude-glm" || res.Settings != "~/.claude-glm/glm.json" {
+		t.Fatalf("got %+v, want the settings path", res)
+	}
+}
+
+// Without a settings flag, ⇥ cycles name ↔ dir only, so a third stop can never
+// collect a path the launcher would drop.
+func TestAddWithoutSettingsCyclesTwoFields(t *testing.T) {
+	res, err := driveAdd("", "codex", false, fixedGeom(80, 24), bytes.NewBufferString("w\t\tx\r"), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	if !res.OK || res.Name != "wx" || res.Settings != "" {
+		t.Fatalf("got %+v, want name=wx and no settings", res)
+	}
+}
+
+func TestRenderAddSettingsField(t *testing.T) {
+	sz := Size{Cols: 80, Rows: 24}
+	if out := RenderAdd("", "claude", AddForm{Name: "glm", WithSettings: true}, "", sz); !strings.Contains(out, "settings") {
+		t.Errorf("settings field missing:\n%s", out)
+	}
+	if out := RenderAdd("", "codex", AddForm{Name: "w"}, "", sz); strings.Contains(out, "settings") {
+		t.Errorf("settings field shown for a provider without one:\n%s", out)
+	}
+}
+
 func TestRenderAddShowsFieldsAndLogin(t *testing.T) {
-	out := RenderAdd("me@x.com", "claude", "wo", "", 0, "", Size{Cols: 80, Rows: 24})
+	out := RenderAdd("me@x.com", "claude", AddForm{Name: "wo"}, "", Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"ADD PROFILE", "provider", "claude", "name", "wo", "~/.claude-wo", "me@x.com", "launches as: wo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("add render missing %q:\n%s", want, out)
@@ -448,7 +479,7 @@ func TestFramesStaySquare(t *testing.T) {
 	frames := map[string]string{}
 	for _, cols := range []int{20, 40, 80, 200} {
 		frames["picker"] = Render(rows, 0, true, Size{Cols: cols, Rows: 24})
-		frames["add"] = RenderAdd("me@example.com", "claude", "work", "", 0, "bad name", Size{Cols: cols, Rows: 24})
+		frames["add"] = RenderAdd("me@example.com", "claude", AddForm{Name: "work", WithSettings: true}, "bad name", Size{Cols: cols, Rows: 24})
 		frames["remove"] = RenderRemove(Row{Provider: "claude", Account: "work"}, Size{Cols: cols, Rows: 24})
 		frames["rename"] = RenderRename("work", "work-2", "", Size{Cols: cols, Rows: 24})
 		frames["setup"] = RenderSetupResult(setupResult(), Size{Cols: cols, Rows: 24})
@@ -499,7 +530,7 @@ func TestFramesFitTerminal(t *testing.T) {
 			"picker": Render(many, 20, true, sz),
 			"list":   RenderList("pick a session", items, 20, sz),
 			"remove": RenderRemove(many[0], sz),
-			"add":    RenderAdd("me@example.com", "claude", "work", "", 0, "bad name", sz),
+			"add":    RenderAdd("me@example.com", "claude", AddForm{Name: "work", WithSettings: true}, "bad name", sz),
 			"rename": RenderRename("work", "work-2", "", sz),
 			"setup":  RenderSetupResult(setupResult(), sz),
 			"msg":    RenderMessage("aiacc — shared assets", body, sz),

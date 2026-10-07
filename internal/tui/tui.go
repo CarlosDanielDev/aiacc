@@ -36,11 +36,12 @@ import (
 type Row struct {
 	Provider  string
 	Account   string
-	Email     string // logged-in identity for the dir, "" when not logged in
-	Dir       string // expanded config dir, passed to the launched CLI
-	DirExists bool   // the config dir is present on disk
-	EnvVar    string // env var the CLI reads to select its config ("" = unknown)
-	Command   string // CLI to launch (e.g. "claude"); "" = no launcher for this
+	Email     string   // logged-in identity for the dir, "" when not logged in
+	Dir       string   // expanded config dir, passed to the launched CLI
+	DirExists bool     // the config dir is present on disk
+	EnvVar    string   // env var the CLI reads to select its config ("" = unknown)
+	Command   string   // CLI to launch (e.g. "claude"); "" = no launcher for this
+	Args      []string // passed to Command ahead of anything else (e.g. --settings <file>)
 }
 
 // launchable reports whether Enter can launch this profile: the dir exists, and
@@ -673,9 +674,26 @@ func RunSetupResult(r SetupResult) error {
 
 // AddResult is the outcome of the framed add screen. OK is false when cancelled.
 type AddResult struct {
-	Name string
-	Dir  string
-	OK   bool
+	Name     string
+	Dir      string
+	Settings string // optional extra settings file; "" = none
+	OK       bool
+}
+
+// AddForm is the add screen's state. Field indexes the focused input: 0 name,
+// 1 dir, 2 settings. WithSettings shows the settings input, for a provider
+// whose CLI can load an extra settings file.
+type AddForm struct {
+	Name, Dir, Settings string
+	Field               int
+	WithSettings        bool
+}
+
+func (f AddForm) fields() int {
+	if f.WithSettings {
+		return 3
+	}
+	return 2
 }
 
 // validName reports whether s is a legal profile name: a letter/underscore, then
@@ -714,10 +732,10 @@ func defaultDir(provider, name string) string {
 }
 
 // RenderAdd returns the add-profile frame: the target provider, a live name
-// field, a dir field that defaults to ~/.<provider>-<name> until edited, the
-// current login for context, and an optional hint. field is 0 for name, 1 for
-// dir. Pure, for tests.
-func RenderAdd(currentLogin, provider, name, dir string, field int, hint string, sz Size) string {
+// field, a dir field that defaults to ~/.<provider>-<name> until edited, an
+// optional settings field when the provider supports one, the current login for
+// context, and an optional hint. Pure, for tests.
+func RenderAdd(currentLogin, provider string, f AddForm, hint string, sz Size) string {
 	w := innerWidth(sz.cols())
 	lines := []string{boxTop("aiacc — add profile", w), boxBlank(w)}
 
@@ -729,30 +747,26 @@ func RenderAdd(currentLogin, provider, name, dir string, field int, hint string,
 	}
 	lines = append(lines, boxBlank(w))
 
-	nameCaret, dirCaret := "", ""
-	if field == 0 {
-		nameCaret = "▏"
-	} else {
-		dirCaret = "▏"
+	// input renders one field: label, value (or a dim placeholder), and the
+	// caret when focused.
+	input := func(i int, label, value, placeholder string) string {
+		labelInk, caret := inkGrey, ""
+		if f.Field == i {
+			labelInk, caret = inkWhite, "▏"
+		}
+		v := seg{value, inkWhite}
+		if value == "" {
+			v = seg{placeholder, inkDim}
+		}
+		return boxRow([]seg{pad(2), {label, labelInk}, v, {caret, inkPink}}, w)
 	}
-	nameLabelInk, dirLabelInk := inkGrey, inkGrey
-	if field == 0 {
-		nameLabelInk = inkWhite
-	} else {
-		dirLabelInk = inkWhite
+	lines = append(lines,
+		input(0, "name      ", f.Name, ""),
+		input(1, "dir       ", f.Dir, defaultDir(provider, f.Name)),
+	)
+	if f.WithSettings {
+		lines = append(lines, input(2, "settings  ", f.Settings, "optional — e.g. an API endpoint file"))
 	}
-
-	lines = append(lines, boxRow([]seg{
-		pad(2), {"name  ", nameLabelInk}, {name, inkWhite}, {nameCaret, inkPink},
-	}, w))
-
-	dirSeg := seg{dir, inkWhite}
-	if dir == "" {
-		dirSeg = seg{defaultDir(provider, name), inkDim}
-	}
-	lines = append(lines, boxRow([]seg{
-		pad(2), {"dir   ", dirLabelInk}, dirSeg, {dirCaret, inkPink},
-	}, w))
 
 	lines = append(lines, boxBlank(w))
 	if hint != "" {
@@ -764,8 +778,8 @@ func RenderAdd(currentLogin, provider, name, dir string, field int, hint string,
 
 	// The name becomes the launcher command, so spell that out.
 	tip := "type name"
-	if validName(name) {
-		tip = "launches as: " + name
+	if validName(f.Name) {
+		tip = "launches as: " + f.Name
 	}
 	legend := legendLine([][2]string{{"", tip}, {"⇥", "field"}, {"⏎", "create"}, {"esc", "cancel"}})
 	return frame(lines, legend, sz, w)
@@ -773,11 +787,11 @@ func RenderAdd(currentLogin, provider, name, dir string, field int, hint string,
 
 // driveAdd is the add-screen input loop, decoupled from /dev/tty for tests. It
 // filters keystrokes so the name field can only ever hold command-safe chars.
-func driveAdd(currentLogin, provider string, g *geom, in io.Reader, out io.Writer) (AddResult, error) {
-	name, dir, field, hint := "", "", 0, ""
+func driveAdd(currentLogin, provider string, withSettings bool, g *geom, in io.Reader, out io.Writer) (AddResult, error) {
+	f, hint := AddForm{WithSettings: withSettings}, ""
 	r := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, repaint(g)+RenderAdd(currentLogin, provider, name, dir, field, hint, g.get()))
+		fmt.Fprint(out, repaint(g)+RenderAdd(currentLogin, provider, f, hint, g.get()))
 		b, err := r.ReadByte()
 		if err != nil {
 			if err == io.EOF {
@@ -785,33 +799,29 @@ func driveAdd(currentLogin, provider string, g *geom, in io.Reader, out io.Write
 			}
 			return AddResult{}, err
 		}
+		// focused is the text the keystroke edits; the name field is the only
+		// one with a narrower alphabet.
+		focused := []*string{&f.Name, &f.Dir, &f.Settings}[f.Field]
 		switch b {
 		case 0x1b, 3: // Esc / Ctrl-C
 			return AddResult{}, nil
 		case '\t':
-			field, hint = 1-field, ""
+			f.Field, hint = (f.Field+1)%f.fields(), ""
 		case '\r', '\n':
-			if !validName(name) {
-				field, hint = 0, "name: a letter first, then letters, digits, - or _"
+			if !validName(f.Name) {
+				f.Field, hint = 0, "name: a letter first, then letters, digits, - or _"
 				continue
 			}
-			d := dir
+			d := f.Dir
 			if d == "" {
-				d = defaultDir(provider, name)
+				d = defaultDir(provider, f.Name)
 			}
-			return AddResult{Name: name, Dir: d, OK: true}, nil
+			return AddResult{Name: f.Name, Dir: d, Settings: f.Settings, OK: true}, nil
 		case 0x7f, 0x08: // Backspace / Delete
-			if field == 0 {
-				name = trimLastByte(name)
-			} else {
-				dir = trimLastByte(dir)
-			}
-			hint = ""
+			*focused, hint = trimLastByte(*focused), ""
 		default:
-			if field == 0 && nameByte(b) {
-				name += string(b)
-			} else if field == 1 && printableByte(b) {
-				dir += string(b)
+			if (f.Field == 0 && nameByte(b)) || (f.Field > 0 && printableByte(b)) {
+				*focused += string(b)
 			}
 			hint = ""
 		}
@@ -1243,14 +1253,15 @@ func animate(rows []Row, setupNeeded bool, g *geom, tty *os.File) (Result, error
 }
 
 // RunAdd shows the framed add screen on /dev/tty for the given provider.
-// currentLogin (may be "") is shown for context.
-func RunAdd(currentLogin, provider string) (AddResult, error) {
+// currentLogin (may be "") is shown for context; withSettings adds the optional
+// settings-file field.
+func RunAdd(currentLogin, provider string, withSettings bool) (AddResult, error) {
 	tty, g, restore, err := openRawTTY()
 	if err != nil {
 		return AddResult{}, err
 	}
 	defer restore()
-	return driveAdd(currentLogin, provider, g, tty, tty)
+	return driveAdd(currentLogin, provider, withSettings, g, tty, tty)
 }
 
 // RunRename shows the rename screen on /dev/tty. taken is the set of other

@@ -22,3 +22,4 @@ instead, a later record **supersedes** it and both link each other. Status value
 - [0003](0003-shell-eval-switching.md) — Shell switching via eval hook
 - [0004](0004-plan-quota-best-effort.md) — Plan/rate-limit reporting is best-effort
 - [0005](0005-doctor-diagnoses-never-repairs.md) — Launchers resolve by name; `doctor` diagnoses, never repairs
+- [0006](0006-account-settings-path-not-secret.md) — An account can carry a settings file; aiacc stores its path, never its contents

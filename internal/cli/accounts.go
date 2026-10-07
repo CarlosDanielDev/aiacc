@@ -17,7 +17,7 @@ import (
 var configPath = config.DefaultPath
 
 func newAddCmd() *cobra.Command {
-	var dir, envVar, command string
+	var dir, envVar, command, settings string
 	var quota int
 	cmd := &cobra.Command{
 		Use:   "add [provider] [account]",
@@ -49,7 +49,7 @@ func newAddCmd() *cobra.Command {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
-			if err := saveAccount(path, providerName, account, dir, quota, envVar, command); err != nil {
+			if err := saveAccount(path, providerName, account, dir, quota, envVar, command, settings); err != nil {
 				return err
 			}
 			syncLauncher(path, providerName, account) // keep the command in sync
@@ -61,14 +61,19 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().IntVar(&quota, "quota", 0, "optional manual plan size")
 	cmd.Flags().StringVar(&envVar, "env", "", "config-dir env var for a custom (non-preset) provider")
 	cmd.Flags().StringVar(&command, "command", "", "CLI to launch for a custom (non-preset) provider")
+	cmd.Flags().StringVar(&settings, "settings", "", "extra settings file the launcher passes the CLI, e.g. an alternate API endpoint (claude only)")
 	return cmd
 }
 
 // saveAccount registers (provider, account) at dir in the config file at path,
 // filling the provider's env var and launch command from the flags, else the
-// preset, else leaving them empty for the user to set. Used by `add` and the
-// wizard.
-func saveAccount(path, providerName, account, dir string, quota int, envOverride, cmdOverride string) error {
+// preset, else leaving them empty for the user to set. settings is an optional
+// extra settings file, refused for a provider whose CLI has no flag to load one.
+// Used by `add` and the wizard.
+func saveAccount(path, providerName, account, dir string, quota int, envOverride, cmdOverride, settings string) error {
+	if settings != "" && provider.Presets[providerName].SettingsFlag == "" {
+		return fmt.Errorf("%s has no settings flag, so --settings cannot apply to it", providerName)
+	}
 	c, err := config.Load(path)
 	if err != nil {
 		return err
@@ -91,7 +96,7 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 	if p.Command == "" {
 		p.Command = cmd
 	}
-	p.Accounts[account] = config.Account{Dir: dir, Quota: quota}
+	p.Accounts[account] = config.Account{Dir: dir, Quota: quota, Settings: settings}
 	c.Providers[providerName] = p
 	return config.Save(path, c)
 }

@@ -62,7 +62,7 @@ func launchers(shellName string) (string, error) {
 			if err != nil {
 				continue
 			}
-			fn, err := shell.Launcher(shellName, an, cmd, env, dir)
+			fn, err := shell.Launcher(shellName, an, cmd, env, dir, provider.LaunchArgs(c, pn, an)...)
 			if err == nil && fn != "" {
 				b.WriteString(fn)
 			}

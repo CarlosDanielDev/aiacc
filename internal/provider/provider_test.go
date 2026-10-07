@@ -105,3 +105,28 @@ func TestUnclassifiedUnknownProvider(t *testing.T) {
 		t.Error("an unknown provider has no base dir to classify")
 	}
 }
+
+func TestLaunchArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	c := &config.Config{Providers: map[string]config.Provider{
+		"claude": {Accounts: map[string]config.Account{
+			"glm":  {Dir: "/g", Settings: "~/glm.json"},
+			"work": {Dir: "/w"},
+		}},
+		"codex": {Accounts: map[string]config.Account{
+			"x": {Dir: "/x", Settings: "/s.json"},
+		}},
+	}}
+	got := LaunchArgs(c, "claude", "glm")
+	if len(got) != 2 || got[0] != "--settings" || got[1] != filepath.Join(home, "glm.json") {
+		t.Errorf("claude glm = %v, want --settings with ~ expanded", got)
+	}
+	if got := LaunchArgs(c, "claude", "work"); got != nil {
+		t.Errorf("no settings must mean no args, got %v", got)
+	}
+	// codex has no settings flag: a stray path is never handed to it.
+	if got := LaunchArgs(c, "codex", "x"); got != nil {
+		t.Errorf("codex = %v, want none", got)
+	}
+}

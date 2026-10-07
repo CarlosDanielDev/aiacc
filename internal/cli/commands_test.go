@@ -66,11 +66,11 @@ func TestSaveAccountFillsPresetAndCustomProvider(t *testing.T) {
 	path := withTempConfig(t)
 
 	// Codex is a built-in preset → env var and command filled automatically.
-	if err := saveAccount(path, "codex", "work", "/x", 0, "", ""); err != nil {
+	if err := saveAccount(path, "codex", "work", "/x", 0, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	// A custom provider gets its env var + command from the flags.
-	if err := saveAccount(path, "glab", "me", "/y", 0, "GLAB_CONFIG_DIR", "glab"); err != nil {
+	if err := saveAccount(path, "glab", "me", "/y", 0, "GLAB_CONFIG_DIR", "glab", ""); err != nil {
 		t.Fatal(err)
 	}
 	c, err := config.Load(path)
@@ -206,5 +206,23 @@ func TestUsageSumsTotals(t *testing.T) {
 	// input 30, output 12, total 42.
 	if !strings.Contains(out.String(), "42") {
 		t.Fatalf("usage total not shown: %q", out.String())
+	}
+}
+
+func TestSaveAccountSettings(t *testing.T) {
+	path := withTempConfig(t)
+	if err := saveAccount(path, "claude", "glm", "/g", 0, "", "", "~/glm.json"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Providers["claude"].Accounts["glm"].Settings; got != "~/glm.json" {
+		t.Fatalf("settings path not stored as given: %q", got)
+	}
+	// codex has no settings flag; storing a path it would never load is refused.
+	if err := saveAccount(path, "codex", "x", "/x", 0, "", "", "/s.json"); err == nil {
+		t.Fatal("want an error for --settings on a provider without a settings flag")
 	}
 }

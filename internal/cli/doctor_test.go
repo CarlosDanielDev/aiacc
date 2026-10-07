@@ -111,7 +111,7 @@ func TestCheckLauncherStaleWhenDirChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := checkLauncher("work", "claude", "CLAUDE_CONFIG_DIR", "/new/dir")
+	f := checkLauncher("work", "claude", "CLAUDE_CONFIG_DIR", "/new/dir", nil)
 	if f.sev != sevFail {
 		t.Fatalf("a launcher pointing at the wrong dir is broken, got %v: %+v", f.sev, f)
 	}
@@ -131,14 +131,14 @@ func TestCheckLauncherOKWhenCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if f := checkLauncher("work", "claude", "CLAUDE_CONFIG_DIR", "/the/dir"); f.sev != sevOK {
+	if f := checkLauncher("work", "claude", "CLAUDE_CONFIG_DIR", "/the/dir", nil); f.sev != sevOK {
 		t.Fatalf("a current launcher is fine, got %v: %+v", f.sev, f)
 	}
 }
 
 func TestCheckLauncherMissing(t *testing.T) {
 	setPath(t, t.TempDir())
-	if f := checkLauncher("work", "claude", "CLAUDE_CONFIG_DIR", "/the/dir"); f.sev != sevFail {
+	if f := checkLauncher("work", "claude", "CLAUDE_CONFIG_DIR", "/the/dir", nil); f.sev != sevFail {
 		t.Fatalf("no launcher on PATH is broken, got %v", f.sev)
 	}
 }
@@ -149,7 +149,7 @@ func TestCheckLauncherWarnsOnForeignCommand(t *testing.T) {
 	binDir := bin(t, "work")
 	setPath(t, binDir)
 
-	f := checkLauncher("work", "claude", "CLAUDE_CONFIG_DIR", "/the/dir")
+	f := checkLauncher("work", "claude", "CLAUDE_CONFIG_DIR", "/the/dir", nil)
 	if f.sev != sevWarn {
 		t.Fatalf("a foreign command shadowing the name is a warning, got %v", f.sev)
 	}
@@ -210,5 +210,45 @@ func TestProbeInstallsUsesProviderLocations(t *testing.T) {
 	}
 	if got := probeInstalls("codex", "codex"); slices.Contains(got, filepath.Join(home, ".codex", "local", "codex")) {
 		t.Errorf("codex has no such install location, got %v", got)
+	}
+}
+
+// Adding a settings file to an account makes its old launcher stale: until
+// setup rewrites it, the profile still talks to the default endpoint.
+func TestCheckLauncherStaleWithoutSettingsArgs(t *testing.T) {
+	binDir := t.TempDir()
+	setPath(t, binDir)
+	old, err := shell.LauncherScript("claude", "CLAUDE_CONFIG_DIR", "/d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "glm"), []byte(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := checkLauncher("glm", "claude", "CLAUDE_CONFIG_DIR", "/d", []string{"--settings", "/s.json"})
+	if f.sev != sevFail || !strings.Contains(f.detail[0], "--settings /s.json") {
+		t.Fatalf("want stale naming the settings flag, got %+v", f)
+	}
+}
+
+func TestCheckSettingsFile(t *testing.T) {
+	if _, ok := checkSettingsFile("w", ""); ok {
+		t.Error("no settings file, nothing to report")
+	}
+	p := filepath.Join(t.TempDir(), "glm.json")
+	if f, ok := checkSettingsFile("glm", p); !ok || f.sev != sevFail {
+		t.Errorf("a missing settings file is broken, got %+v", f)
+	}
+	if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok := checkSettingsFile("glm", p); !ok || f.sev != sevWarn {
+		t.Errorf("a group/world-readable settings file warns, got %+v", f)
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := checkSettingsFile("glm", p); ok {
+		t.Error("a private settings file is fine")
 	}
 }
