@@ -186,9 +186,10 @@ usage counters — isolating those is the whole point of a profile.
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
-| `aiacc link [provider] [account]` | Share your skills, sub-agents, commands and hooks with a profile (all of them by default). `--replace` takes over entries a profile owns. |
+| `aiacc link [provider] [account]` | Share your skills, sub-agents, commands and hooks with a profile (all of them by default). `--replace` takes over entries a profile owns; `--prune` removes dead links (asks first). |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
+| `aiacc doctor` | Check that your launchers still work: duplicate installs, alias-only installs, stale launchers, dead shared links. Read-only; exits non-zero when something is broken. |
 | `aiacc usage [provider]` | Token totals per account, from local session logs. |
 | `aiacc shell-init <bash\|zsh\|fish>` | Print the per-account launcher **functions** (alternative to `setup`). |
 
@@ -347,6 +348,50 @@ brand-new custom provider is added with the `--env`/`--command` form above.
 > Session hand-off is Claude-specific for now — it reads Claude Code's transcript
 > format. Launch, add, rename, remove, and setup work for every provider.
 
+## 🩺 Will my launchers still work?
+
+A launcher resolves its command **by name, at run time** — that is what lets
+Claude Code self-update without breaking anything. The cost is that it goes
+quietly wrong when the ground shifts: a second `claude` appears on `PATH` and
+version order is decided by luck, `claude migrate-installer` turns the command
+into a shell alias a `/bin/sh` script cannot see, or a shared symlink outlives
+the directory it pointed at.
+
+None of those look like failures. `aiacc doctor` makes them visible:
+
+```console
+$ aiacc doctor
+Commands
+  ! claude: 2 installs of claude on PATH
+      launchers run ~/.local/bin/claude (2.1.258 (Claude Code))
+      also on PATH: /opt/homebrew/bin/claude (2.1.220 (Claude Code))
+      PATH order alone decides which one runs, so an update to either can
+      invert it silently. Put the one you want earlier on PATH, or remove
+      the other install.
+
+Launchers
+  ✓ claude-work → claude CLAUDE_CONFIG_DIR=~/.claude-work
+  ✗ claude-old: launcher is stale
+      It no longer matches the config: should run claude with CLAUDE_CONFIG_DIR=~/.claude-old.
+      aiacc setup  rewrites it
+
+Shared assets
+  ✗ claude-work: 1 dead shared link(s)
+        skills
+      They point into ~/.claude at names that no longer exist —
+      the CLI is handed a broken path as if it were an asset.
+      aiacc link --prune  removes them (it asks first)
+
+✗ 2 broken, 1 to look at.
+```
+
+It changes nothing, and exits non-zero only when something is actually broken —
+so it works in a shell startup file or a CI step:
+
+```sh
+aiacc doctor || echo "aiacc: profiles need attention"
+```
+
 ## 🩺 Troubleshooting
 
 <details>
@@ -357,6 +402,19 @@ brand-new custom provider is added with the `--env`/`--command` form above.
 The launcher commands aren't installed yet, or the shell they were installed for
 isn't this one. Run `aiacc setup` (it prints where it put them and whether they
 work now). If it had to add a directory to your `PATH`, open a new terminal.
+
+</details>
+
+<details>
+<summary><code>claude</code> works when I type it, but a launcher says <code>not found</code></summary>
+
+<br>
+
+`claude` is a shell alias, not a file on `PATH` — `claude migrate-installer` sets
+it up that way. Launchers are `/bin/sh` scripts and have no aliases, so they
+cannot see it. Run `aiacc doctor`: it finds the real binary (usually
+`~/.claude/local/claude`) and names the directory to add to your `PATH`, so your
+shell and your launchers agree on which install they mean.
 
 </details>
 

@@ -161,7 +161,7 @@ func removeLauncher(account string) {
 // PATH is writable it falls back to ~/.local/bin (created, added to PATH).
 func launcherBinDir() (string, bool) {
 	home, _ := os.UserHomeDir()
-	preferred := []string{filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin")}
+	preferred := userBinDirs(home)
 	pathDirs := filepath.SplitList(os.Getenv("PATH"))
 
 	// 1. A preferred HOME dir already on PATH and writable.
@@ -273,6 +273,11 @@ func appendLine(rc, line string) error {
 	defer f.Close()
 	_, err = fmt.Fprintf(f, "\n# added by aiacc\n%s\n", line)
 	return err
+}
+
+// userBinDirs are the HOME bin dirs launchers prefer, in order.
+func userBinDirs(home string) []string {
+	return []string{filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin")}
 }
 
 func fileContains(path, needle string) bool {

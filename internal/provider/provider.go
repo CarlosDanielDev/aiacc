@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
@@ -20,6 +21,11 @@ type Preset struct {
 	Command string
 	BaseDir string   // the CLI's own default config dir (source of shared assets)
 	Shared  []string // entries under BaseDir shared across every account
+	State   []string // entries under BaseDir that are per-account state, never shared
+
+	// Installs are where the CLI's own installers put Command outside the usual
+	// bin dirs, so PATH may not reach it.
+	Installs []string
 }
 
 // Presets are the AI CLIs aiacc knows out of the box. Each isolates accounts by
@@ -30,6 +36,12 @@ type Preset struct {
 // Shared lists only authoring surfaces — skills, sub-agents, slash commands,
 // hooks, instructions, settings. Credentials, transcripts, and usage counters are
 // deliberately absent: isolating those is the whole point of a profile.
+//
+// State lists the opposite: directories the CLI keeps per account, which must
+// never be shared. Naming them is what lets Unclassified tell a *new* config
+// surface from the state we already decided about — without it, a directory the
+// CLI adds in a future version is indistinguishable from a cache, and profiles
+// miss it in silence (the way `output-styles/` was missed until someone noticed).
 var Presets = map[string]Preset{
 	"claude": {
 		EnvVar:  "CLAUDE_CONFIG_DIR",
@@ -45,12 +57,20 @@ var Presets = map[string]Preset{
 			"plugins",
 			"settings.json",
 		},
+		Installs: []string{"~/.claude/local/claude"}, // `claude migrate-installer`
+		State: []string{
+			"backups", "cache", "chrome", "daemon", "debug", "file-history",
+			"ide", "jobs", "local", "paste-cache", "projects", "security",
+			"session-env", "sessions", "shell-snapshots", "statsig",
+			"telemetry", "todos", "uploads",
+		},
 	},
 	"codex": {
 		EnvVar:  "CODEX_HOME",
 		Command: "codex",
 		BaseDir: "~/.codex",
 		Shared:  []string{"AGENTS.md", "prompts"},
+		State:   []string{"cache", "log", "sessions"},
 	},
 }
 
@@ -124,4 +144,55 @@ func Shared(provider string) (baseDir string, entries []string, ok bool) {
 		return "", nil, false
 	}
 	return dir, p.Shared, true
+}
+
+// Unclassified returns a provider's base config dir (expanded) and the
+// directories under it that are neither shared nor known per-account state,
+// sorted.
+//
+// This is the drift check: aiacc's shared list is hardcoded, so a config surface
+// the CLI adds later is silently absent from every profile until someone updates
+// that list. Surfacing the unknown directory turns that silence into a question.
+//
+// Only directories are considered, and dot-entries are skipped: every config
+// surface a CLI has added so far is a plain directory, while the files beside
+// them are caches, logs and state that would bury the signal.
+func Unclassified(provider string) (baseDir string, extra []string, ok bool) {
+	p := Presets[provider]
+	dir, _, ok := Shared(provider)
+	if !ok {
+		return "", nil, false
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return "", nil, false
+	}
+	known := make(map[string]bool, len(p.Shared)+len(p.State))
+	for _, n := range p.Shared {
+		known[n] = true
+	}
+	for _, n := range p.State {
+		known[n] = true
+	}
+	var out []string
+	for _, e := range ents {
+		name := e.Name()
+		if !e.IsDir() || strings.HasPrefix(name, ".") || known[name] {
+			continue
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return dir, out, true
+}
+
+// Installs returns the preset's known out-of-PATH install locations, expanded.
+func Installs(provider string) []string {
+	var out []string
+	for _, p := range Presets[provider].Installs {
+		if dir, err := expandHome(p); err == nil {
+			out = append(out, dir)
+		}
+	}
+	return out
 }

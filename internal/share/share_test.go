@@ -131,3 +131,97 @@ func TestMissingSourceIsSkipped(t *testing.T) {
 		t.Fatal("linked a source that does not exist")
 	}
 }
+
+// A shared symlink outlives the directory it points at when the CLI renames a
+// config surface. Before, Link stat'ed the source, found nothing, and reported
+// "not in base" — the dead link in the profile was never mentioned.
+func TestLinkReportsDanglingWhenSourceVanished(t *testing.T) {
+	b, acct := base(t), t.TempDir()
+	if _, err := Link(b, acct, entries, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(b, "skills")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Link(b, acct, entries, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status(res, "skills"); got != Dangling {
+		t.Fatalf("skills = %q, want %q — a dead link must not read as %q", got, Dangling, Absent)
+	}
+}
+
+func TestCheckIsReadOnly(t *testing.T) {
+	b, acct := base(t), t.TempDir()
+
+	res := Check(b, acct, entries)
+	if n := res.Count(Missing); n != len(entries) {
+		t.Fatalf("missing = %d of %d: %+v", n, len(entries), res.Entries)
+	}
+	for _, name := range entries {
+		if _, err := os.Lstat(filepath.Join(acct, name)); err == nil {
+			t.Fatalf("Check created %s — it must change nothing", name)
+		}
+	}
+}
+
+func TestCheckReportsLiveAndDeadLinks(t *testing.T) {
+	b, acct := base(t), t.TempDir()
+	if _, err := Link(b, acct, entries, false); err != nil {
+		t.Fatal(err)
+	}
+	if res := Check(b, acct, entries); res.Count(Already) != len(entries) {
+		t.Fatalf("want all live: %+v", res.Entries)
+	}
+
+	if err := os.RemoveAll(filepath.Join(b, "agents")); err != nil {
+		t.Fatal(err)
+	}
+	res := Check(b, acct, entries)
+	if got := status(res, "agents"); got != Dangling {
+		t.Fatalf("agents = %q, want %q", got, Dangling)
+	}
+	if got := status(res, "skills"); got != Already {
+		t.Fatalf("skills = %q, want %q — one dead link must not taint the rest", got, Already)
+	}
+}
+
+// Prune is the only destructive path here, so it must be surgical: dead links
+// go, everything else — including a link the user made by hand to a live target
+// and a real file of their own — stays.
+func TestPruneRemovesOnlyDeadLinks(t *testing.T) {
+	b, acct := base(t), t.TempDir()
+	if _, err := Link(b, acct, entries, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(b, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(acct, "own.md")
+	mustFile(t, own, "mine")
+
+	res := Prune(acct, append(entries, "own.md"))
+	if n := res.Count(Pruned); n != 1 {
+		t.Fatalf("pruned %d, want exactly the one dead link: %+v", n, res.Entries)
+	}
+	if _, err := os.Lstat(filepath.Join(acct, "skills")); err == nil {
+		t.Error("the dead link is still there")
+	}
+	for _, keep := range []string{"agents", "CLAUDE.md", "own.md"} {
+		if _, err := os.Lstat(filepath.Join(acct, keep)); err != nil {
+			t.Errorf("Prune removed %s, which was not dead: %v", keep, err)
+		}
+	}
+}
+
+// status is the recorded Status for one entry name.
+func status(r Result, name string) Status {
+	for _, e := range r.Entries {
+		if e.Name == name {
+			return e.Status
+		}
+	}
+	return ""
+}

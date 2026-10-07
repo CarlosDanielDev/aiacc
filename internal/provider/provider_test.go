@@ -71,3 +71,37 @@ func TestAccountDirUnknownAccount(t *testing.T) {
 		t.Fatalf("want ErrUnknownAccount, got %v", err)
 	}
 }
+
+// Unclassified is the drift check: a directory the CLI adds later is neither
+// shared nor known state, and must surface rather than go missing in silence.
+func TestUnclassifiedSurfacesOnlyUnknownDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	baseDir := filepath.Join(home, ".claude")
+	for _, d := range []string{"skills", "projects", "output-styles", "teams", ".git"} {
+		if err := os.MkdirAll(filepath.Join(baseDir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A file, not a directory: config surfaces are directories, and the files
+	// beside them are caches and logs that would bury the signal.
+	if err := os.WriteFile(filepath.Join(baseDir, "history.jsonl"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, got, ok := Unclassified("claude")
+	if !ok {
+		t.Fatal("Unclassified(claude) not ok")
+	}
+	want := []string{"teams"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("Unclassified = %v, want %v (shared, state, dotfiles and files must all be excluded)", got, want)
+	}
+}
+
+func TestUnclassifiedUnknownProvider(t *testing.T) {
+	if _, _, ok := Unclassified("nope"); ok {
+		t.Error("an unknown provider has no base dir to classify")
+	}
+}
