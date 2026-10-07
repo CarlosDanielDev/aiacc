@@ -13,6 +13,9 @@ import (
 type Account struct {
 	Dir   string `toml:"dir"`
 	Quota int    `toml:"quota,omitempty"`
+	// Settings is an extra settings file the launcher hands the CLI, e.g. an
+	// alternate API endpoint. Only the path is stored, never its contents.
+	Settings string `toml:"settings,omitempty"`
 }
 
 type Provider struct {

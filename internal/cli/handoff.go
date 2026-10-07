@@ -88,7 +88,7 @@ func handoffDirect(cmd *cobra.Command, cfgPath, providerName, from, to, sessionI
 		if meta.Cwd == "" {
 			return fmt.Errorf("can't launch: session has no recorded cwd — run the resume command yourself")
 		}
-		return launchResume(toDir, meta.Cwd, sess.ID)
+		return launchResume(toDir, provider.LaunchArgs(c, providerName, to), meta.Cwd, sess.ID)
 	}
 	return nil
 }
@@ -229,8 +229,10 @@ func pickSession(fromDir, id string) (session.Info, error) {
 }
 
 // launchResume changes into the session's cwd and execs Claude Code resuming it
-// under the target account. On success it never returns.
-func launchResume(toDir, cwd, id string) error {
+// under the target account, passing the account's launch args (its settings
+// file) so the resumed session talks to the same endpoint. On success it never
+// returns.
+func launchResume(toDir string, args []string, cwd, id string) error {
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return fmt.Errorf("claude not found in PATH — is it installed?")
@@ -239,7 +241,8 @@ func launchResume(toDir, cwd, id string) error {
 		return err
 	}
 	env := setEnv(os.Environ(), "CLAUDE_CONFIG_DIR", toDir)
-	return syscall.Exec(bin, []string{"claude", "--resume", id}, env)
+	argv := append(append([]string{"claude"}, args...), "--resume", id)
+	return syscall.Exec(bin, argv, env)
 }
 
 func shortID(id string) string {

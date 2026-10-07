@@ -43,7 +43,7 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := saveAccount(cfgPath, "claude", name, dir, 0, "", ""); err != nil {
+	if err := saveAccount(cfgPath, "claude", name, dir, 0, "", "", ""); err != nil {
 		return err
 	}
 

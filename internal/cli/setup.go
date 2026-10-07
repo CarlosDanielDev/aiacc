@@ -110,7 +110,7 @@ func writeAllLaunchers(c *config.Config, binDir string) ([]string, error) {
 			if err != nil {
 				continue
 			}
-			if err := writeLauncher(binDir, an, cmd, env, dir); err != nil {
+			if err := writeLauncher(binDir, an, cmd, env, dir, provider.LaunchArgs(c, pn, an)...); err != nil {
 				return names, err
 			}
 			names = append(names, an)
@@ -120,8 +120,8 @@ func writeAllLaunchers(c *config.Config, binDir string) ([]string, error) {
 }
 
 // writeLauncher writes a single executable launcher script.
-func writeLauncher(binDir, name, command, envVar, dir string) error {
-	content, err := shell.LauncherScript(command, envVar, dir)
+func writeLauncher(binDir, name, command, envVar, dir string, args ...string) error {
+	content, err := shell.LauncherScript(command, envVar, dir, args...)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func syncLauncher(cfgPath, providerName, account string) {
 	if err != nil || cmd == "" || env == "" {
 		return
 	}
-	_ = writeLauncher(binDir, account, cmd, env, dir)
+	_ = writeLauncher(binDir, account, cmd, env, dir, provider.LaunchArgs(c, providerName, account)...)
 }
 
 // removeLauncher deletes an account's launcher script if present. Best-effort.

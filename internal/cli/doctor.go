@@ -286,7 +286,10 @@ func checkLaunchers(c *config.Config) []finding {
 			if err != nil || cmd == "" || env == "" {
 				continue // setup writes no launcher for these, so there is none to check
 			}
-			out = append(out, checkLauncher(an, cmd, env, dir))
+			out = append(out, checkLauncher(an, cmd, env, dir, provider.LaunchArgs(c, pn, an)))
+			if f, ok := checkSettingsFile(an, provider.SettingsFile(c, pn, an)); ok {
+				out = append(out, f)
+			}
 		}
 	}
 	return append(out, orphanLaunchers(registered)...)
@@ -295,8 +298,8 @@ func checkLaunchers(c *config.Config) []finding {
 // checkLauncher compares the script actually on PATH against the one setup would
 // write today. A launcher that is merely *present* is not enough: the failure
 // this exists to catch is a launcher that still runs and points somewhere stale.
-func checkLauncher(account, cmd, env, dir string) finding {
-	want, err := shell.LauncherScript(cmd, env, dir)
+func checkLauncher(account, cmd, env, dir string, args []string) finding {
+	want, err := shell.LauncherScript(cmd, env, dir, args...)
 	if err != nil {
 		return finding{sevFail,
 			fmt.Sprintf("%s: cannot build a launcher", account),
@@ -323,11 +326,42 @@ func checkLauncher(account, cmd, env, dir string) finding {
 		return finding{sevFail,
 			fmt.Sprintf("%s: launcher is stale", account),
 			[]string{
-				fmt.Sprintf("It no longer matches the config: should run %s with %s=%s.", cmd, env, tildeize(dir)),
+				fmt.Sprintf("It no longer matches the config: should run %s with %s=%s.", runs(cmd, args), env, tildeize(dir)),
 				"aiacc setup  rewrites it",
 			}}
 	}
-	return finding{sevOK, fmt.Sprintf("%s → %s %s=%s", account, cmd, env, tildeize(dir)), nil}
+	return finding{sevOK, fmt.Sprintf("%s → %s %s=%s", account, runs(cmd, args), env, tildeize(dir)), nil}
+}
+
+// runs is cmd with its launch args, home-shortened, for display.
+func runs(cmd string, args []string) string {
+	out := cmd
+	for _, a := range args {
+		out += " " + tildeize(a)
+	}
+	return out
+}
+
+// checkSettingsFile reports on an account's extra settings file; ok is false
+// when the account has none. The file is never read — it may hold an API key —
+// only stat'ed: a missing one breaks every launch, and one readable by other
+// users exposes whatever it holds.
+func checkSettingsFile(account, path string) (finding, bool) {
+	if path == "" {
+		return finding{}, false
+	}
+	info, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return finding{sevFail,
+			fmt.Sprintf("%s: settings file %s is missing", account, tildeize(path)),
+			[]string{"Every launch of this profile passes it to the CLI."}}, true
+	case info.Mode().Perm()&0o077 != 0:
+		return finding{sevWarn,
+			fmt.Sprintf("%s: settings file %s is readable by other users", account, tildeize(path)),
+			[]string{"It may hold an API key.", "chmod 600 " + tildeize(path)}}, true
+	}
+	return finding{}, false
 }
 
 // maxLauncherSize bounds the files orphanLaunchers reads; a launcher is a few

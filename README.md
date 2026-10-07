@@ -175,6 +175,29 @@ usage counters — isolating those is the whole point of a profile.
 > deleted. Custom (non-preset) providers are skipped — aiacc doesn't guess at a
 > CLI's asset layout.
 
+## 🔑 A profile with its own endpoint
+
+Some profiles differ in what they talk to, not who is logged in: Claude Code
+pointed at GLM, a proxy, or a gateway through an `env` block in a settings
+file. That block can't go in the shared `settings.json`, because every profile
+would pick it up. Give the profile its own settings file instead:
+
+```sh
+aiacc add claude claude-glm --dir ~/.claude-glm --settings ~/.claude-glm/glm.json
+```
+
+```json
+{ "env": { "ANTHROPIC_BASE_URL": "…", "ANTHROPIC_AUTH_TOKEN": "…", "ANTHROPIC_MODEL": "…" } }
+```
+
+The launcher runs `claude --settings ~/.claude-glm/glm.json`, which layers that
+file over the shared settings, so `claude-glm` keeps your skills, hooks and
+statusline and talks to its own endpoint from any directory. The add screen
+(`a` in the picker) has the same optional **settings** field.
+
+aiacc stores only the path and never reads the file. Keep it private
+(`chmod 600`); `aiacc doctor` warns when it isn't and fails when it's missing.
+
 ## 🎛️ Commands
 
 | Command | What it does |
@@ -182,7 +205,7 @@ usage counters — isolating those is the whole point of a profile.
 | `aiacc` | The interactive picker (front door). Piped/redirected, it prints help instead. |
 | **`<account>`** &nbsp;e.g. `claude-work` | Launch Claude Code in that account (installed by `aiacc setup`). |
 | `aiacc setup` | One-step install of the launcher commands onto your `PATH` — they work immediately. |
-| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. |
+| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file (claude). |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
@@ -210,7 +233,7 @@ dir = "~/.claude-personal"
 dir = "~/.claude-work"
 ```
 
-A leading `~` in a `dir` expands to your home directory. A missing config file is
+A leading `~` in a `dir` or `settings` path expands to your home directory. A missing config file is
 treated as empty, so read-only commands work before you register anything.
 
 ## 🎬 Tutorials
