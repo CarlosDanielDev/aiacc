@@ -66,34 +66,33 @@ func newLinkCmd() *cobra.Command {
 // Poka-yoke: removing a symlink is not aiacc's to do silently — the user may
 // have made it by hand. So the dry pass runs first, its result is what the
 // question is about, and a bare Enter declines. Nothing to prune exits without
-// asking anything.
+// asking anything. Without a terminal the explicit --prune flag is taken as the
+// answer: a script that passed it has already decided, and blocking on a prompt
+// nothing can answer would hang CI.
 func runPrune(cmd *cobra.Command, c *config.Config, args []string) error {
-	dead, err := danglingLinks(c, args)
-	if err != nil {
-		return err
-	}
+	dead := danglingLinks(c, args)
 	w := cmd.OutOrStdout()
 	if len(dead) == 0 {
 		fmt.Fprintln(w, "No dead shared links.")
 		return nil
 	}
-	fmt.Fprintf(w, "%d dead shared link(s) — the target no longer exists:\n", countEntries(dead))
-	for _, r := range dead {
-		for _, e := range r.Entries {
-			fmt.Fprintf(w, "  %-16s %s\n", r.Dir, e.Name)
+	var n int
+	for _, d := range dead {
+		n += len(d.names)
+	}
+	fmt.Fprintf(w, "%d dead shared link(s) — the target no longer exists:\n", n)
+	for _, d := range dead {
+		for _, name := range d.names {
+			fmt.Fprintf(w, "  %-16s %s\n", d.account, name)
 		}
 	}
-	if !confirm(cmd, "Remove them?") {
+	if isTerminal(os.Stdin) && !confirm(bufio.NewReader(cmd.InOrStdin()), w, "Remove them?") {
 		fmt.Fprintln(w, "Left alone.")
 		return nil
 	}
 	var removed, failed int
-	for _, r := range dead {
-		names := make([]string, len(r.Entries))
-		for i, e := range r.Entries {
-			names[i] = e.Name
-		}
-		res := share.Prune(r.Base, r.dirPath, names)
+	for _, d := range dead {
+		res := share.Prune(d.dir, d.names)
 		removed += res.Count(share.Pruned)
 		failed += res.Count(share.Failed)
 	}
@@ -104,16 +103,46 @@ func runPrune(cmd *cobra.Command, c *config.Config, args []string) error {
 	return nil
 }
 
-// deadResult is one account's dangling entries, keeping the on-disk path that
-// share.Result replaces with the account name for display.
-type deadResult struct {
-	share.Result
-	dirPath string
+// deadLinks is one account's dangling shared entries.
+type deadLinks struct {
+	account, dir string
+	names        []string
 }
 
 // danglingLinks is the read-only pass: which shared links are dead, per account.
-func danglingLinks(c *config.Config, args []string) ([]deadResult, error) {
-	var out []deadResult
+func danglingLinks(c *config.Config, args []string) []deadLinks {
+	var out []deadLinks
+	for _, p := range sharedProfiles(c, args) {
+		var names []string
+		for _, e := range share.Check(p.base, p.dir, p.entries).Entries {
+			if e.Status == share.Dangling {
+				names = append(names, e.Name)
+			}
+		}
+		if len(names) > 0 {
+			out = append(out, deadLinks{p.account, p.dir, names})
+		}
+	}
+	return out
+}
+
+// confirm asks a yes/no question, defaulting to no.
+func confirm(r *bufio.Reader, w io.Writer, question string) bool {
+	s := strings.ToLower(strings.TrimSpace(ask(r, w, question+" [y/N] ")))
+	return s == "y" || s == "yes"
+}
+
+// sharedProfile is one account that receives a provider's shared assets.
+type sharedProfile struct {
+	account, base, dir string
+	entries            []string
+}
+
+// sharedProfiles selects the accounts named by args — none = every account, one
+// = every account of that provider, two = that one account — skipping custom
+// providers, whose asset layout aiacc cannot know.
+func sharedProfiles(c *config.Config, args []string) []sharedProfile {
+	var out []sharedProfile
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		if len(args) >= 1 && args[0] != pn {
 			continue
@@ -130,80 +159,22 @@ func danglingLinks(c *config.Config, args []string) ([]deadResult, error) {
 			if err != nil {
 				continue
 			}
-			res := share.Check(base, dir, entries)
-			var dead []share.Entry
-			for _, e := range res.Entries {
-				if e.Status == share.Dangling {
-					dead = append(dead, e)
-				}
-			}
-			if len(dead) == 0 {
-				continue
-			}
-			out = append(out, deadResult{
-				Result:  share.Result{Base: base, Dir: an, Entries: dead},
-				dirPath: dir,
-			})
+			out = append(out, sharedProfile{an, base, dir, entries})
 		}
 	}
-	return out, nil
+	return out
 }
 
-func countEntries(rs []deadResult) int {
-	n := 0
-	for _, r := range rs {
-		n += len(r.Entries)
-	}
-	return n
-}
-
-// confirm asks a yes/no question, defaulting to no. Without a terminal the
-// explicit --prune flag is taken as the answer: a script that passed it has
-// already decided, and blocking on a prompt nothing can answer would hang CI.
-func confirm(cmd *cobra.Command, question string) bool {
-	if !isTerminal(os.Stdin) {
-		return true
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s [y/N] ", question)
-	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true
-	default:
-		return false
-	}
-}
-
-// linkAccounts links the accounts named by args: none = every account, one =
-// every account of that provider, two = that one account.
+// linkAccounts links the accounts named by args (see sharedProfiles).
 func linkAccounts(c *config.Config, args []string, replace bool) ([]share.Result, error) {
 	var out []share.Result
-	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		if len(args) >= 1 && args[0] != pn {
-			continue
+	for _, p := range sharedProfiles(c, args) {
+		res, err := share.Link(p.base, p.dir, p.entries, replace)
+		if err != nil {
+			return out, err
 		}
-		base, entries, ok := provider.Shared(pn)
-		if !ok {
-			continue // custom provider — aiacc can't know its asset layout
-		}
-		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
-			if len(args) == 2 && args[1] != an {
-				continue
-			}
-			dir, err := provider.AccountDir(c, pn, an)
-			if err != nil {
-				continue
-			}
-			res, err := share.Link(base, dir, entries, replace)
-			if err != nil {
-				return out, err
-			}
-			res.Dir = an // label the row by account, not path
-			out = append(out, res)
-		}
+		res.Dir = p.account // label the row by account, not path
+		out = append(out, res)
 	}
 	return out, nil
 }

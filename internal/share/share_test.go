@@ -202,7 +202,7 @@ func TestPruneRemovesOnlyDeadLinks(t *testing.T) {
 	own := filepath.Join(acct, "own.md")
 	mustFile(t, own, "mine")
 
-	res := Prune(b, acct, append(entries, "own.md"))
+	res := Prune(acct, append(entries, "own.md"))
 	if n := res.Count(Pruned); n != 1 {
 		t.Fatalf("pruned %d, want exactly the one dead link: %+v", n, res.Entries)
 	}

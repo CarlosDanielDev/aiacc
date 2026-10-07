@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -157,18 +158,18 @@ func TestCheckLauncherWarnsOnForeignCommand(t *testing.T) {
 	}
 }
 
-func TestWorstAndSummary(t *testing.T) {
+func TestTallyAndSummary(t *testing.T) {
 	secs := []section{{"a", []finding{{sev: sevOK}, {sev: sevWarn}}}}
-	if got := worst(secs); got != sevWarn {
-		t.Errorf("worst = %v, want sevWarn", got)
+	if fails, warns := tally(secs); fails != 0 || warns != 1 {
+		t.Errorf("tally = %d, %d, want 0, 1", fails, warns)
 	}
 	if got := summary(secs); !strings.Contains(got, "nothing broken") {
 		t.Errorf("summary = %q, want the nothing-broken wording", got)
 	}
 
 	secs[0].findings = append(secs[0].findings, finding{sev: sevFail})
-	if got := worst(secs); got != sevFail {
-		t.Errorf("worst = %v, want sevFail", got)
+	if fails, _ := tally(secs); fails != 1 {
+		t.Errorf("tally fails = %d, want 1", fails)
 	}
 	if got := summary(secs); !strings.Contains(got, "1 broken") {
 		t.Errorf("summary = %q, want the broken count", got)
@@ -185,4 +186,29 @@ func cfg(t *testing.T, providerName, account, dir string) *config.Config {
 			Accounts: map[string]config.Account{account: {Dir: dir}},
 		},
 	}}
+}
+
+// The migrate-installer location belongs to Claude's preset: it is probed for
+// claude, and never invented for another provider.
+func TestProbeInstallsUsesProviderLocations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setPath(t, t.TempDir())
+	for _, c := range []string{"claude", "codex"} {
+		dir := filepath.Join(home, "."+c, "local")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, c), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Homebrew prefixes are machine-wide, so assert on the HOME paths only.
+	if got := probeInstalls("claude", "claude"); !slices.Contains(got, filepath.Join(home, ".claude", "local", "claude")) {
+		t.Errorf("claude probe = %v, want the migrate-installer path", got)
+	}
+	if got := probeInstalls("codex", "codex"); slices.Contains(got, filepath.Join(home, ".codex", "local", "codex")) {
+		t.Errorf("codex has no such install location, got %v", got)
+	}
 }

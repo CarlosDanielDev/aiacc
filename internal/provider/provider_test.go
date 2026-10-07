@@ -90,7 +90,7 @@ func TestUnclassifiedSurfacesOnlyUnknownDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, ok := Unclassified("claude")
+	_, got, ok := Unclassified("claude")
 	if !ok {
 		t.Fatal("Unclassified(claude) not ok")
 	}
@@ -101,7 +101,7 @@ func TestUnclassifiedSurfacesOnlyUnknownDirs(t *testing.T) {
 }
 
 func TestUnclassifiedUnknownProvider(t *testing.T) {
-	if _, ok := Unclassified("nope"); ok {
+	if _, _, ok := Unclassified("nope"); ok {
 		t.Error("an unknown provider has no base dir to classify")
 	}
 }

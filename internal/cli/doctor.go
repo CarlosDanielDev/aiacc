@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
@@ -84,7 +85,7 @@ func newDoctorCmd() *cobra.Command {
 			}
 			secs := diagnose(c)
 			printReport(cmd.OutOrStdout(), secs)
-			if worst(secs) == sevFail {
+			if fails, _ := tally(secs); fails > 0 {
 				return errUnhealthy
 			}
 			return nil
@@ -121,17 +122,18 @@ func checkCommands(c *config.Config) []finding {
 			continue
 		}
 		matches := lookAll(cmd)
+		vers := cmdVersions(matches)
 		switch len(matches) {
 		case 0:
 			out = append(out, unresolvedCommand(pn, cmd))
 		case 1:
 			out = append(out, finding{sevOK,
 				fmt.Sprintf("%s: %s → %s", pn, cmd, tildeize(matches[0])),
-				[]string{cmdVersion(matches[0])}})
+				[]string{vers[0]}})
 		default:
-			detail := []string{fmt.Sprintf("launchers run %s (%s)", tildeize(matches[0]), cmdVersion(matches[0]))}
-			for _, m := range matches[1:] {
-				detail = append(detail, fmt.Sprintf("also on PATH: %s (%s)", tildeize(m), cmdVersion(m)))
+			detail := []string{fmt.Sprintf("launchers run %s (%s)", tildeize(matches[0]), vers[0])}
+			for i, m := range matches[1:] {
+				detail = append(detail, fmt.Sprintf("also on PATH: %s (%s)", tildeize(m), vers[i+1]))
 			}
 			detail = append(detail,
 				"PATH order alone decides which one runs, so an update to either can",
@@ -150,7 +152,7 @@ func checkCommands(c *config.Config) []finding {
 // no aliases, so the launcher fails on a CLI that works fine when typed.
 func unresolvedCommand(pn, cmd string) finding {
 	head := fmt.Sprintf("%s: %s not found on PATH", pn, cmd)
-	found := probeInstalls(cmd)
+	found := probeInstalls(pn, cmd)
 	if len(found) == 0 {
 		return finding{sevFail, head, []string{
 			"Install it, or point aiacc at the command you do have:",
@@ -173,58 +175,50 @@ func unresolvedCommand(pn, cmd string) finding {
 // `which -a` view that exec.LookPath collapses to its first hit. Element 0 is
 // therefore exactly what a launcher gets.
 func lookAll(cmd string) []string {
-	var out []string
-	seen := map[string]bool{}
+	var cands []string
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		if dir == "" {
 			dir = "." // POSIX: an empty PATH entry means the current directory
 		}
-		p := filepath.Join(dir, cmd)
-		if seen[p] || !executable(p) {
+		cands = append(cands, filepath.Join(dir, cmd))
+	}
+	return executables(cands)
+}
+
+// executables keeps the paths that resolve to a runnable regular file, in
+// order, dropping repeats. Stat follows symlinks, which is what makes a dangling
+// link on PATH invisible here — the same way it is invisible to exec.LookPath.
+func executables(paths []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range paths {
+		if seen[p] {
 			continue
 		}
 		seen[p] = true
-		out = append(out, p)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			out = append(out, p)
+		}
 	}
 	return out
 }
 
-// executable reports whether p resolves to a runnable regular file. Stat follows
-// symlinks, which is what makes a dangling link on PATH invisible here — the
-// same way it is invisible to exec.LookPath.
-func executable(p string) bool {
-	info, err := os.Stat(p)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	return info.Mode()&0o111 != 0
-}
-
 // probeInstalls looks for cmd where installers put it but PATH may not reach:
-// the `migrate-installer` location, the usual user bins, the Homebrew prefixes,
-// and npm's global bin. Only called once PATH has already failed.
-func probeInstalls(cmd string) []string {
+// the provider's own install locations, the usual user bins, the Homebrew
+// prefixes, and npm's global bin. Only called once PATH has already failed.
+func probeInstalls(pn, cmd string) []string {
+	var cands []string
+	if cmd == provider.Presets[pn].Command {
+		cands = provider.Installs(pn)
+	}
 	home, _ := os.UserHomeDir()
-	cands := []string{
-		filepath.Join(home, "."+cmd, "local", cmd), // `claude migrate-installer`
-		filepath.Join(home, ".local", "bin", cmd),
-		filepath.Join(home, "bin", cmd),
-		"/opt/homebrew/bin/" + cmd,
-		"/usr/local/bin/" + cmd,
+	for _, d := range append(userBinDirs(home), "/opt/homebrew/bin", "/usr/local/bin") {
+		cands = append(cands, filepath.Join(d, cmd))
 	}
 	if bin := npmGlobalBin(); bin != "" {
 		cands = append(cands, filepath.Join(bin, cmd))
 	}
-	var out []string
-	seen := map[string]bool{}
-	for _, p := range cands {
-		if seen[p] || !executable(p) {
-			continue
-		}
-		seen[p] = true
-		out = append(out, p)
-	}
-	return out
+	return executables(cands)
 }
 
 // npmGlobalBin asks npm where it installs global binaries. Node startup is slow,
@@ -241,6 +235,22 @@ func npmGlobalBin() string {
 		return ""
 	}
 	return filepath.Join(prefix, "bin")
+}
+
+// cmdVersions runs cmdVersion for each bin concurrently, so a run costs the
+// slowest CLI's startup rather than the sum of them.
+func cmdVersions(bins []string) []string {
+	out := make([]string, len(bins))
+	var wg sync.WaitGroup
+	for i, b := range bins {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = cmdVersion(b)
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // cmdVersion is the first line of `<bin> --version`. Diagnostics only: a CLI
@@ -274,7 +284,7 @@ func checkLaunchers(c *config.Config) []finding {
 			registered[an] = true
 			dir, err := provider.AccountDir(c, pn, an)
 			if err != nil || cmd == "" || env == "" {
-				continue // already reported by checkCommands
+				continue // setup writes no launcher for these, so there is none to check
 			}
 			out = append(out, checkLauncher(an, cmd, env, dir))
 		}
@@ -320,6 +330,10 @@ func checkLauncher(account, cmd, env, dir string) finding {
 	return finding{sevOK, fmt.Sprintf("%s → %s %s=%s", account, cmd, env, tildeize(dir)), nil}
 }
 
+// maxLauncherSize bounds the files orphanLaunchers reads; a launcher is a few
+// hundred bytes.
+const maxLauncherSize = 4 << 10
+
 // orphanLaunchers finds scripts aiacc wrote for accounts the config no longer
 // has — left behind when an account is renamed or removed outside aiacc. The
 // marker check keeps this from ever naming a file aiacc did not write.
@@ -331,11 +345,15 @@ func orphanLaunchers(registered map[string]bool) []finding {
 	}
 	var stale []string
 	for _, e := range ents {
-		if e.IsDir() || registered[e.Name()] {
+		// aiacc writes small regular files, so a symlink or anything sizeable
+		// (an installed binary) is skipped unread.
+		if !e.Type().IsRegular() || registered[e.Name()] {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(binDir, e.Name()))
-		if err == nil && strings.Contains(string(b), shell.LauncherMark) {
+		if info, err := e.Info(); err != nil || info.Size() > maxLauncherSize {
+			continue
+		}
+		if fileContains(filepath.Join(binDir, e.Name()), shell.LauncherMark) {
 			stale = append(stale, e.Name())
 		}
 	}
@@ -353,22 +371,12 @@ func orphanLaunchers(registered map[string]bool) []finding {
 // checkShared inspects every profile's shared symlinks without touching them.
 func checkShared(c *config.Config) []finding {
 	var out []finding
-	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		base, entries, ok := provider.Shared(pn)
-		if !ok {
-			continue // custom provider — aiacc cannot know its asset layout
+	for _, p := range sharedProfiles(c, nil) {
+		res := share.Check(p.base, p.dir, p.entries)
+		if len(res.Entries) == 0 {
+			continue // this profile *is* the base dir; it owns the originals
 		}
-		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
-			dir, err := provider.AccountDir(c, pn, an)
-			if err != nil {
-				continue
-			}
-			res := share.Check(base, dir, entries)
-			if len(res.Entries) == 0 {
-				continue // this profile *is* the base dir; it owns the originals
-			}
-			out = append(out, sharedFindings(an, res)...)
-		}
+		out = append(out, sharedFindings(p.account, res)...)
 	}
 	return out
 }
@@ -413,11 +421,10 @@ func sharedFindings(account string, res share.Result) []finding {
 func checkBase(c *config.Config) []finding {
 	var out []finding
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		extra, ok := provider.Unclassified(pn)
+		base, extra, ok := provider.Unclassified(pn)
 		if !ok || len(extra) == 0 {
 			continue
 		}
-		base, _, _ := provider.Shared(pn)
 		out = append(out, finding{sevWarn,
 			fmt.Sprintf("%s: %d unclassified directory(s) in %s", pn, len(extra), tildeize(base)),
 			append(bullets(extra),
@@ -455,7 +462,18 @@ func printReport(w io.Writer, secs []section) {
 }
 
 func summary(secs []section) string {
-	var fails, warns int
+	switch fails, warns := tally(secs); {
+	case fails > 0:
+		return fmt.Sprintf("✗ %d broken, %d to look at.", fails, warns)
+	case warns > 0:
+		return fmt.Sprintf("! %d to look at — nothing broken.", warns)
+	default:
+		return "✓ All good."
+	}
+}
+
+// tally counts the failing and warning findings.
+func tally(secs []section) (fails, warns int) {
 	for _, s := range secs {
 		for _, f := range s.findings {
 			switch f.sev {
@@ -466,26 +484,7 @@ func summary(secs []section) string {
 			}
 		}
 	}
-	switch {
-	case fails > 0:
-		return fmt.Sprintf("✗ %d broken, %d to look at.", fails, warns)
-	case warns > 0:
-		return fmt.Sprintf("! %d to look at — nothing broken.", warns)
-	default:
-		return "✓ All good."
-	}
-}
-
-func worst(secs []section) severity {
-	out := sevOK
-	for _, s := range secs {
-		for _, f := range s.findings {
-			if f.sev > out {
-				out = f.sev
-			}
-		}
-	}
-	return out
+	return fails, warns
 }
 
 // bullets indents names as detail lines.

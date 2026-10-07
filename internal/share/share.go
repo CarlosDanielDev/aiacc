@@ -113,46 +113,66 @@ func linkOne(baseDir, dir, name string, replace bool) Entry {
 	src := filepath.Join(baseDir, name)
 	dst := filepath.Join(dir, name)
 
-	if _, err := os.Stat(src); err != nil {
-		// Nothing to share. Report a dead link here rather than a bare
-		// "not in base": when the CLI renames a config surface, the source
-		// disappears *and* every profile is left holding a symlink to it, and
-		// this is the only branch that can still see the second half.
-		if dangling(dst) {
-			return Entry{Name: name, Status: Dangling}
-		}
-		return Entry{Name: name, Status: Absent}
-	}
-
-	switch info, err := os.Lstat(dst); {
-	case err != nil:
+	switch st := classify(src, dst); st {
+	case Missing:
 		// Nothing there — the common path.
-	case info.Mode()&os.ModeSymlink != 0:
-		if target, err := os.Readlink(dst); err == nil && same(target, src) {
-			return Entry{Name: name, Status: Already}
-		}
-		if !replace {
-			if dangling(dst) {
-				return Entry{Name: name, Status: Dangling}
-			}
-			return Entry{Name: name, Status: Foreign}
+	case Foreign, Dangling:
+		if !replace || !exists(src) {
+			return Entry{Name: name, Status: st}
 		}
 		if err := os.Remove(dst); err != nil {
 			return Entry{Name: name, Status: Failed, Err: err}
 		}
-	default:
+	case Taken:
 		if !replace {
-			return Entry{Name: name, Status: Taken}
+			return Entry{Name: name, Status: st}
 		}
 		if err := os.Rename(dst, dst+".aiacc-bak"); err != nil {
 			return Entry{Name: name, Status: Failed, Err: err}
 		}
+	default: // Absent, Already
+		return Entry{Name: name, Status: st}
 	}
 
 	if err := os.Symlink(src, dst); err != nil {
 		return Entry{Name: name, Status: Failed, Err: err}
 	}
 	return Entry{Name: name, Status: Linked}
+}
+
+// classify reads what is at dst against the src it should link to, changing
+// nothing. It is the one place the link states are decided, so Link acts on
+// exactly what Check reports.
+func classify(src, dst string) Status {
+	if !exists(src) {
+		// Nothing to share. Report a dead link here rather than a bare
+		// "not in base": when the CLI renames a config surface, the source
+		// disappears *and* every profile is left holding a symlink to it, and
+		// this is the only branch that can still see the second half.
+		if dangling(dst) {
+			return Dangling
+		}
+		return Absent
+	}
+	switch info, err := os.Lstat(dst); {
+	case err != nil:
+		return Missing
+	case info.Mode()&os.ModeSymlink != 0:
+		if target, err := os.Readlink(dst); err == nil && same(target, src) {
+			return Already
+		}
+		if dangling(dst) {
+			return Dangling
+		}
+		return Foreign
+	default:
+		return Taken
+	}
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // Check reports what Link would find, changing nothing on disk. A diagnosis
@@ -165,34 +185,9 @@ func Check(baseDir, dir string, entries []string) Result {
 		return res
 	}
 	for _, name := range entries {
-		res.Entries = append(res.Entries, checkOne(baseDir, dir, name))
+		res.Entries = append(res.Entries, Entry{Name: name, Status: classify(filepath.Join(baseDir, name), filepath.Join(dir, name))})
 	}
 	return res
-}
-
-func checkOne(baseDir, dir, name string) Entry {
-	src := filepath.Join(baseDir, name)
-	dst := filepath.Join(dir, name)
-
-	// A dead link outranks every other reading: it is the one state that is
-	// actively wrong rather than merely unlinked.
-	if dangling(dst) {
-		return Entry{Name: name, Status: Dangling}
-	}
-	if _, err := os.Stat(src); err != nil {
-		return Entry{Name: name, Status: Absent}
-	}
-	switch info, err := os.Lstat(dst); {
-	case err != nil:
-		return Entry{Name: name, Status: Missing}
-	case info.Mode()&os.ModeSymlink != 0:
-		if target, err := os.Readlink(dst); err == nil && same(target, src) {
-			return Entry{Name: name, Status: Already}
-		}
-		return Entry{Name: name, Status: Foreign}
-	default:
-		return Entry{Name: name, Status: Taken}
-	}
 }
 
 // Prune removes the dangling symlinks among entries.
@@ -200,8 +195,8 @@ func checkOne(baseDir, dir, name string) Entry {
 // Poka-yoke: only a symlink whose target no longer resolves is removed. A real
 // file, a directory, and a live symlink are never touched — so the worst a
 // mistaken prune can cost is a link `aiacc link` puts straight back.
-func Prune(baseDir, dir string, entries []string) Result {
-	res := Result{Base: baseDir, Dir: dir}
+func Prune(dir string, entries []string) Result {
+	res := Result{Dir: dir}
 	if dir == "" {
 		return res
 	}
