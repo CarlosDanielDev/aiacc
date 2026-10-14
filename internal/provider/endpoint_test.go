@@ -160,6 +160,10 @@ func TestSkeletonUnwritableRemoved(t *testing.T) {
 	}
 	if _, err := WriteSettingsSkeleton("claude", "glm", dir); err == nil {
 		t.Fatal("write under a 16-byte file-size limit succeeded")
+	} else if !errors.Is(err, syscall.EFBIG) {
+		// Pinning the mechanism keeps this test honest: a regression that
+		// fails anywhere before the write must not pass vacuously.
+		t.Fatalf("err = %v, want EFBIG from the write itself", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "glm.json")); !os.IsNotExist(err) {
 		t.Errorf("failed skeleton left behind (stat err %v); the retry would hit ErrSettingsExists against it", err)
