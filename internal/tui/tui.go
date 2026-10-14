@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ type Row struct {
 	EnvVar    string   // env var the CLI reads to select its config ("" = unknown)
 	Command   string   // CLI to launch (e.g. "claude"); "" = no launcher for this
 	Args      []string // passed to Command ahead of anything else (e.g. --settings <file>)
+	Settings  string   // extra settings file the launcher passes, shown as a tag; "" = none
 }
 
 // launchable reports whether Enter can launch this profile: the dir exists, and
@@ -506,6 +508,12 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) s
 		if r.Provider != "claude" {
 			name += " (" + r.Provider + ")"
 		}
+		// Settings tag: the file's basename only — the path is data aiacc already
+		// owns and the file itself is never read (it may hold a key).
+		tag := ""
+		if r.Settings != "" {
+			tag = " ⚙ " + filepath.Base(r.Settings)
+		}
 		warn := ""
 		if blocked {
 			warn = "⚠ "
@@ -524,8 +532,8 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) s
 
 		if focused {
 			// Selection glow: the whole row reversed, prompt cursor inline.
-			gap := max(1, nameCol-runeLen(warn)-runeLen(name))
-			text := "> " + warn + name + strings.Repeat(" ", gap) + infoText
+			gap := max(1, nameCol-runeLen(warn)-runeLen(name)-runeLen(tag))
+			text := "> " + warn + name + tag + strings.Repeat(" ", gap) + infoText
 			lines = append(lines, boxRowHi(text, w))
 			continue
 		}
@@ -537,7 +545,8 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) s
 			pad(2),
 			{warn, inkRed},
 			{name, nameInk},
-			pad(nameCol - runeLen(warn) - runeLen(name)),
+			{tag, inkDim},
+			pad(nameCol - runeLen(warn) - runeLen(name) - runeLen(tag)),
 			{infoText, infoInk},
 		}, w))
 	}
