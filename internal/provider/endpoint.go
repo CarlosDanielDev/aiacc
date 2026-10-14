@@ -11,9 +11,10 @@ import (
 	"strings"
 )
 
-// Endpoint is a known remote API endpoint an account's settings file can point
-// at. The zero fields are deliberate: a preset that cannot know a value leaves
-// it out of the generated skeleton for the user to fill in.
+// Endpoint is a known remote API endpoint an account's settings file can
+// point at. The model fields left empty are left out of the generated
+// skeleton; BaseURL is always written — empty for custom, so the blank is
+// loud and the user fills it in.
 type Endpoint struct {
 	BaseURL               string // the Anthropic-compatible API base URL ("" = user fills it in)
 	Model                 string // ANTHROPIC_MODEL ("" = field omitted)
@@ -96,10 +97,14 @@ func WriteSettingsSkeleton(providerName, name, dir string) (string, error) {
 	if err == nil {
 		_, err = f.Write(append(doc, '\n'))
 	}
+	if err == nil {
+		err = f.Close() // a failed close can leave a short file behind too
+	} else {
+		f.Close() // best-effort; the error above is the one worth reporting
+	}
 	if err != nil {
-		f.Close()
 		os.Remove(path) // leave no half-written skeleton for the retry to refuse
 		return "", err
 	}
-	return path, f.Close()
+	return path, nil
 }

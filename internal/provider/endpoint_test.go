@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -139,6 +140,29 @@ func TestSkeletonExistingRefused(t *testing.T) {
 	}
 	if string(before) != string(after) {
 		t.Errorf("existing file changed:\nbefore %q\nafter  %q", before, after)
+	}
+}
+
+// RLIMIT_FSIZE forces a real write failure — Go turns SIGXFSZ into EFBIG — so
+// the generator's single error path is reachable without fakery: a failed
+// stub must not survive for the next attempt to refuse.
+func TestSkeletonUnwritableRemoved(t *testing.T) {
+	dir := t.TempDir()
+	var old syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &old); err != nil {
+		t.Skipf("getrlimit: %v", err)
+	}
+	t.Cleanup(func() { syscall.Setrlimit(syscall.RLIMIT_FSIZE, &old) })
+	lim := old
+	lim.Cur = 16 // the skeleton is a few hundred bytes; 16 forces EFBIG
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &lim); err != nil {
+		t.Skipf("setrlimit: %v", err)
+	}
+	if _, err := WriteSettingsSkeleton("claude", "glm", dir); err == nil {
+		t.Fatal("write under a 16-byte file-size limit succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "glm.json")); !os.IsNotExist(err) {
+		t.Errorf("failed skeleton left behind (stat err %v); the retry would hit ErrSettingsExists against it", err)
 	}
 }
 
