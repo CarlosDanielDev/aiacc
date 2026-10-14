@@ -27,6 +27,11 @@ type Preset struct {
 	// the shared ones ("" = the CLI has none, so accounts cannot carry one).
 	SettingsFlag string
 
+	// Endpoints are the known remote API endpoints an account's settings file
+	// can point at, looked up through Endpoint. Only a provider with a
+	// settings flag carries any: a skeleton no CLI can load is meaningless.
+	Endpoints map[string]Endpoint
+
 	// Installs are where the CLI's own installers put Command outside the usual
 	// bin dirs, so PATH may not reach it.
 	Installs []string
@@ -62,7 +67,19 @@ var Presets = map[string]Preset{
 			"settings.json",
 		},
 		SettingsFlag: "--settings",
-		Installs:     []string{"~/.claude/local/claude"}, // `claude migrate-installer`
+		Endpoints: map[string]Endpoint{
+			"glm": {
+				BaseURL:               "https://api.z.ai/api/anthropic",
+				Model:                 "glm-5.3-flash[1m]",
+				CustomModelOption:     "glm-5.3-flash[1m]",
+				CustomModelOptionName: "GLM 5.3 Flash 1M (z.ai)",
+				Filename:              "glm.json",
+			},
+			"custom": {
+				Filename: "custom.json", // base URL and model are the user's to fill in
+			},
+		},
+		Installs: []string{"~/.claude/local/claude"}, // `claude migrate-installer`
 		State: []string{
 			"backups", "cache", "chrome", "daemon", "debug", "file-history",
 			"ide", "jobs", "local", "paste-cache", "projects", "security",
