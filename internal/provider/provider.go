@@ -139,7 +139,7 @@ func AccountDir(c *config.Config, provider, account string) (string, error) {
 	if !ok {
 		return "", ErrUnknownAccount
 	}
-	return expandHome(a.Dir)
+	return ExpandHome(a.Dir)
 }
 
 // SettingsFile is the account's extra settings file, expanded, or "" when it
@@ -149,7 +149,7 @@ func SettingsFile(c *config.Config, provider, account string) string {
 	if a.Settings == "" || Presets[provider].SettingsFlag == "" {
 		return ""
 	}
-	path, err := expandHome(a.Settings)
+	path, err := ExpandHome(a.Settings)
 	if err != nil {
 		return ""
 	}
@@ -166,7 +166,11 @@ func LaunchArgs(c *config.Config, provider, account string) []string {
 	return []string{Presets[provider].SettingsFlag, path}
 }
 
-func expandHome(dir string) (string, error) {
+// ExpandHome resolves a leading ~ to the user's home directory, so a config
+// path written as ~/.claude-work lands in the real home. Exported for callers
+// outside the package that must touch one of these paths on disk (the add
+// screen's skeleton generation) — the one expansion, shared.
+func ExpandHome(dir string) (string, error) {
 	if dir == "~" || strings.HasPrefix(dir, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -185,7 +189,7 @@ func Shared(provider string) (baseDir string, entries []string, ok bool) {
 	if !found || p.BaseDir == "" || len(p.Shared) == 0 {
 		return "", nil, false
 	}
-	dir, err := expandHome(p.BaseDir)
+	dir, err := ExpandHome(p.BaseDir)
 	if err != nil {
 		return "", nil, false
 	}
@@ -236,7 +240,7 @@ func Unclassified(provider string) (baseDir string, extra []string, ok bool) {
 func Installs(provider string) []string {
 	var out []string
 	for _, p := range Presets[provider].Installs {
-		if dir, err := expandHome(p); err == nil {
+		if dir, err := ExpandHome(p); err == nil {
 			out = append(out, dir)
 		}
 	}

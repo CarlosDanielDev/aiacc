@@ -3,6 +3,9 @@ package tui
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -315,8 +318,14 @@ func TestRenderBlockedBadges(t *testing.T) {
 }
 
 func TestRenderEmptyState(t *testing.T) {
-	if out := Render(nil, -1, false, Size{Cols: 80, Rows: 24}); !strings.Contains(out, "No profiles yet") {
+	out := Render(nil, -1, false, Size{Cols: 80, Rows: 24})
+	plain := ansi.ReplaceAllString(out, "")
+	if !strings.Contains(plain, "No profiles yet") {
 		t.Errorf("empty state missing guidance:\n%s", out)
+	}
+	// The empty state points at the endpoint flow, not just the add key.
+	if !strings.Contains(plain, "settings: glm for an API key") {
+		t.Errorf("empty state does not name the endpoint keyword:\n%s", out)
 	}
 }
 
@@ -404,10 +413,120 @@ func TestAddWithoutSettingsCyclesTwoFields(t *testing.T) {
 	}
 }
 
+// An endpoint keyword in the settings field generates the skeleton next to the
+// profile dir and registers the generated path, exactly as if the user had
+// written the file by hand and passed its path.
+func TestAddSettingsKeyword(t *testing.T) {
+	dir := t.TempDir()
+	out := &bytes.Buffer{}
+	keys := "w\t" + dir + "\tglm\r"
+	res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), out)
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	want := filepath.Join(dir, "glm.json")
+	if !res.OK || res.Settings != want {
+		t.Fatalf("got %+v, want settings=%s (the generated path)", res, want)
+	}
+	raw, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatalf("skeleton not written: %v", err)
+	}
+	var doc struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("skeleton is not valid JSON: %v", err)
+	}
+	if doc.Env["ANTHROPIC_BASE_URL"] != "https://api.z.ai/api/anthropic" || doc.Env["ANTHROPIC_AUTH_TOKEN"] == "" {
+		t.Fatalf("env = %v, want the glm endpoint skeleton", doc.Env)
+	}
+}
+
+// A keyword whose target file already exists aborts the create: nothing is
+// overwritten, nothing is registered, and the screen names the existing path.
+func TestAddSettingsExisting(t *testing.T) {
+	// A short dir so the whole path fits the frame's 60-col hint ceiling, the
+	// way a real ~/.claude-glm does; anything longer is head-truncated there,
+	// like every other over-long row in the box.
+	dir, err := os.MkdirTemp("/tmp", "")
+	if err != nil {
+		t.Fatalf("tempdir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	existing := filepath.Join(dir, "glm.json")
+	if err := os.WriteFile(existing, []byte("keep\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	out := &bytes.Buffer{}
+	keys := "w\t" + dir + "\tglm\r\x1b"
+	res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), out)
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	if res.OK {
+		t.Fatalf("got %+v, want the create aborted", res)
+	}
+	if raw, err := os.ReadFile(existing); err != nil || string(raw) != "keep\n" {
+		t.Fatalf("existing file touched: %q, %v", raw, err)
+	}
+	if !strings.Contains(ansi.ReplaceAllString(out.String(), ""), existing) {
+		t.Errorf("screen does not name %s:\n%s", existing, out)
+	}
+}
+
+// A real path in the settings field keeps today's verbatim behavior — no
+// generation is attempted for it — while the custom keyword is accepted and
+// generates a skeleton whose empty base URL the user fills in the file.
+func TestAddSettingsPathUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keep.json")
+	keys := "w\t" + dir + "\t" + path + "\r"
+	res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	if !res.OK || res.Settings != path {
+		t.Fatalf("got %+v, want the path verbatim", res)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a real path must not be created by the add screen: %v", err)
+	}
+
+	out := &bytes.Buffer{}
+	keys = "w\t" + dir + "\tcustom\r"
+	res, err = driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), out)
+	if err != nil {
+		t.Fatalf("driveAdd custom: %v", err)
+	}
+	want := filepath.Join(dir, "custom.json")
+	if !res.OK || res.Settings != want {
+		t.Fatalf("got %+v, want settings=%s for the custom keyword", res, want)
+	}
+	raw, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatalf("custom skeleton not written: %v", err)
+	}
+	var doc struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("custom skeleton is not valid JSON: %v", err)
+	}
+	if base, ok := doc.Env["ANTHROPIC_BASE_URL"]; !ok || base != "" {
+		t.Fatalf("ANTHROPIC_BASE_URL = %q (present=%t), want present but empty", base, ok)
+	}
+}
+
 func TestRenderAddSettingsField(t *testing.T) {
 	sz := Size{Cols: 80, Rows: 24}
-	if out := RenderAdd("", "claude", AddForm{Name: "glm", WithSettings: true}, "", sz); !strings.Contains(out, "settings") {
+	out := RenderAdd("", "claude", AddForm{Name: "glm", WithSettings: true}, "", sz)
+	if !strings.Contains(out, "settings") {
 		t.Errorf("settings field missing:\n%s", out)
+	}
+	// The placeholder names the keywords, so they can be discovered.
+	if !strings.Contains(out, "glm · custom — or a path") {
+		t.Errorf("settings placeholder does not name the keywords:\n%s", out)
 	}
 	if out := RenderAdd("", "codex", AddForm{Name: "w"}, "", sz); strings.Contains(out, "settings") {
 		t.Errorf("settings field shown for a provider without one:\n%s", out)
