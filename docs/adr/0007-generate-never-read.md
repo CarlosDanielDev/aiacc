@@ -29,9 +29,11 @@ process, superseding the boundary ADR-0006 just drew.
 
 ## Consequences
 
-- A new user gets a working settings file from a template keyword, without
-  aiacc ever holding key material — the key goes from the user's clipboard to
-  their editor, never through aiacc.
+- The generator this record introduces can produce a working settings file —
+  the user pastes their key into it in an editor, so the key goes from the
+  clipboard to the file without ever passing through aiacc. The surface that
+  takes a template keyword (picker, CLI flag) lands with the epic's next
+  slices (#49, #52); this record decides only the generation boundary.
 - The placeholder token can reach a launcher if the user skips the paste step;
   the endpoint then fails auth visibly, which is the honest failure.
 - Endpoint presets are data on the existing `Preset` struct, so adding one (a
