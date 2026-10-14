@@ -276,6 +276,31 @@ func TestRenderShowsProfilesAndLogin(t *testing.T) {
 	}
 }
 
+// TestRowSettingsTag: a row whose account carries a settings file shows its
+// basename as a dim "⚙ <file>" tag; a row without one shows no gear at all.
+func TestRowSettingsTag(t *testing.T) {
+	rows := []Row{
+		{Provider: "claude", Account: "glm", Email: "g@z.ai", Dir: "/g", DirExists: true,
+			EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude", Settings: "/home/u/.glm/glm.json"},
+		{Provider: "claude", Account: "plain", Email: "p@x.com", Dir: "/p", DirExists: true,
+			EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude"},
+	}
+	out := Render(rows, -1, false, Size{Cols: 80, Rows: 24})
+	if want := paint(" ⚙ glm.json", inkDim); !strings.Contains(out, want) {
+		t.Errorf("settings tag not rendered dim as %q:\n%s", want, out)
+	}
+	if got := strings.Count(out, "⚙"); got != 1 {
+		t.Errorf("want exactly one gear glyph (the tagged row), got %d:\n%s", got, out)
+	}
+	if strings.Contains(out, "/home/u") {
+		t.Errorf("tag must show the basename only, not the path:\n%s", out)
+	}
+	// The tag survives selection: the highlighted row shows it too.
+	if out := Render(rows, 0, false, Size{Cols: 80, Rows: 24}); !strings.Contains(out, "⚙ glm.json") {
+		t.Errorf("focused row lost the settings tag:\n%s", out)
+	}
+}
+
 func TestRenderBlockedBadges(t *testing.T) {
 	rows := []Row{
 		{Provider: "claude", Account: "gone", DirExists: false, EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude"}, // dir missing

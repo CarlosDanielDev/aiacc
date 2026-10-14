@@ -259,6 +259,7 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 				EnvVar:    env,
 				Command:   launchCommand(c, pn),
 				Args:      provider.LaunchArgs(c, pn, an),
+				Settings:  provider.SettingsFile(c, pn, an),
 			})
 		}
 	}
