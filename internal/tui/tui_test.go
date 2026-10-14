@@ -446,9 +446,8 @@ func TestAddSettingsKeyword(t *testing.T) {
 // A keyword whose target file already exists aborts the create: nothing is
 // overwritten, nothing is registered, and the screen names the existing path.
 func TestAddSettingsExisting(t *testing.T) {
-	// A short dir so the whole path fits the frame's 60-col hint ceiling, the
-	// way a real ~/.claude-glm does; anything longer is head-truncated there,
-	// like every other over-long row in the box.
+	// A short dir so the whole naming sentence fits the hint row's width
+	// ceiling and the assertion can pin it in full.
 	dir, err := os.MkdirTemp("/tmp", "")
 	if err != nil {
 		t.Fatalf("tempdir: %v", err)
@@ -470,8 +469,42 @@ func TestAddSettingsExisting(t *testing.T) {
 	if raw, err := os.ReadFile(existing); err != nil || string(raw) != "keep\n" {
 		t.Fatalf("existing file touched: %q, %v", raw, err)
 	}
-	if !strings.Contains(ansi.ReplaceAllString(out.String(), ""), existing) {
+	if !strings.Contains(ansi.ReplaceAllString(out.String(), ""), "glm.json already exists in "+dir) {
 		t.Errorf("screen does not name %s:\n%s", existing, out)
+	}
+}
+
+// TestAddSettingsExistingLongDir pins the refusal against the canonical flow's
+// long dir: the hint row truncates at the frame's inner width, so the file
+// name leads the message and its glyph must survive any real width.
+func TestAddSettingsExistingLongDir(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "")
+	if err != nil {
+		t.Fatalf("tempdir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude-somelongprofilename"), 0o755); err != nil {
+		t.Fatalf("seed dir: %v", err)
+	}
+	existing := filepath.Join(home, ".claude-somelongprofilename", "glm.json")
+	if err := os.WriteFile(existing, []byte("keep\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	out := &bytes.Buffer{}
+	keys := "w\t~/.claude-somelongprofilename\tglm\r\x1b"
+	res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), out)
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	if res.OK {
+		t.Fatalf("got %+v, want the create aborted", res)
+	}
+	if raw, err := os.ReadFile(existing); err != nil || string(raw) != "keep\n" {
+		t.Fatalf("existing file touched: %q, %v", raw, err)
+	}
+	if !strings.Contains(ansi.ReplaceAllString(out.String(), ""), "glm.json already exists") {
+		t.Errorf("hint does not name the existing file at a long dir:\n%s", out)
 	}
 }
 

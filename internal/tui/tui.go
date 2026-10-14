@@ -19,6 +19,7 @@ package tui
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -874,6 +875,12 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		return "", err
 	}
 	if _, err := provider.WriteSettingsSkeleton(providerName, value, realDir); err != nil {
+		// The hint row truncates at the frame's inner width, so the file name
+		// leads the message and its glyph survives any width; the dir follows
+		// it (and also sits in the dir field right above the hint).
+		if errors.Is(err, provider.ErrSettingsExists) {
+			return "", fmt.Errorf("%s already exists in %s — remove it or pick another dir", ep.Filename, dir)
+		}
 		return "", err
 	}
 	return filepath.Join(dir, ep.Filename), nil
