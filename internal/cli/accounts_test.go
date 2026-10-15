@@ -172,6 +172,71 @@ func TestAddSettingsPathUnchanged(t *testing.T) {
 	}
 }
 
+// TestAddSettingsValueShape pins the path-vs-keyword boundary of the
+// --settings value: a dot or a ~ reads as a path and registers verbatim with
+// nothing generated, a bare word reads as a keyword attempt and — the
+// registry being case-sensitive — an unknown one is refused with the valid
+// keywords listed.
+func TestAddSettingsValueShape(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		value    string
+		wantPath string // registered verbatim, when set
+		wantErr  string // refused with this substring, when set
+	}{
+		{name: "dot reads as a relative path", value: "settings.json", wantPath: "settings.json"},
+		{name: "tilde reads as a home path", value: "~/e.json", wantPath: "~/e.json"},
+		{name: "uppercase is an unknown keyword", value: "GLM", wantErr: "custom, glm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := withTempConfig(t)
+			dir := t.TempDir()
+
+			add := newAddCmd()
+			add.SetArgs([]string{"claude", "foo", "--dir", dir, "--settings", tc.value})
+			err := add.Execute()
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("--settings %s was accepted", tc.value)
+				}
+				for _, want := range []string{tc.value, tc.wantErr} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("error does not mention %q: %v", want, err)
+					}
+				}
+			} else if err != nil {
+				t.Fatalf("add: %v", err)
+			}
+
+			if tc.wantErr != "" {
+				// A refusal lands before the create, so the dir is untouched
+				// (a success row is populated by linkProfile's symlinks).
+				if entries, err := os.ReadDir(dir); err != nil {
+					t.Fatalf("read dir: %v", err)
+				} else if len(entries) != 0 {
+					t.Fatalf("the account dir was touched by the refusal: %v", entries)
+				}
+			} else if _, err := os.Stat(filepath.Join(dir, "glm.json")); err == nil {
+				t.Fatalf("a skeleton was generated for the path value %q", tc.value)
+			}
+			c, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			accounts := c.Providers["claude"].Accounts
+			if tc.wantErr != "" {
+				if len(accounts) != 0 {
+					t.Fatalf("account registered despite the refusal: %+v", accounts)
+				}
+				return
+			}
+			if got := accounts["foo"].Settings; got != tc.wantPath {
+				t.Fatalf("settings = %q, want %q verbatim", got, tc.wantPath)
+			}
+		})
+	}
+}
+
 // TestAddSettingsUnknown: a bare word that is no endpoint keyword is refused
 // with the valid ones listed (a typo must not silently register a bogus
 // settings path), and custom points at the interactive add screen — the CLI
