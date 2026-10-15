@@ -180,23 +180,53 @@ usage counters — isolating those is the whole point of a profile.
 Some profiles differ in what they talk to, not who is logged in: Claude Code
 pointed at GLM, a proxy, or a gateway through an `env` block in a settings
 file. That block can't go in the shared `settings.json`, because every profile
-would pick it up. Give the profile its own settings file instead:
+would pick it up — the profile needs a settings file of its own.
+
+The easy way is to let aiacc write it. Run `aiacc`, press `a`, name the
+profile, and put `glm` in its **settings** field. aiacc generates
+`~/.claude-glm/glm.json` with the GLM endpoint already filled in and a
+placeholder where your key goes, created `chmod 600`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "PASTE-YOUR-KEY-HERE",
+    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "glm-5.3-flash[1m]",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "GLM 5.3 Flash 1M (z.ai)",
+    "ANTHROPIC_MODEL": "glm-5.3-flash[1m]"
+  }
+}
+```
+
+Open the file it names, paste your API key over the placeholder, and launch —
+`claude-glm` now talks to GLM from any directory. `custom` is the other
+preset: the same step, with the base URL left blank for you to fill in (add
+any model fields yourself). A settings file that is already there aborts the
+create — nothing is overwritten, ever.
+
+Anything the presets don't cover, write the file yourself and hand aiacc the
+path. `glm` works on the command line too — `--settings glm` generates the
+same skeleton non-interactively (an existing file aborts, nothing is
+overwritten), while `custom` stays picker-only, since its blank base URL is
+yours to type in:
 
 ```sh
-aiacc add claude claude-glm --dir ~/.claude-glm --settings ~/.claude-glm/glm.json
+aiacc add claude claude-glm --dir ~/.claude-glm --settings glm                     # generate it
+aiacc add claude claude-glm --dir ~/.claude-glm --settings ~/.claude-glm/glm.json # or hand-write it
 ```
 
 ```json
 { "env": { "ANTHROPIC_BASE_URL": "…", "ANTHROPIC_AUTH_TOKEN": "…", "ANTHROPIC_MODEL": "…" } }
 ```
 
-The launcher runs `claude --settings ~/.claude-glm/glm.json`, which layers that
-file over the shared settings, so `claude-glm` keeps your skills, hooks and
-statusline and talks to its own endpoint from any directory. The add screen
-(`a` in the picker) has the same optional **settings** field.
+Either way, the launcher runs `claude --settings ~/.claude-glm/glm.json`,
+which layers that file over the shared settings, so `claude-glm` keeps your
+skills, hooks and statusline and talks to its own endpoint from any directory.
 
-aiacc stores only the path and never reads the file. Keep it private
-(`chmod 600`); `aiacc doctor` warns when it isn't and fails when it's missing.
+aiacc stores only the path and never reads the file — your key never passes
+through aiacc. Keep it private (`chmod 600`); `aiacc doctor` warns when it
+isn't and fails when it's missing.
 
 ## 🎛️ Commands
 
@@ -205,7 +235,7 @@ aiacc stores only the path and never reads the file. Keep it private
 | `aiacc` | The interactive picker (front door). Piped/redirected, it prints help instead. |
 | **`<account>`** &nbsp;e.g. `claude-work` | Launch Claude Code in that account (installed by `aiacc setup`). |
 | `aiacc setup` | One-step install of the launcher commands onto your `PATH` — they work immediately. |
-| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file (claude). |
+| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you; an existing file is never overwritten (claude). |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
