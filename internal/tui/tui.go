@@ -867,14 +867,8 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 	if err != nil {
 		return value, nil // not a keyword — today's path behavior, unchanged
 	}
-	realDir, err := provider.ExpandHome(dir)
+	path, err := provider.EnsureSkeleton(dir, ep)
 	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(realDir, 0o755); err != nil {
-		return "", err
-	}
-	if _, err := provider.WriteSettingsSkeleton(providerName, value, realDir); err != nil {
 		// The hint row truncates at the frame's inner width, so the file name
 		// leads the message and its glyph survives any width; the dir follows
 		// it (and also sits in the dir field right above the hint).
@@ -883,7 +877,7 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		}
 		return "", err
 	}
-	return filepath.Join(dir, ep.Filename), nil
+	return path, nil
 }
 
 // --- Rename profile -----------------------------------------------------------

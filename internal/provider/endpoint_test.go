@@ -10,6 +10,23 @@ import (
 	"testing"
 )
 
+// readEnv reads a generated skeleton and returns its env block, failing the
+// test when the file is missing or does not parse.
+func readEnv(t *testing.T, path string) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("written file does not parse: %v\n%s", err, raw)
+	}
+	return doc.Env
+}
+
 func TestEndpointResolve(t *testing.T) {
 	glm, err := ResolveEndpoint("claude", "glm")
 	if err != nil {
@@ -37,12 +54,13 @@ func TestEndpointResolve(t *testing.T) {
 // editor, pastes their key into, and never sees aiacc touch again (ADR-0007).
 func TestSkeletonWritesFreshFile(t *testing.T) {
 	dir := t.TempDir()
-	path, err := WriteSettingsSkeleton("claude", "glm", dir)
+	glm, err := ResolveEndpoint("claude", "glm")
 	if err != nil {
-		t.Fatalf("WriteSettingsSkeleton: %v", err)
+		t.Fatalf("ResolveEndpoint(claude, glm): %v", err)
 	}
-	if path != filepath.Join(dir, "glm.json") {
-		t.Fatalf("path = %q, want %q", path, filepath.Join(dir, "glm.json"))
+	path := filepath.Join(dir, glm.Filename)
+	if err := WriteSettingsSkeleton(glm, dir); err != nil {
+		t.Fatalf("WriteSettingsSkeleton: %v", err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -51,16 +69,6 @@ func TestSkeletonWritesFreshFile(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v, want 0600 (the file is about to hold a key)", info.Mode().Perm())
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		Env map[string]string `json:"env"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("written file does not parse: %v\n%s", err, raw)
-	}
 	want := map[string]string{
 		"ANTHROPIC_BASE_URL":                 "https://api.z.ai/api/anthropic",
 		"ANTHROPIC_AUTH_TOKEN":               PlaceholderToken,
@@ -68,9 +76,10 @@ func TestSkeletonWritesFreshFile(t *testing.T) {
 		"ANTHROPIC_CUSTOM_MODEL_OPTION":      "glm-5.3-flash[1m]",
 		"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "GLM 5.3 Flash 1M (z.ai)",
 	}
+	env := readEnv(t, path)
 	for k, v := range want {
-		if doc.Env[k] != v {
-			t.Errorf("env[%s] = %q, want %q", k, doc.Env[k], v)
+		if env[k] != v {
+			t.Errorf("env[%s] = %q, want %q", k, env[k], v)
 		}
 	}
 }
@@ -79,25 +88,19 @@ func TestSkeletonWritesFreshFile(t *testing.T) {
 // and the base URL key is present but empty for the user to fill in.
 func TestSkeletonCustomOmitsEmptyFields(t *testing.T) {
 	dir := t.TempDir()
-	path, err := WriteSettingsSkeleton("claude", "custom", dir)
+	custom, err := ResolveEndpoint("claude", "custom")
 	if err != nil {
+		t.Fatalf("ResolveEndpoint(claude, custom): %v", err)
+	}
+	if err := WriteSettingsSkeleton(custom, dir); err != nil {
 		t.Fatalf("WriteSettingsSkeleton: %v", err)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		Env map[string]string `json:"env"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("written file does not parse: %v\n%s", err, raw)
-	}
-	if v, ok := doc.Env["ANTHROPIC_BASE_URL"]; !ok || v != "" {
+	env := readEnv(t, filepath.Join(dir, custom.Filename))
+	if v, ok := env["ANTHROPIC_BASE_URL"]; !ok || v != "" {
 		t.Errorf("env[ANTHROPIC_BASE_URL] = %q, %v; want present and empty", v, ok)
 	}
 	for _, k := range []string{"ANTHROPIC_MODEL", "ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"} {
-		if _, ok := doc.Env[k]; ok {
+		if _, ok := env[k]; ok {
 			t.Errorf("env[%s] present, want omitted (the custom preset has none)", k)
 		}
 	}
@@ -106,7 +109,7 @@ func TestSkeletonCustomOmitsEmptyFields(t *testing.T) {
 // An empty dir would silently write into the caller's working directory —
 // refused instead, so a caller bug can never land a skeleton there.
 func TestSkeletonEmptyDirRefused(t *testing.T) {
-	_, err := WriteSettingsSkeleton("claude", "glm", "")
+	err := WriteSettingsSkeleton(Endpoint{Filename: "glm.json"}, "")
 	if err == nil || !strings.Contains(err.Error(), "dir is required") {
 		t.Fatalf("err = %v, want it to contain %q", err, "dir is required")
 	}
@@ -116,7 +119,7 @@ func TestSkeletonEmptyDirRefused(t *testing.T) {
 }
 
 // A file already there is the user's (or a previous run's); generation writes
-// once and never overwrites, and hands back the path it refused to touch.
+// once and never overwrites, and the refusal names the path it did not touch.
 func TestSkeletonExistingRefused(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "glm.json")
@@ -127,12 +130,12 @@ func TestSkeletonExistingRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := WriteSettingsSkeleton("claude", "glm", dir)
+	err = WriteSettingsSkeleton(Endpoint{Filename: "glm.json"}, dir)
 	if !errors.Is(err, ErrSettingsExists) {
 		t.Fatalf("err = %v, want ErrSettingsExists", err)
 	}
-	if got != path {
-		t.Fatalf("returned path = %q, want the existing %q", got, path)
+	if !strings.Contains(err.Error(), path) {
+		t.Fatalf("err = %v, want it to name the existing path %q", err, path)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -158,7 +161,7 @@ func TestSkeletonUnwritableRemoved(t *testing.T) {
 	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &lim); err != nil {
 		t.Skipf("setrlimit: %v", err)
 	}
-	if _, err := WriteSettingsSkeleton("claude", "glm", dir); err == nil {
+	if err := WriteSettingsSkeleton(Endpoint{Filename: "glm.json"}, dir); err == nil {
 		t.Fatal("write under a 16-byte file-size limit succeeded")
 	} else if !errors.Is(err, syscall.EFBIG) {
 		// Pinning the mechanism keeps this test honest: a regression that
@@ -167,6 +170,24 @@ func TestSkeletonUnwritableRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "glm.json")); !os.IsNotExist(err) {
 		t.Errorf("failed skeleton left behind (stat err %v); the retry would hit ErrSettingsExists against it", err)
+	}
+}
+
+// EnsureSkeleton is the one sequence both add surfaces register through: the
+// skeleton lands in the real location behind the as-typed dir, and the
+// returned path keeps that as-typed form for launch to re-expand.
+func TestEnsureSkeletonRegistersAsTyped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	registered, err := EnsureSkeleton("~/.claude-foo", Endpoint{BaseURL: "https://example.com", Filename: "glm.json"})
+	if err != nil {
+		t.Fatalf("EnsureSkeleton: %v", err)
+	}
+	if registered != filepath.Join("~/.claude-foo", "glm.json") {
+		t.Fatalf("registered = %q, want the as-typed join", registered)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude-foo", "glm.json")); err != nil {
+		t.Fatalf("skeleton not at the expanded location: %v", err)
 	}
 }
 
@@ -185,8 +206,5 @@ func TestEndpointUnknown(t *testing.T) {
 	want := "no settings flag"
 	if _, err := ResolveEndpoint("codex", "glm"); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("ResolveEndpoint(codex) err = %v, want it to contain %q", err, want)
-	}
-	if _, err := WriteSettingsSkeleton("codex", "glm", t.TempDir()); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("WriteSettingsSkeleton(codex) err = %v, want it to contain %q", err, want)
 	}
 }

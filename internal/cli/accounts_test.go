@@ -96,7 +96,7 @@ func TestAddSettingsKeyword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read skeleton: %v", err)
 	}
-	for _, want := range []string{"ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic", provider.PlaceholderToken} {
+	for _, want := range []string{"ANTHROPIC_BASE_URL", provider.Presets["claude"].Endpoints["glm"].BaseURL, provider.PlaceholderToken} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("skeleton missing %s:\n%s", want, body)
 		}
