@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -101,8 +102,22 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		return "", fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
 			"run \"aiacc add\" with no arguments and pick it there (\"glm\" works right on the command line)", value)
 	}
-	// The refusal error names the existing path; nothing was overwritten.
-	return provider.WriteSettingsSkeleton(providerName, value, dir)
+	// A literal --dir ~ would otherwise grow a "./~" directory while the
+	// registered path expands again at launch — write at the real location and
+	// register the path as typed, in the add screen's order: expand, write,
+	// join unexpanded (internal/tui resolveSettings).
+	realDir, err := provider.ExpandHome(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		return "", err
+	}
+	if _, err := provider.WriteSettingsSkeleton(providerName, value, realDir); err != nil {
+		// The refusal error names the existing path; nothing was overwritten.
+		return "", err
+	}
+	return filepath.Join(dir, ep.Filename), nil
 }
 
 // looksLikePath reports whether a --settings value reads as a file path rather

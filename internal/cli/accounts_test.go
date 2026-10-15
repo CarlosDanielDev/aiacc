@@ -237,6 +237,48 @@ func TestAddSettingsValueShape(t *testing.T) {
 	}
 }
 
+// TestAddSettingsKeywordExpandsTildeDir: a literal --dir ~ must not grow a
+// "./~" directory — the skeleton is written at the expanded location while
+// the account registers the path as typed, matching the add screen.
+func TestAddSettingsKeywordExpandsTildeDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	work := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(work); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	path := withTempConfig(t)
+	add := newAddCmd()
+	add.SetArgs([]string{"claude", "foo", "--dir", "~/.claude-foo", "--settings", "glm"})
+	if err := add.Execute(); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	expanded := filepath.Join(tmpHome, ".claude-foo", "glm.json")
+	if _, err := os.Stat(expanded); err != nil {
+		t.Fatalf("skeleton not at the expanded location %s: %v", expanded, err)
+	}
+	literal := filepath.Join(work, "~", ".claude-foo", "glm.json")
+	if _, err := os.Stat(literal); err == nil {
+		t.Fatalf("skeleton written under a literal ~ directory: %s", literal)
+	}
+
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	want := filepath.Join("~/.claude-foo", "glm.json")
+	if got := c.Providers["claude"].Accounts["foo"].Settings; got != want {
+		t.Fatalf("settings = %q, want the dir as typed: %q", got, want)
+	}
+}
+
 // TestAddSettingsUnknown: a bare word that is no endpoint keyword is refused
 // with the valid ones listed (a typo must not silently register a bogus
 // settings path), and custom points at the interactive add screen — the CLI
