@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -98,36 +97,24 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 	ep, err := provider.ResolveEndpoint(providerName, value)
 	if err != nil {
 		// ResolveEndpoint only returns ErrUnknownEndpoint for a provider that
-		// has a settings flag, so indexing Presets here is safe; anything else
-		// (unknown provider, no flag) falls through to saveAccount's refusal.
+		// has a settings flag, so reaching this branch means a bare word that
+		// names no keyword; anything else (unknown provider, no flag) falls
+		// through to saveAccount's refusal.
 		if !errors.Is(err, provider.ErrUnknownEndpoint) || looksLikePath(value) {
 			return value, nil // not a keyword — today's path behavior, unchanged
 		}
-		valid := strings.Join(slices.Sorted(maps.Keys(provider.Presets[providerName].Endpoints)), ", ")
-		return "", fmt.Errorf("unknown settings keyword %q (valid: %s) — give a settings file path instead, "+
-			"or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", value, valid)
+		// The error already names the typo and lists the valid keywords.
+		return "", fmt.Errorf("%w — give a settings file path instead, "+
+			"or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", err)
 	}
 	if ep.BaseURL == "" {
 		return "", fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
 			"run \"aiacc add\" with no arguments and pick it there (\"glm\" works right on the command line)", value)
 	}
-	// The dir arrives as typed (~/.claude-foo), so expand before touching disk:
-	// the skeleton must land in the real profile, while the path the account
-	// registers stays the unexpanded join — stored paths re-expand at launch
-	// (provider.LaunchArgs) and the rename/add flows depend on the tilde form.
-	// (The add RunE expands the same value for its own MkdirAll/linkProfile.)
-	realDir, err := provider.ExpandHome(dir)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(realDir, 0o755); err != nil {
-		return "", err
-	}
-	if _, err := provider.WriteSettingsSkeleton(providerName, value, realDir); err != nil {
-		// The refusal error names the existing path; nothing was overwritten.
-		return "", err
-	}
-	return filepath.Join(dir, ep.Filename), nil
+	// The screen and the CLI register through the same sequence, so the
+	// skeleton lands in the real profile while the registered path keeps the
+	// as-typed form (stored paths re-expand at launch; see EnsureSkeleton).
+	return provider.EnsureSkeleton(dir, ep)
 }
 
 // looksLikePath reports whether a --settings value reads as a file path rather

@@ -54,19 +54,15 @@ func ResolveEndpoint(providerName, name string) (Endpoint, error) {
 	return ep, nil
 }
 
-// WriteSettingsSkeleton writes a settings-file skeleton for the named endpoint
-// into dir and returns its path. The file holds an env block with the
-// endpoint's base URL, PlaceholderToken where the key goes, and the endpoint's
-// model fields; it is created with mode 0600, written once, and never opened
-// by aiacc again (ADR-0007). A file already at the path is refused untouched:
-// its path comes back wrapped in ErrSettingsExists.
-func WriteSettingsSkeleton(providerName, name, dir string) (string, error) {
+// WriteSettingsSkeleton writes a settings-file skeleton for ep into dir. The
+// file holds an env block with the endpoint's base URL, PlaceholderToken where
+// the key goes, and the endpoint's model fields; it is created with mode 0600,
+// written once, and never opened by aiacc again (ADR-0007). A file already at
+// the target is refused untouched: the existing path comes back wrapped in
+// ErrSettingsExists.
+func WriteSettingsSkeleton(ep Endpoint, dir string) error {
 	if dir == "" {
-		return "", fmt.Errorf("dir is required: a relative skeleton would land in the working directory")
-	}
-	ep, err := ResolveEndpoint(providerName, name)
-	if err != nil {
-		return "", err
+		return fmt.Errorf("dir is required: a relative skeleton would land in the working directory")
 	}
 	path := filepath.Join(dir, ep.Filename)
 	// O_EXCL is the whole overwrite guard: creation fails if the file is
@@ -74,9 +70,9 @@ func WriteSettingsSkeleton(providerName, name, dir string) (string, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
-			return path, fmt.Errorf("%w: %s", ErrSettingsExists, path)
+			return fmt.Errorf("%w: %s", ErrSettingsExists, path)
 		}
-		return "", err
+		return err
 	}
 	env := map[string]string{
 		"ANTHROPIC_BASE_URL":   ep.BaseURL,
@@ -104,7 +100,27 @@ func WriteSettingsSkeleton(providerName, name, dir string) (string, error) {
 	}
 	if err != nil {
 		os.Remove(path) // leave no half-written skeleton for the retry to refuse
+		return err
+	}
+	return nil
+}
+
+// EnsureSkeleton generates ep's settings skeleton for an account whose dir
+// arrives as the user typed it (~/.claude-foo): the skeleton lands in the real
+// location behind dir, and the returned path is the unexpanded join — the form
+// the account registers, which SettingsFile/LaunchArgs re-expand at launch.
+// Both add surfaces (the picker screen and the CLI flag) register through this
+// one sequence so the expansion and write order cannot drift between them.
+func EnsureSkeleton(dir string, ep Endpoint) (string, error) {
+	realDir, err := ExpandHome(dir)
+	if err != nil {
 		return "", err
 	}
-	return path, nil
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		return "", err
+	}
+	if err := WriteSettingsSkeleton(ep, realDir); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, ep.Filename), nil
 }

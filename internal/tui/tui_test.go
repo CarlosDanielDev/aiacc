@@ -11,7 +11,26 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/CarlosDanielDev/aiacc/internal/provider"
 )
+
+// readEnv reads a generated skeleton and returns its env block, failing the
+// test when the file is missing or does not parse.
+func readEnv(t *testing.T, path string) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("skeleton is not valid JSON: %v", err)
+	}
+	return doc.Env
+}
 
 // sample is two launchable claude profiles.
 func sample() []Row {
@@ -428,18 +447,9 @@ func TestAddSettingsKeyword(t *testing.T) {
 	if !res.OK || res.Settings != want {
 		t.Fatalf("got %+v, want settings=%s (the generated path)", res, want)
 	}
-	raw, err := os.ReadFile(want)
-	if err != nil {
-		t.Fatalf("skeleton not written: %v", err)
-	}
-	var doc struct {
-		Env map[string]string `json:"env"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("skeleton is not valid JSON: %v", err)
-	}
-	if doc.Env["ANTHROPIC_BASE_URL"] != "https://api.z.ai/api/anthropic" || doc.Env["ANTHROPIC_AUTH_TOKEN"] == "" {
-		t.Fatalf("env = %v, want the glm endpoint skeleton", doc.Env)
+	env := readEnv(t, want)
+	if env["ANTHROPIC_BASE_URL"] != provider.Presets["claude"].Endpoints["glm"].BaseURL || env["ANTHROPIC_AUTH_TOKEN"] == "" {
+		t.Fatalf("env = %v, want the glm endpoint skeleton", env)
 	}
 }
 
@@ -536,17 +546,8 @@ func TestAddSettingsPathUnchanged(t *testing.T) {
 	if !res.OK || res.Settings != want {
 		t.Fatalf("got %+v, want settings=%s for the custom keyword", res, want)
 	}
-	raw, err := os.ReadFile(want)
-	if err != nil {
-		t.Fatalf("custom skeleton not written: %v", err)
-	}
-	var doc struct {
-		Env map[string]string `json:"env"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("custom skeleton is not valid JSON: %v", err)
-	}
-	if base, ok := doc.Env["ANTHROPIC_BASE_URL"]; !ok || base != "" {
+	env := readEnv(t, want)
+	if base, ok := env["ANTHROPIC_BASE_URL"]; !ok || base != "" {
 		t.Fatalf("ANTHROPIC_BASE_URL = %q (present=%t), want present but empty", base, ok)
 	}
 }
