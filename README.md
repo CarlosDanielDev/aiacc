@@ -206,11 +206,14 @@ any model fields yourself). A settings file that is already there aborts the
 create — nothing is overwritten, ever.
 
 Anything the presets don't cover, write the file yourself and hand aiacc the
-path (the `--settings` flag takes a path — the `glm`/`custom` keywords live on
-the add screen):
+path. `glm` works on the command line too — `--settings glm` generates the
+same skeleton non-interactively (an existing file aborts, nothing is
+overwritten), while `custom` stays picker-only, since its blank base URL is
+yours to type in:
 
 ```sh
-aiacc add claude claude-glm --dir ~/.claude-glm --settings ~/.claude-glm/glm.json
+aiacc add claude claude-glm --dir ~/.claude-glm --settings glm                     # generate it
+aiacc add claude claude-glm --dir ~/.claude-glm --settings ~/.claude-glm/glm.json # or hand-write it
 ```
 
 ```json
@@ -232,7 +235,7 @@ isn't and fails when it's missing.
 | `aiacc` | The interactive picker (front door). Piped/redirected, it prints help instead. |
 | **`<account>`** &nbsp;e.g. `claude-work` | Launch Claude Code in that account (installed by `aiacc setup`). |
 | `aiacc setup` | One-step install of the launcher commands onto your `PATH` — they work immediately. |
-| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file (claude); the add screen's **settings** field also takes `glm` or `custom` and generates it. |
+| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you; an existing file is never overwritten (claude). |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
