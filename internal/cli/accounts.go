@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/CarlosDanielDev/aiacc/internal/claude"
@@ -49,6 +51,9 @@ func newAddCmd() *cobra.Command {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
+			if settings, err = resolveSettings(providerName, dir, settings); err != nil {
+				return err
+			}
 			if err := saveAccount(path, providerName, account, dir, quota, envVar, command, settings); err != nil {
 				return err
 			}
@@ -61,8 +66,50 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().IntVar(&quota, "quota", 0, "optional manual plan size")
 	cmd.Flags().StringVar(&envVar, "env", "", "config-dir env var for a custom (non-preset) provider")
 	cmd.Flags().StringVar(&command, "command", "", "CLI to launch for a custom (non-preset) provider")
-	cmd.Flags().StringVar(&settings, "settings", "", "extra settings file the launcher passes the CLI, e.g. an alternate API endpoint (claude only)")
+	cmd.Flags().StringVar(&settings, "settings", "", "settings file the launcher passes the CLI: a path, or an endpoint keyword (glm) that generates a skeleton (claude only)")
 	return cmd
+}
+
+// resolveSettings turns the --settings value into the path the account
+// registers, the CLI spelling of the add screen's settings field. An endpoint
+// keyword (glm) generates the settings skeleton into the account dir and
+// yields the generated path, exactly as if the user had written the file by
+// hand and passed its path. A keyword whose preset has no base URL (custom)
+// is refused: its base URL is the user's to type, and only the interactive
+// add screen can ask for it. A bare word that names no keyword is refused
+// with the valid ones listed — a typo must not silently register a bogus
+// settings path — while anything path-like keeps today's verbatim path
+// behavior. A file already at the target aborts the add with its path named;
+// nothing is overwritten (the aiacc link rule).
+func resolveSettings(providerName, dir, value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	ep, err := provider.ResolveEndpoint(providerName, value)
+	if err != nil {
+		// ResolveEndpoint only returns ErrUnknownEndpoint for a provider that
+		// has a settings flag, so indexing Presets here is safe; anything else
+		// (unknown provider, no flag) falls through to saveAccount's refusal.
+		if !errors.Is(err, provider.ErrUnknownEndpoint) || looksLikePath(value) {
+			return value, nil // not a keyword — today's path behavior, unchanged
+		}
+		valid := strings.Join(slices.Sorted(maps.Keys(provider.Presets[providerName].Endpoints)), ", ")
+		return "", fmt.Errorf("unknown settings keyword %q (valid: %s) — give a settings file path instead, "+
+			"or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", value, valid)
+	}
+	if ep.BaseURL == "" {
+		return "", fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
+			"run \"aiacc add\" with no arguments and pick it there (\"glm\" works right on the command line)", value)
+	}
+	// The refusal error names the existing path; nothing was overwritten.
+	return provider.WriteSettingsSkeleton(providerName, value, dir)
+}
+
+// looksLikePath reports whether a --settings value reads as a file path rather
+// than a keyword attempt: it holds a separator, a ~, or a dot (/abs, ./rel,
+// a/b, ~/x, file.json). A bare word (glm, kimi) is a keyword attempt.
+func looksLikePath(value string) bool {
+	return strings.ContainsAny(value, "/~.")
 }
 
 // saveAccount registers (provider, account) at dir in the config file at path,
