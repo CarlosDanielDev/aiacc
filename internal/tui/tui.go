@@ -19,6 +19,7 @@ package tui
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +32,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/CarlosDanielDev/aiacc/internal/provider"
 )
 
 // Row is one profile in the launcher. The caller fills it from config.
@@ -484,7 +487,7 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) s
 	if len(rows) == 0 {
 		lines = append(lines,
 			boxRow([]seg{pad(2), {"No profiles yet.", inkWhite}}, w),
-			boxRow([]seg{pad(2), {"Press ", inkGrey}, {"a", inkWhite}, {" to add one.", inkGrey}}, w),
+			boxRow([]seg{pad(2), {"Press ", inkGrey}, {"a", inkWhite}, {" to add one — settings: ", inkGrey}, {"glm", inkWhite}, {" for an API key.", inkGrey}}, w),
 			boxBlank(w),
 		)
 	}
@@ -774,7 +777,7 @@ func RenderAdd(currentLogin, provider string, f AddForm, hint string, sz Size) s
 		input(1, "dir       ", f.Dir, defaultDir(provider, f.Name)),
 	)
 	if f.WithSettings {
-		lines = append(lines, input(2, "settings  ", f.Settings, "optional — e.g. an API endpoint file"))
+		lines = append(lines, input(2, "settings  ", f.Settings, "glm · custom — or a path"))
 	}
 
 	lines = append(lines, boxBlank(w))
@@ -796,11 +799,11 @@ func RenderAdd(currentLogin, provider string, f AddForm, hint string, sz Size) s
 
 // driveAdd is the add-screen input loop, decoupled from /dev/tty for tests. It
 // filters keystrokes so the name field can only ever hold command-safe chars.
-func driveAdd(currentLogin, provider string, withSettings bool, g *geom, in io.Reader, out io.Writer) (AddResult, error) {
+func driveAdd(currentLogin, providerName string, withSettings bool, g *geom, in io.Reader, out io.Writer) (AddResult, error) {
 	f, hint := AddForm{WithSettings: withSettings}, ""
 	r := bufio.NewReader(in)
 	for {
-		fmt.Fprint(out, repaint(g)+RenderAdd(currentLogin, provider, f, hint, g.get()))
+		fmt.Fprint(out, repaint(g)+RenderAdd(currentLogin, providerName, f, hint, g.get()))
 		b, err := r.ReadByte()
 		if err != nil {
 			if err == io.EOF {
@@ -823,9 +826,14 @@ func driveAdd(currentLogin, provider string, withSettings bool, g *geom, in io.R
 			}
 			d := f.Dir
 			if d == "" {
-				d = defaultDir(provider, f.Name)
+				d = defaultDir(providerName, f.Name)
 			}
-			return AddResult{Name: f.Name, Dir: d, Settings: f.Settings, OK: true}, nil
+			settings, err := resolveSettings(providerName, d, f.Settings)
+			if err != nil {
+				hint = err.Error() // e.g. an existing target — nothing was overwritten
+				continue
+			}
+			return AddResult{Name: f.Name, Dir: d, Settings: settings, OK: true}, nil
 		case 0x7f, 0x08: // Backspace / Delete
 			*focused, hint = trimLastByte(*focused), ""
 		default:
@@ -842,6 +850,40 @@ func trimLastByte(s string) string {
 		return s
 	}
 	return s[:len(s)-1]
+}
+
+// resolveSettings turns the settings field's value into the path the profile
+// registers. An endpoint keyword (glm, custom) generates the settings skeleton
+// into the profile dir and yields the generated path, exactly as if the user
+// had written the file by hand and passed its path; anything else is a path
+// the user manages, taken verbatim as before. A file already at the target
+// aborts the create with its path — nothing is overwritten (the aiacc link
+// rule), and the caller stays on the screen.
+func resolveSettings(providerName, dir, value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	ep, err := provider.ResolveEndpoint(providerName, value)
+	if err != nil {
+		return value, nil // not a keyword — today's path behavior, unchanged
+	}
+	realDir, err := provider.ExpandHome(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		return "", err
+	}
+	if _, err := provider.WriteSettingsSkeleton(providerName, value, realDir); err != nil {
+		// The hint row truncates at the frame's inner width, so the file name
+		// leads the message and its glyph survives any width; the dir follows
+		// it (and also sits in the dir field right above the hint).
+		if errors.Is(err, provider.ErrSettingsExists) {
+			return "", fmt.Errorf("%s already exists in %s — remove it or pick another dir", ep.Filename, dir)
+		}
+		return "", err
+	}
+	return filepath.Join(dir, ep.Filename), nil
 }
 
 // --- Rename profile -----------------------------------------------------------
