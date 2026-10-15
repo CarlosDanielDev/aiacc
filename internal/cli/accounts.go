@@ -49,7 +49,16 @@ func newAddCmd() *cobra.Command {
 			if dir == "" {
 				return fmt.Errorf("--dir is required")
 			}
-			if err := os.MkdirAll(dir, 0o755); err != nil {
+			// Expand once, here: the dir the user typed (~/.claude-foo) must
+			// not grow a literal "./~" tree in the working directory, and the
+			// shared assets belong in the real profile. Registration keeps the
+			// as-typed form — the stored paths re-expand at launch (LaunchArgs)
+			// and the rename/add flows depend on the tilde surviving.
+			realDir, err := provider.ExpandHome(dir)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(realDir, 0o755); err != nil {
 				return err
 			}
 			if settings, err = resolveSettings(providerName, dir, settings); err != nil {
@@ -59,7 +68,7 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			syncLauncher(path, providerName, account) // keep the command in sync
-			linkProfile(providerName, dir)            // same skills/agents as the bare CLI
+			linkProfile(providerName, realDir)        // same skills/agents as the bare CLI
 			return nil
 		},
 	}
@@ -102,10 +111,11 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		return "", fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
 			"run \"aiacc add\" with no arguments and pick it there (\"glm\" works right on the command line)", value)
 	}
-	// A literal --dir ~ would otherwise grow a "./~" directory while the
-	// registered path expands again at launch — write at the real location and
-	// register the path as typed, in the add screen's order: expand, write,
-	// join unexpanded (internal/tui resolveSettings).
+	// The dir arrives as typed (~/.claude-foo), so expand before touching disk:
+	// the skeleton must land in the real profile, while the path the account
+	// registers stays the unexpanded join — stored paths re-expand at launch
+	// (provider.LaunchArgs) and the rename/add flows depend on the tilde form.
+	// (The add RunE expands the same value for its own MkdirAll/linkProfile.)
 	realDir, err := provider.ExpandHome(dir)
 	if err != nil {
 		return "", err

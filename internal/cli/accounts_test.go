@@ -238,8 +238,9 @@ func TestAddSettingsValueShape(t *testing.T) {
 }
 
 // TestAddSettingsKeywordExpandsTildeDir: a literal --dir ~ must not grow a
-// "./~" directory — the skeleton is written at the expanded location while
-// the account registers the path as typed, matching the add screen.
+// "./~" directory — no shared-asset links, no skeleton, nothing lands there;
+// the skeleton is written at the expanded location while the account
+// registers the path as typed, matching the add screen.
 func TestAddSettingsKeywordExpandsTildeDir(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
@@ -263,6 +264,9 @@ func TestAddSettingsKeywordExpandsTildeDir(t *testing.T) {
 	expanded := filepath.Join(tmpHome, ".claude-foo", "glm.json")
 	if _, err := os.Stat(expanded); err != nil {
 		t.Fatalf("skeleton not at the expanded location %s: %v", expanded, err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "~")); err == nil {
+		t.Fatalf("a literal ~ directory grew in the working directory")
 	}
 	literal := filepath.Join(work, "~", ".claude-foo", "glm.json")
 	if _, err := os.Stat(literal); err == nil {
