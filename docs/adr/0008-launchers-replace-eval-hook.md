@@ -6,23 +6,19 @@ Supersedes [0002](0002-generic-provider-driver.md) and [0003](0003-shell-eval-sw
 
 ## Context
 
-[0003](0003-shell-eval-switching.md) required `aiacc use claude work` to change
-`CLAUDE_CONFIG_DIR` in the user's current shell. It did so with an `aiacc` wrapper
-function that `eval`s the binary's export output. There is no `use` subcommand now
-(`internal/cli/root.go:51-63`). Re-sourcing erases the old wrapper
-(`internal/cli/shellinit.go:44-47`, `:74-84`).
-
-[0002](0002-generic-provider-driver.md) modelled a provider as
-`{name, env_var, config_dir}` with "no provider special-cased in code". Claude is
-now special-cased: handoff is gated to claude (`internal/cli/handoff.go:223`), and
-presets carry per-provider capability fields (`internal/provider/provider.go:19-38`).
+[0003](0003-shell-eval-switching.md) changed `CLAUDE_CONFIG_DIR` in the current shell
+through an `aiacc` wrapper that `eval`s the binary's output. There is no `use`
+subcommand now (`internal/cli/root.go:51-63`), and re-sourcing erases the old
+wrapper (`internal/cli/shellinit.go:44-47`). [0002](0002-generic-provider-driver.md)
+said "no provider special-cased in code"; claude is now special-cased, and presets
+carry per-provider fields (`internal/provider/provider.go:19-38`).
 
 ## Decision
 
 Still holds from 0002: a provider is selected by an env var that points at an
-account directory. For built-in providers that env var comes from the preset
-(`internal/provider/provider.go:54-97`); for custom providers it is configured by
-the user (`internal/config/config.go:25-29`). User config overrides the preset
+account directory. Built-in providers get it from the preset
+(`internal/provider/provider.go:54-97`); custom providers from user config
+(`internal/config/config.go:25-29`). User config overrides the preset
 (`internal/provider/provider.go:106-114`).
 
 Still holds from 0002 as a known limit: CLIs that select accounts by some other
@@ -34,31 +30,22 @@ shell. Launchers scope it to the launched process.
 
 Changed:
 
-1. **Default mechanism: launcher executables.** `aiacc setup` writes one script per
-   account onto PATH (`internal/cli/setup.go:100-128`). The body is
-   `exec env <ENV_VAR>='<dir>' <command> [<settings-flag> <path>] "$@"`
-   (`internal/shell/shell.go:102-118`; args from `internal/provider/provider.go:161-167`).
-   For claude, `<ENV_VAR>` is `CLAUDE_CONFIG_DIR`.
-2. **Opt-in alternative: `aiacc shell-init <shell>`.** It prints static per-account
-   shell functions (`internal/cli/shellinit.go:35-72`, built on `shell.Launcher`,
-   `internal/shell/shell.go:48-71`) that the user evals or sources. There is no
-   `aiacc` wrapper function; what the user evals or sources is the printed function
-   definitions, not output the binary computes per command.
-3. **Presets carry per-provider capabilities:** `SettingsFlag`, `Endpoints`,
-   `Installs`, `Shared`, `State` (`internal/provider/provider.go:19-38`). Built-in
-   presets are Go map entries (`provider.go:54-97`); custom providers are config
-   entries with an optional `command` (`internal/config/config.go:25-29`). An
-   account may carry a settings path (`internal/config/config.go:17-23`).
-4. **Reversal of 0002's "no provider is special-cased in code".** Claude is
-   special-cased: its login detection lives in a claude-only package
-   (`internal/claude/detect.go:34`), and handoff is gated to claude
-   (`internal/cli/handoff.go:223`, `launchesClaude`). `Shared`/`State` are also set
-   for codex (`provider.go:90-96`), so the capability fields are not claude-only.
+1. **Default: launcher executables.** `aiacc setup` writes one script per account
+   onto PATH, running `exec env <VAR>=<dir> <command> [args] "$@"`
+   (`internal/cli/setup.go:100-128`).
+2. **Opt-in: `aiacc shell-init <shell>`.** It prints static per-account functions
+   that the user evals or sources (`internal/cli/shellinit.go:35-72`). There is no
+   `aiacc` wrapper, and the binary computes no output to eval.
+3. **Presets carry capabilities:** `SettingsFlag`, `Endpoints`, `Installs`,
+   `Shared`, `State` (`internal/provider/provider.go:19-38`). Codex sets `Shared`
+   and `State` too (`provider.go:90-96`), so they are not claude-only.
+4. **Reversal of "no provider is special-cased".** Claude is special-cased in
+   handoff, which is gated to claude (`internal/cli/handoff.go:223`).
 
 ## Consequences
 
-- Shell quoting guards both paths: the launcher body and `shell-init` use the same
-  `PosixQuote`/`fishSingleQuote` idiom (launcher `internal/shell/shell.go:114`;
-  `shell-init` `internal/shell/shell.go:171,179`).
+- Shell quoting guards both paths: `Launcher` uses `PosixQuote` and
+  `fishSingleQuote` for `shell-init` (`internal/shell/shell.go:64,67`), and the
+  launcher body uses `PosixQuote` (`internal/shell/shell.go:114`).
 - A CLI-specific feature needs a preset field or a claude gate, not a generic
   code path.
