@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+<meta name="description" content="aiacc — one command per AI-CLI account. Keep personal, work and client profiles side by side and launch any of them by name.">
+<title>aiacc</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* — Design plan
+     Color: near-black with green bias; phosphor green is the only loud voice,
+     cyan strictly for interactive/hotkey things, amber only for warnings.
+     Type: IBM Plex Mono carries display, code and data (a terminal-native
+     face); IBM Plex Sans carries running text. Layout: one centered column,
+     the terminal demo as the hero's right hand, sections in mono eyebrows. */
+  :root {
+    --bg: #060b07;
+    --surface: #0a130d;
+    --raised: #0e1a11;
+    --line: #1c3322;
+    --fg: #cfe9d6;
+    --dim: #6d8f78;
+    --faint: #42584a;
+    --green: #3dff74;
+    --green-deep: #19b84e;
+    --cyan: #37c8e8;
+    --amber: #e8b341;
+    --pink: #e86ba8;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 400 16px/1.65 "IBM Plex Sans", system-ui, sans-serif;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  ::selection { background: var(--green-deep); color: #04120a; }
+  a { color: var(--cyan); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+
+  /* ── nav ─────────────────────────────────────────────── */
+  .nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--line);
+    top: env(safe-area-inset-top, 0px);
+  }
+  .nav-in {
+    display: flex; align-items: center; gap: 20px;
+    padding-block: 12px;
+  }
+  .mark {
+    font: 700 17px "IBM Plex Mono", monospace;
+    letter-spacing: .06em;
+    color: var(--green);
+    display: flex; align-items: center; gap: 2px;
+    margin-right: auto;
+  }
+  .mark::after {
+    content: "▌";
+    color: var(--green);
+    animation: blink 1.1s steps(1) infinite;
+  }
+  .nav a:not(.mark) {
+    font: 500 13.5px "IBM Plex Mono", monospace;
+    color: var(--dim);
+  }
+  .nav a:not(.mark):hover { color: var(--cyan); text-decoration: none; }
+  .nav .gh {
+    color: var(--fg);
+    border: 1px solid var(--line);
+    padding: 5px 12px;
+    border-radius: 6px;
+  }
+  .nav .gh:hover { border-color: var(--cyan); color: var(--cyan); }
+  @media (max-width: 560px) { .nav a:not(.mark):not(.gh) { display: none; } }
+
+  /* ── hero ────────────────────────────────────────────── */
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    gap: 44px;
+    align-items: center;
+    padding-block: 84px 72px;
+  }
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: 1fr; padding-block: 56px 48px; }
+  }
+  .kicker {
+    font: 500 12.5px "IBM Plex Mono", monospace;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--green-deep);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font: 700 clamp(34px, 5.2vw, 54px)/1.08 "IBM Plex Mono", monospace;
+    letter-spacing: -.02em;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  h1 .hl { color: var(--green); }
+  .sub {
+    font-size: 18px;
+    color: var(--dim);
+    max-width: 46ch;
+    margin: 0 0 30px;
+  }
+  .sub b { color: var(--fg); font-weight: 500; }
+
+  .installs {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .installs .row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .installs .row:last-child { border-bottom: 0; }
+  .installs .tag {
+    font: 500 11px "IBM Plex Mono", monospace;
+    color: var(--faint);
+    width: 86px;
+    flex: none;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+  }
+  .installs code {
+    font: 500 13.5px "IBM Plex Mono", monospace;
+    color: var(--fg);
+    overflow-x: auto;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+    scrollbar-width: none;
+  }
+  .installs code .dollar { color: var(--green); user-select: none; }
+  .copy {
+    flex: none;
+    font: 500 11px "IBM Plex Mono", monospace;
+    color: var(--dim);
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 3px 9px;
+    cursor: pointer;
+  }
+  .copy:hover { color: var(--cyan); border-color: var(--cyan); }
+  .copy.ok { color: var(--green); border-color: var(--green-deep); }
+
+  .badges {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-top: 22px;
+  }
+  .badge {
+    font: 500 11.5px "IBM Plex Mono", monospace;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    padding: 3px 11px;
+  }
+  .badge b { color: var(--green); font-weight: 500; }
+
+  /* ── terminal demo ───────────────────────────────────── */
+  .term {
+    background: #030805;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 0 0 1px #02120a, 0 24px 70px -30px rgba(61, 255, 116, .28);
+    overflow: hidden;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 7px;
+    padding: 9px 13px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .term-bar i {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--line);
+  }
+  .term-bar i:nth-child(1) { background: #e0564b; }
+  .term-bar i:nth-child(2) { background: #e8b341; }
+  .term-bar i:nth-child(3) { background: #2bb673; }
+  .term-bar span {
+    font-size: 11.5px;
+    color: var(--faint);
+    margin-left: 8px;
+  }
+  .term-body {
+    padding: 18px 18px 20px;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+  .term-body pre {
+    margin: 0;
+    font: inherit;
+    white-space: pre;
+  }
+  .t-dim { color: var(--faint); }
+  .t-green { color: var(--green); }
+  .t-cyan { color: var(--cyan); }
+  .t-amber { color: var(--amber); }
+  .t-fg { color: var(--fg); }
+  .t-pink { color: var(--pink); }
+  .launch-line { margin-top: 14px; min-height: 20px; }
+  .launch-line .prompt { color: var(--green); }
+  .launch-line .typed { color: var(--fg); }
+  .cursor { color: var(--green); animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .launch-out { color: var(--dim); margin-top: 4px; }
+  .launch-out .ok { color: var(--green); }
+  @media (prefers-reduced-motion: reduce) {
+    .cursor, .mark::after { animation: none; }
+  }
+
+  /* ── sections ────────────────────────────────────────── */
+  section { padding-block: 56px; }
+  .eyebrow {
+    font: 600 12px "IBM Plex Mono", monospace;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--green-deep);
+    margin: 0 0 10px;
+  }
+  h2 {
+    font: 700 clamp(24px, 3.2vw, 32px)/1.2 "IBM Plex Mono", monospace;
+    letter-spacing: -.01em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  .lede { color: var(--dim); max-width: 62ch; margin: 0 0 34px; }
+  .lede code, td code, .flow code, li code {
+    font: 500 13.5px "IBM Plex Mono", monospace;
+    color: var(--cyan);
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px 20px 22px;
+    min-width: 0;
+  }
+  .card:hover { border-color: #274a32; }
+  .card h3 {
+    font: 600 14px "IBM Plex Mono", monospace;
+    color: var(--green);
+    margin: 0 0 8px;
+  }
+  .card h3::before { content: "// "; color: var(--faint); }
+  .card p { margin: 0; font-size: 14.5px; color: var(--dim); }
+  .card p code { font-size: 12.5px; }
+
+  /* quick start */
+  .steps { display: grid; gap: 0; counter-reset: step; }
+  .step {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 18px;
+    padding-block: 20px;
+    border-bottom: 1px solid var(--line);
+  }
+  .step:last-child { border-bottom: 0; }
+  .step::before {
+    counter-increment: step;
+    content: counter(step, decimal-leading-zero);
+    font: 600 15px "IBM Plex Mono", monospace;
+    color: var(--green-deep);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    height: 40px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step h3 {
+    font: 600 15px "IBM Plex Mono", monospace;
+    margin: 0 0 6px;
+    color: var(--fg);
+  }
+  .step p { margin: 0 0 12px; color: var(--dim); font-size: 14.5px; }
+  .step pre {
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font: 500 13px/1.6 "IBM Plex Mono", monospace;
+  }
+  .step pre .c { color: var(--faint); }
+
+  /* endpoint section */
+  .endpoint {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    gap: 40px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { .endpoint { grid-template-columns: 1fr; } }
+  .endpoint .note {
+    font-size: 13.5px;
+    color: var(--faint);
+    border-left: 2px solid var(--green-deep);
+    padding-left: 14px;
+    margin-top: 22px;
+  }
+  .endpoint pre.json {
+    margin: 0;
+    background: #030805;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font: 500 12.5px/1.6 "IBM Plex Mono", monospace;
+  }
+  .j-key { color: var(--cyan); }
+  .j-str { color: var(--green); }
+  .j-punc { color: var(--faint); }
+  .j-hl { color: var(--amber); }
+
+  /* keys table */
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .keys-wrap { overflow-x: auto; }
+  th, td {
+    text-align: left;
+    padding: 10px 16px 10px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  th {
+    font: 600 11.5px "IBM Plex Mono", monospace;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  td { color: var(--dim); }
+  td kbd {
+    font: 600 13px "IBM Plex Mono", monospace;
+    color: var(--cyan);
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 2px 8px;
+    margin-right: 6px;
+  }
+
+  /* how it works */
+  .mech {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 26px 28px;
+    font-size: 15.5px;
+    color: var(--dim);
+    max-width: 76ch;
+  }
+  .mech code { font-size: 13.5px; }
+  .mech .arrow { color: var(--green); font-family: "IBM Plex Mono", monospace; }
+
+  /* footer */
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 40px;
+    padding-block: 34px 44px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 28px;
+    align-items: center;
+    color: var(--faint);
+    font: 400 13px "IBM Plex Mono", monospace;
+  }
+  footer .mark { font-size: 14px; margin-right: 0; }
+  footer a { color: var(--dim); }
+  footer a:hover { color: var(--cyan); }
+  footer .spacer { flex: 1; }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="mark" href="#">aiacc</a>
+    <a href="#features">features</a>
+    <a href="#quickstart">quick start</a>
+    <a href="#endpoint">endpoints</a>
+    <a class="gh" href="https://github.com/CarlosDanielDev/aiacc">GitHub ↗</a>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="hero">
+    <div>
+      <p class="kicker">one command per AI-CLI account</p>
+      <h1>Stop re-logging in.<br>Start <span class="hl">switching</span>.</h1>
+      <p class="sub">Keep your <b>personal</b>, <b>work</b> and <b>client</b> accounts for Claude Code, Codex and any other AI CLI side by side — each in its own isolated config — and launch any of them <b>by name</b>.</p>
+      <div class="installs">
+        <div class="row">
+          <span class="tag">brew</span>
+          <code><span class="dollar">$ </span>brew install CarlosDanielDev/tap/aiacc</code>
+          <button class="copy" data-copy="brew install CarlosDanielDev/tap/aiacc">copy</button>
+        </div>
+        <div class="row">
+          <span class="tag">go</span>
+          <code><span class="dollar">$ </span>go install github.com/CarlosDanielDev/aiacc@latest</code>
+          <button class="copy" data-copy="go install github.com/CarlosDanielDev/aiacc@latest">copy</button>
+        </div>
+        <div class="row">
+          <span class="tag">script</span>
+          <code><span class="dollar">$ </span>curl -fsSL https://raw.githubusercontent.com/CarlosDanielDev/aiacc/main/install.sh | sh</code>
+          <button class="copy" data-copy="curl -fsSL https://raw.githubusercontent.com/CarlosDanielDev/aiacc/main/install.sh | sh">copy</button>
+        </div>
+      </div>
+      <div class="badges">
+        <span class="badge"><b>zero</b> dependencies</span>
+        <span class="badge"><b>one</b> static binary</span>
+        <span class="badge">macOS · <b>Linux</b></span>
+        <span class="badge"><b>MIT</b></span>
+      </div>
+    </div>
+
+    <div class="term" aria-label="The aiacc picker, as it looks in a terminal">
+      <div class="term-bar"><i></i><i></i><i></i><span>aiacc — ~/projects/aiacc</span></div>
+      <div class="term-body"><pre><span class="t-dim">┏━ AIACC ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓</span>
+<span class="t-dim">┃</span>                                        <span class="t-dim">┃</span>
+<span class="t-dim">┃</span>  <span class="t-green">// launch a profile</span>                   <span class="t-dim">┃</span>
+<span class="t-dim">┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫</span>
+<span class="t-dim">┃</span>  <span class="t-green">▸ claude-work</span>      <span class="t-fg">carlos@work.io</span>     <span class="t-dim">┃</span>
+<span class="t-dim">┃</span>    claude-glm       <span class="t-cyan">⚙ glm.json</span>        <span class="t-dim">┃</span>
+<span class="t-dim">┃</span>    claude-personal  <span class="t-dim">not logged in</span>      <span class="t-dim">┃</span>
+<span class="t-dim">┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫</span>
+<span class="t-dim">┃</span>  <span class="t-green">◆ 3 profiles</span>   <span class="t-green">✓ ready</span>               <span class="t-dim">┃</span>
+<span class="t-dim">┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛</span>
+  <span class="t-dim">↑↓ move</span>  <span class="t-cyan">⏎</span> launch  <span class="t-cyan">a</span> add  <span class="t-cyan">d</span> remove  <span class="t-cyan">q</span> quit</pre>
+      <div class="launch-line mono"><span class="prompt">$ </span><span class="typed" id="typed"></span><span class="cursor">▌</span></div>
+      <div class="launch-out mono" id="launch-out" hidden><span class="ok">✓</span> Claude Code opened — signed in as carlos@work.io</div>
+    </div></div>
+  </div>
+
+  <section id="features">
+    <p class="eyebrow">why aiacc</p>
+    <h2>Accounts, not acrobatics</h2>
+    <p class="lede">Env-var juggling, symlinked credentials, a shell alias you half-remember — none of it. A profile is a directory; a command is a name.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>one command per account</h3>
+        <p>Type <code>claude-work</code> and Claude Code opens signed in as work. Tomorrow it still is. No switching, no re-login, no juggling.</p>
+      </div>
+      <div class="card">
+        <h3>one-step setup</h3>
+        <p><code>aiacc setup</code> installs a launcher per profile onto your PATH. They work immediately, in the shell you're already in — no sourcing, no reload.</p>
+      </div>
+      <div class="card">
+        <h3>interactive picker</h3>
+        <p>A bare <code>aiacc</code> lists every profile with its login. Arrow keys to launch, <code>a</code> to add, <code>r</code> to rename, <code>d</code> to remove — all in the frame.</p>
+      </div>
+      <div class="card">
+        <h3>same skills everywhere</h3>
+        <p>Profiles share your skills, sub-agents, slash commands and hooks, so <code>claude-work</code> is the same tool as <code>claude</code> — not an empty one.</p>
+      </div>
+      <div class="card">
+        <h3>your endpoint per profile</h3>
+        <p>A profile can carry its own settings file: GLM, a proxy, any Anthropic-compatible API. <code>--settings glm</code> even generates the skeleton for you.</p>
+      </div>
+      <div class="card">
+        <h3>never touches credentials</h3>
+        <p>aiacc points one environment variable at a directory and steps aside. Logins stay in each profile's own directory; aiacc never reads them.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="quickstart">
+    <p class="eyebrow">quick start</p>
+    <h2>Two accounts in a minute</h2>
+    <p class="lede">No config file to write, no daemon, no shell plugin. Register, install the commands, type a name.</p>
+    <div class="steps">
+      <div class="step">
+        <div>
+          <h3>Register your accounts</h3>
+          <p>Each gets its own isolated config directory — or run <code>aiacc</code> and press <code>a</code>.</p>
+          <pre>aiacc add claude claude-work     --dir ~/.claude-work
+aiacc add claude claude-personal --dir ~/.claude-personal</pre>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>Install the launcher commands</h3>
+          <p>One step. The commands work immediately — and <code>add</code>, <code>remove</code> and <code>rename</code> keep them in sync afterwards.</p>
+          <pre>aiacc setup</pre>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>Launch by name</h3>
+          <p>The first run opens Claude Code signed out; <code>/login</code> once and that directory remembers it forever.</p>
+          <pre>claude-work        <span class="c"># → /login as work, once</span>
+claude-personal    <span class="c"># a different account entirely</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="endpoint">
+    <p class="eyebrow">new</p>
+    <h2>Hit a usage limit? Bring your own endpoint.</h2>
+    <p class="lede">Some profiles differ in what they <em>talk to</em>, not who is logged in. Point one at GLM, a proxy or a gateway — the launcher passes its own settings file, layered over everything you share.</p>
+    <div class="endpoint">
+      <div>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <h3>One keyword, one skeleton</h3>
+              <p><code>glm</code> writes the settings file for z.ai's Anthropic-compatible API — right base URL, right model, mode 600. <code>custom</code> leaves the base URL blank for you.</p>
+              <pre>aiacc add claude claude-glm \
+  --dir ~/.claude-glm --settings glm</pre>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Paste your key. That's it.</h3>
+              <p>Open the generated file, replace the placeholder with your key. aiacc stores the path and never reads the file — your key never enters aiacc.</p>
+              <pre>claude-glm         <span class="c"># Claude Code on GLM, from any directory</span></pre>
+            </div>
+          </div>
+        </div>
+        <p class="note">In the picker it's the same flow: press <b>a</b> and type <b>glm</b> in the settings field. An existing file is never overwritten — the add aborts and names the path.</p>
+      </div>
+      <pre class="json"><span class="j-punc">{</span>
+  <span class="j-key">"env"</span><span class="j-punc">: {</span>
+    <span class="j-key">"ANTHROPIC_BASE_URL"</span><span class="j-punc">:</span> <span class="j-str">"https://api.z.ai/api/anthropic"</span><span class="j-punc">,</span>
+    <span class="j-key">"ANTHROPIC_AUTH_TOKEN"</span><span class="j-punc">:</span> <span class="j-hl">"PASTE-YOUR-KEY-HERE"</span><span class="j-punc">,</span>
+    <span class="j-key">"ANTHROPIC_MODEL"</span><span class="j-punc">:</span> <span class="j-str">"glm-5.3-flash[1m]"</span>
+  <span class="j-punc">}</span>
+<span class="j-punc">}</span></pre>
+    </div>
+  </section>
+
+  <section id="mechanism">
+    <p class="eyebrow">how it works</p>
+    <h2>One mechanism, honestly boring</h2>
+    <div class="mech">
+      <p>Each account is an isolated config directory, selected by an environment variable. Claude Code reads <code>CLAUDE_CONFIG_DIR</code>; point it at <code>~/.claude-work</code> and Claude runs as your work account. A launcher is a tiny script that sets that one variable for that one launch — <span class="arrow">→</span> no global state, nothing to get out of sync, and your credentials are never touched. Codex and any other env-var-configurable CLI work the same way, out of the box.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">picker keys</p>
+    <h2>Everything lives in the frame</h2>
+    <div class="keys-wrap">
+      <table>
+        <tr><th>key</th><th>action</th><th>key</th><th>action</th></tr>
+        <tr><td><kbd>↑↓</kbd><kbd>j k</kbd></td><td>move</td><td><kbd>a</kbd></td><td>add a profile</td></tr>
+        <tr><td><kbd>⏎</kbd></td><td>launch it</td><td><kbd>r</kbd></td><td>rename (command follows)</td></tr>
+        <tr><td><kbd>h</kbd></td><td>hand a session off</td><td><kbd>d</kbd></td><td>remove — asks first</td></tr>
+        <tr><td><kbd>s</kbd></td><td>install launchers</td><td><kbd>q</kbd></td><td>quit</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <span class="mark">aiacc</span>
+    <span>MIT © CarlosDanielDev</span>
+    <span class="spacer"></span>
+    <a href="https://github.com/CarlosDanielDev/aiacc">source</a>
+    <a href="https://github.com/CarlosDanielDev/aiacc/issues">issues</a>
+    <a href="https://github.com/CarlosDanielDev/aiacc/blob/main/CONTRIBUTING.md">contributing</a>
+    <a href="https://github.com/CarlosDanielDev/aiacc/releases">releases</a>
+  </footer>
+
+</main>
+
+<script>
+  // Launch-line typing: $ claude-work ⏎ → the sign-in line. Static under
+  // reduced motion; the sentence is already on the page either way.
+  (function () {
+    var line = document.getElementById("typed");
+    var out = document.getElementById("launch-out");
+    if (!line || !out) return;
+    var word = "claude-work";
+    var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) { line.textContent = word; out.hidden = false; return; }
+    var i = 0;
+    var t = setInterval(function () {
+      i++;
+      line.textContent = word.slice(0, i);
+      if (i >= word.length) {
+        clearInterval(t);
+        setTimeout(function () { out.hidden = false; }, 350);
+      }
+    }, 110);
+  })();
+
+  // Copy buttons: clipboard write inside the click, with a select fallback.
+  document.querySelectorAll(".copy").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.getAttribute("data-copy");
+      var done = function () {
+        btn.textContent = "copied";
+        btn.classList.add("ok");
+        setTimeout(function () { btn.textContent = "copy"; btn.classList.remove("ok"); }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallback(); });
+      } else { fallback(); }
+      function fallback() {
+        var r = document.createRange();
+        r.selectNodeContents(btn.parentNode.querySelector("code"));
+        var s = getSelection();
+        s.removeAllRanges(); s.addRange(r);
+        btn.textContent = "select ⏩ ⌘C";
+        setTimeout(function () { btn.textContent = "copy"; }, 1800);
+      }
+    });
+  });
+</script>
+</body>
+</html>
