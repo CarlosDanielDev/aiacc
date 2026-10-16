@@ -82,9 +82,9 @@ func ClassifySettings(providerName, value string) (ep Endpoint, keyword bool, er
 // KeywordRefusal is the settings-field refusal for a bare word that names no
 // keyword. Its text leads with the keywords: the add screen's hint row keeps
 // only the left edge of a long message, so the list must come before the
-// typo. At 32 terminal columns the hint row is 26 runes and "keywords:
-// custom, glm" (21) fits; narrower terminals shrink the row further and the
-// list truncates, an accepted limit. It unwraps to ErrUnknownEndpoint, so
+// typo. The list is intact down to 28 terminal columns; at 27 the add screen's
+// hint row truncates it to "keywords: custom, gl…", an accepted limit (see
+// TestAddSettingsKeywordsAtNarrowWidth). It unwraps to ErrUnknownEndpoint, so
 // errors.Is classifies it exactly as it classifies ResolveEndpoint's refusal.
 // Keywords and Value are exported so a surface can compose its own sentence.
 type KeywordRefusal struct{ Keywords, Value string }

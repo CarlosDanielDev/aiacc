@@ -90,7 +90,7 @@ type settingsRefusal struct {
 
 func (e settingsRefusal) Error() string {
 	return fmt.Sprintf("--settings %q is neither a file path nor a known endpoint keyword (known: %s). "+
-		"Give a settings file path instead, or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"",
+		"Give a settings file path instead; \"custom\" needs the interactive add screen (\"aiacc add\" with no arguments)",
 		e.value, e.keywords)
 }
 

@@ -609,11 +609,11 @@ func TestAddSettingsKeywordTypo(t *testing.T) {
 			// Whether the hint row must truncate is derived from the real refusal
 			// and the real cap, never hardcoded per row: the hint keeps at most
 			// innerWidth(80)-4 runes of the refusal.
-			cap := innerWidth(80) - 4
-			overflow := utf8.RuneCountInString(typoRefusal(t, typo)) > cap
+			hintCap := innerWidth(80) - 4
+			overflow := utf8.RuneCountInString(typoRefusal(t, typo)) > hintCap
 			truncated := strings.Contains(hint, "…")
 			if overflow != truncated {
-				t.Errorf("refusal overflows the %d-rune cap = %t, but hint truncated = %t: %q", cap, overflow, truncated, hint)
+				t.Errorf("refusal overflows the %d-rune cap = %t, but hint truncated = %t: %q", hintCap, overflow, truncated, hint)
 			}
 			if overflow && strings.Contains(hint, typo) {
 				t.Errorf("hint row shows the whole typo %q although the refusal overflows: %q", typo, hint)
@@ -628,13 +628,14 @@ func TestAddSettingsKeywordTypo(t *testing.T) {
 	}
 }
 
-// The keyword list's width boundary, derived from innerWidth and trunc. At 32
-// columns innerWidth reaches its 30-column floor and the hint row keeps 26
-// runes. The list "keywords: custom, glm" (21 runes) survives from 28 columns
-// up: at 28 the hint cap is 22 runes and trunc keeps 21 plus "…" on overflow;
-// at 27 the cap is 21 and trunc keeps only 20, so the list truncates. Nothing
-// enforces a terminal minimum; narrower terminals truncate it (an accepted
-// limit). The 27-column case pins that limit so the boundary cannot rot.
+// The keyword list's width boundary, derived from innerWidth and trunc. The
+// list "keywords: custom, glm" (21 runes) is intact from 28 terminal columns
+// up: at 28 the hint cap is 22 runes and trunc keeps 21 plus "…" on overflow.
+// At 27 the cap is 21 and trunc keeps only 20, so the list truncates to
+// "keywords: custom, gl…". 32 columns is one point on the intact side; there
+// innerWidth reaches its 30-column floor (the hint row is 26 runes). Nothing
+// enforces a terminal minimum, so the 27-column case pins the accepted limit
+// and keeps the boundary from rotting.
 func TestAddSettingsKeywordsAtNarrowWidth(t *testing.T) {
 	if innerWidth(32) != 30 || innerWidth(31) >= 30 {
 		t.Fatalf("innerWidth floor moved: innerWidth(31)=%d, innerWidth(32)=%d; update the narrow-width boundary",
