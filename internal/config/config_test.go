@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,6 +60,10 @@ model = "sonnet" # unknown to this build of aiacc
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	err = Save(path, c)
 	if err == nil {
 		t.Fatal("Save: want a refusal naming the unknown key, got nil")
@@ -66,13 +71,16 @@ model = "sonnet" # unknown to this build of aiacc
 	if !strings.Contains(err.Error(), "model") {
 		t.Fatalf("refusal must name the unknown key, got: %v", err)
 	}
-	// The refusal must leave the file exactly as it was.
-	b, err := os.ReadFile(path)
+	if !strings.Contains(err.Error(), "remove these keys from") {
+		t.Fatalf("refusal must say how to resolve, got: %v", err)
+	}
+	// The refusal must leave the file byte-for-byte as it was.
+	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `model = "sonnet"`) {
-		t.Fatalf("refused Save must not touch the file, got: %s", b)
+	if !bytes.Equal(before, after) {
+		t.Fatalf("refused Save must not touch the file:\nbefore: %s\nafter:  %s", before, after)
 	}
 	// And the config stays readable, known fields intact.
 	out, err := Load(path)

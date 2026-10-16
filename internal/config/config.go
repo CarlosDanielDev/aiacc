@@ -109,6 +109,10 @@ func Save(path string, c *Config) error {
 // serialize instead of both reading the same state and racing to a
 // last-writer-wins save that silently drops one side's change. A mutate that
 // returns an error aborts the update without saving.
+//
+// The lock file (path+".lock") is deliberately left behind after the update:
+// deleting it on the way out would race a concurrent mutation that just
+// opened it, so it persists as a harmless zero-byte sibling of the config.
 func Update(path string, mutate func(*Config) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -156,5 +160,6 @@ func guardUnknownKeys(path string) error {
 	slices.Sort(unknown)
 	return fmt.Errorf("refusing to save %s: unknown keys would be lost: %s — "+
 		"the file holds keys this aiacc does not know (a newer version or a hand "+
-		"edit added them); resolve them before mutating the config", path, strings.Join(unknown, ", "))
+		"edit added them); remove these keys from the file, or run a newer aiacc "+
+		"that understands them, before mutating the config", path, strings.Join(unknown, ", "))
 }

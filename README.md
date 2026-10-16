@@ -266,6 +266,11 @@ dir = "~/.claude-work"
 A leading `~` in a `dir` or `settings` path expands to your home directory. A missing config file is
 treated as empty, so read-only commands work before you register anything.
 
+Writes are serialized through a `config.toml.lock` sibling that appears next to the file during
+mutations and is left in place (empty and harmless) afterwards. A config holding keys this version of
+aiacc doesn't know — say, written by a newer release or by hand — refuses to be overwritten by
+`add` / `remove` / `rename`, with the keys named, so nothing is silently dropped.
+
 ## 🎬 Tutorials
 
 <details open>
