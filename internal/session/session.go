@@ -131,13 +131,17 @@ func ReadMeta(path string) (Meta, error) {
 
 // Copy writes s into toConfigDir's projects, under the same project directory, so
 // the target account can resume it. It returns the destination path. Transcripts
-// are private (0600), and that mode is preserved.
+// are private (0600), and that mode is preserved. It refuses a destination that
+// resolves to the source file itself — truncating it would zero the transcript.
 func Copy(s Info, toConfigDir string) (string, error) {
 	destDir := filepath.Join(projectsRoot(toConfigDir), s.ProjectDir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return "", err
 	}
 	dest := filepath.Join(destDir, s.ID+".jsonl")
+	if filepath.Clean(dest) == filepath.Clean(s.Path) {
+		return "", fmt.Errorf("refusing to copy: destination %s is the source file", dest)
+	}
 
 	in, err := os.Open(s.Path)
 	if err != nil {

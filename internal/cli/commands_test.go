@@ -282,6 +282,56 @@ func TestHandoffDirectRejectsClaudeCommandWithOtherEnv(t *testing.T) {
 	}
 }
 
+// TestHandoffRefusesSameAccount pins the self-handoff guard: `handoff claude
+// work work` is one argument short of a real handoff, and the copy would
+// truncate the transcript before reading it — silent, irreversible data loss.
+// The direct path must refuse up front and leave the transcript untouched.
+func TestHandoffRefusesSameAccount(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]config.Account{
+			"work": {Dir: dir},
+		}},
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	sdir := filepath.Join(dir, "projects", "-Users-x-proj")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := "abc123de-0000-0000-0000-000000000000"
+	line := `{"type":"user","cwd":"/Users/x/proj","lastPrompt":"hello"}` + "\n"
+	tr := filepath.Join(sdir, sid+".jsonl")
+	if err := os.WriteFile(tr, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newHandoffCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"claude", "work", "work"})
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected handoff to the same account to be refused")
+	}
+	if !strings.Contains(err.Error(), "same") {
+		t.Fatalf("error should name the same-account boundary, got: %v", err)
+	}
+	after, err := os.ReadFile(tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("transcript clobbered: want %q, got %q", before, after)
+	}
+}
+
 // TestHandoffTUIRefusesNonClaudeRow drives the picker's handoff action on a
 // codex row and pins the in-screen claude-only refusal — the gate must fire
 // before any session listing, so the flow never starts for a non-claude row.

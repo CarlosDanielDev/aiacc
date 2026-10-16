@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,6 +107,32 @@ func TestCopyPreservesProjectDir(t *testing.T) {
 	toList, _ := List(to)
 	if len(toList) != 1 || toList[0].ID != "s1" {
 		t.Fatalf("target does not see the session: %+v", toList)
+	}
+}
+
+// TestCopyRefusesSelfOverwrite pins the data-loss guard: handing a session to
+// the account it already lives in makes the destination resolve to the source
+// file, and truncating that before reading used to zero the transcript. Copy
+// must refuse and leave the source byte-identical.
+func TestCopyRefusesSelfOverwrite(t *testing.T) {
+	cfg := t.TempDir()
+	p := seed(t, cfg, "-proj-a", "s1", []string{`{"type":"user","cwd":"/proj/a"}`})
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, _ := List(cfg)
+	if _, err := Copy(list[0], cfg); err == nil {
+		t.Fatal("expected Copy into the source's own config dir to be refused")
+	}
+
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("transcript clobbered: want %q, got %q", before, after)
 	}
 }
 

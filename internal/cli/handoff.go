@@ -67,6 +67,9 @@ func handoffDirect(cmd *cobra.Command, cfgPath, providerName, from, to, sessionI
 	if err != nil {
 		return fmt.Errorf("to account: %w", err)
 	}
+	if filepath.Clean(fromDir) == filepath.Clean(toDir) {
+		return fmt.Errorf("refusing to hand off: %q and %q resolve to the same account directory (%s)", from, to, fromDir)
+	}
 	sess, err := pickSession(fromDir, sessionID)
 	if err != nil {
 		return err
