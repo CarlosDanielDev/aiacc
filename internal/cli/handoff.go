@@ -56,7 +56,7 @@ func handoffDirect(cmd *cobra.Command, cfgPath, providerName, from, to, sessionI
 		return err
 	}
 	if !launchesClaude(c, providerName) {
-		return fmt.Errorf("hand off is claude-only for now — it copies Claude Code transcripts, and %q is not a claude provider", providerName)
+		return fmt.Errorf("hand off is claude-only for now — it copies Claude Code transcripts, and %q is not a claude profile (command 'claude', env 'CLAUDE_CONFIG_DIR')", providerName)
 	}
 	fromDir, err := provider.AccountDir(c, providerName, from)
 	if err != nil {
@@ -104,10 +104,10 @@ func handoffPickSource(cfgPath string) error {
 	}
 	accts := claudeAccounts(c)
 	if len(accts) == 0 {
-		return tui.RunMessage("hand off", []tui.Line{{Text: "Hand off is claude-only for now — it copies Claude Code transcripts, and no claude accounts are configured.", Color: tui.Grey}})
+		return showMessage("hand off", []tui.Line{{Text: "Hand off is claude-only for now — it copies Claude Code transcripts, and no claude accounts are configured.", Color: tui.Grey}})
 	}
 	if len(accts) < 2 {
-		return tui.RunMessage("hand off", []tui.Line{{Text: "Need at least two accounts to hand off between.", Color: tui.Grey}})
+		return showMessage("hand off", []tui.Line{{Text: "Need at least two accounts to hand off between.", Color: tui.Grey}})
 	}
 	items := make([]tui.ListItem, len(accts))
 	for i, a := range accts {
@@ -129,7 +129,7 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 		return err
 	}
 	if !launchesClaude(c, sProvider) {
-		return tui.RunMessage("hand off", []tui.Line{{Text: "Hand off is claude-only for now — it copies Claude Code transcripts.", Color: tui.Grey}})
+		return showMessage("hand off", []tui.Line{{Text: "Hand off is claude-only for now — it copies Claude Code transcripts.", Color: tui.Grey}})
 	}
 	sDir, err := provider.AccountDir(c, sProvider, sAccount)
 	if err != nil {
@@ -140,7 +140,7 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 		return err
 	}
 	if len(sessions) == 0 {
-		return tui.RunMessage("hand off · "+sAccount, []tui.Line{{Text: "No sessions found for this account yet.", Color: tui.Grey}})
+		return showMessage("hand off · "+sAccount, []tui.Line{{Text: "No sessions found for this account yet.", Color: tui.Grey}})
 	}
 	if len(sessions) > 30 {
 		sessions = sessions[:30] // most recent 30 is plenty to choose from
@@ -174,7 +174,7 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 		}
 	}
 	if len(targets) == 0 {
-		return tui.RunMessage("hand off", []tui.Line{{Text: "No other account to hand off to.", Color: tui.Grey}})
+		return showMessage("hand off", []tui.Line{{Text: "No other account to hand off to.", Color: tui.Grey}})
 	}
 	titems := make([]tui.ListItem, len(targets))
 	for i, t := range targets {
@@ -198,17 +198,27 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 		body = append(body, tui.Line{Text: "cd " + meta.Cwd, Color: tui.Blue})
 	}
 	body = append(body, tui.Line{Text: target.account + " --resume " + sess.ID, Color: tui.Blue})
-	return tui.RunMessage("hand off · done", body)
+	return showMessage("hand off · done", body)
 }
 
 // acctRef is a launchable account (provider, account, expanded dir).
 type acctRef struct{ provider, account, dir string }
 
-// launchesClaude reports whether the provider's launcher is Claude Code itself
-// — the only CLI whose transcripts hand off can copy and resume.
+// launchesClaude reports whether the provider is a claude profile: its launcher
+// is claude AND its env var is claude's own (CLAUDE_CONFIG_DIR). Both checks
+// matter — the resume exec below hardcodes "claude" and "CLAUDE_CONFIG_DIR",
+// and this gate is what makes that hardcoding safe: a provider registered with
+// --command claude --env OTHER would launch claude into the default config dir,
+// not the target account's.
 func launchesClaude(c *config.Config, providerName string) bool {
-	return launchCommand(c, providerName) == "claude"
+	cmd, _ := provider.Command(c, providerName)
+	env, _ := provider.EnvVar(c, providerName)
+	return cmd == "claude" && env == provider.Presets["claude"].EnvVar
 }
+
+// showMessage renders a handoff screen. It is a variable so tests can capture
+// the message without a tty.
+var showMessage = tui.RunMessage
 
 // claudeAccounts lists the accounts of providers whose launcher is Claude Code
 // (the only rows hand off works between), sorted.

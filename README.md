@@ -238,7 +238,7 @@ isn't and fails when it's missing.
 | `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you; an existing file is never overwritten (claude). |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
-| `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
+| `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there — Claude profiles only for now, the transcript format is Claude's. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
 | `aiacc link [provider] [account]` | Share your skills, sub-agents, commands and hooks with a profile (all of them by default). `--replace` takes over entries a profile owns; `--prune` removes dead links (asks first). |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
@@ -306,7 +306,8 @@ aiacc handoff claude claude-work claude-personal --launch
 ```
 
 It copies just the session transcript into the other account and resumes it — same
-context, now billed to personal. (In the picker, press `h` on the source account.)
+context, now billed to personal. Claude profiles only for now — the transcript
+format is Claude's. (In the picker, press `h` on the source account.)
 
 </details>
 

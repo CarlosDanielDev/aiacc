@@ -10,6 +10,7 @@ import (
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/shell"
+	"github.com/CarlosDanielDev/aiacc/internal/tui"
 )
 
 // seedConfig writes a single-provider config with one account at dir and
@@ -193,6 +194,105 @@ func TestHandoffDirectRejectsNonClaude(t *testing.T) {
 	}
 }
 
+// TestHandoffDirectRejectsClaudeCommandWithOtherEnv: launching claude is not
+// enough — the resume exec hardcodes CLAUDE_CONFIG_DIR, so a provider with a
+// foreign env var would resume into the wrong directory. The gate refuses it.
+func TestHandoffDirectRejectsClaudeCommandWithOtherEnv(t *testing.T) {
+	path := withTempConfig(t)
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"clonede": {EnvVar: "OTHER_DIR", Command: "claude", Accounts: map[string]config.Account{
+			"work":     {Dir: t.TempDir()},
+			"personal": {Dir: t.TempDir()},
+		}},
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newHandoffCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"clonede", "work", "personal"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected handoff on a claude-command provider with a foreign env var to be refused")
+	}
+	if !strings.Contains(err.Error(), "claude") {
+		t.Fatalf("error should name the claude-only boundary, got: %v", err)
+	}
+}
+
+// TestHandoffTUIRefusesNonClaudeRow drives the picker's handoff action on a
+// codex row and pins the in-screen claude-only refusal — the gate must fire
+// before any session listing, so the flow never starts for a non-claude row.
+func TestHandoffTUIRefusesNonClaudeRow(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"codex": {EnvVar: "CODEX_HOME", Command: "codex", Accounts: map[string]config.Account{
+			"main": {Dir: dir},
+		}},
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	// A session in claude layout: if the gate is gone, the flow proceeds to the
+	// session list instead of refusing, and this test fails.
+	sdir := filepath.Join(dir, "projects", "-Users-x-proj")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sdir, "abc.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	captured := captureHandoffMessage(t)
+	if err := runHandoffTUI(path, "codex", "main"); err != nil {
+		t.Fatalf("handoff should show the refusal in-screen, got error: %v", err)
+	}
+	if len(*captured) == 0 || !strings.Contains((*captured)[0].Text, "claude-only") {
+		t.Fatalf("expected the claude-only message, got %+v", *captured)
+	}
+}
+
+// TestHandoffPickSourceSaysClaudeOnlyWithoutClaudeAccounts drives the bare
+// interactive handoff with no claude accounts configured and pins the
+// claude-only message (not the generic "need two accounts").
+func TestHandoffPickSourceSaysClaudeOnlyWithoutClaudeAccounts(t *testing.T) {
+	path := withTempConfig(t)
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"codex": {EnvVar: "CODEX_HOME", Command: "codex", Accounts: map[string]config.Account{
+			"main": {Dir: t.TempDir()},
+		}},
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	captured := captureHandoffMessage(t)
+	if err := handoffPickSource(path); err != nil {
+		t.Fatalf("handoff should show the refusal in-screen, got error: %v", err)
+	}
+	if len(*captured) == 0 || !strings.Contains((*captured)[0].Text, "claude-only") {
+		t.Fatalf("expected the claude-only message, got %+v", *captured)
+	}
+}
+
+// captureHandoffMessage swaps showMessage for a recorder and restores it on
+// cleanup, so a test can drive a handoff entry point and read the message it
+// would have shown, without a tty.
+func captureHandoffMessage(t *testing.T) *[]tui.Line {
+	t.Helper()
+	captured := &[]tui.Line{}
+	old := showMessage
+	showMessage = func(title string, body []tui.Line) error {
+		*captured = body
+		return nil
+	}
+	t.Cleanup(func() { showMessage = old })
+	return captured
+}
+
 // TestClaudeAccountsListsClaudeOnly pins the interactive handoff list to the
 // accounts whose launcher is Claude Code — a codex row must not start a flow
 // that ends in claude.
@@ -220,6 +320,7 @@ func TestClaudeAccountsListsClaudeOnly(t *testing.T) {
 func TestLaunchesClaude(t *testing.T) {
 	c := &config.Config{Providers: map[string]config.Provider{
 		"claude":   {EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude"},
+		"clone":    {EnvVar: "OTHER_DIR", Command: "claude"}, // launches claude, isolates it differently
 		"codex":    {EnvVar: "CODEX_HOME", Command: "codex"},
 		"nolaunch": {EnvVar: "X_DIR", Command: ""},
 	}}
@@ -228,6 +329,7 @@ func TestLaunchesClaude(t *testing.T) {
 		want     bool
 	}{
 		{"claude", true},
+		{"clone", false},
 		{"codex", false},
 		{"nolaunch", false},
 		{"unknown", false},
