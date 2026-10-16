@@ -76,9 +76,11 @@ func ClassifySettings(providerName, value string) (ep Endpoint, keyword bool, er
 	if !errors.Is(err, ErrUnknownEndpoint) || looksLikePath(value) {
 		return Endpoint{}, false, nil
 	}
-	// The keywords lead the message: the add screen's hint row truncates long
-	// text at its right edge, and a long typo must not cut them off.
-	return Endpoint{}, false, fmt.Errorf("valid keywords: %s (not %q)", keywordList(Presets[providerName]), value)
+	// The keywords lead the message (after the sentinel's text): the add
+	// screen's hint row truncates long text at its right edge, and a long typo
+	// must not cut them off. The sentinel stays wrapped, so errors.Is holds
+	// exactly as it does for ResolveEndpoint.
+	return Endpoint{}, false, fmt.Errorf("%w: valid keywords: %s (not %q)", ErrUnknownEndpoint, keywordList(Presets[providerName]), value)
 }
 
 // keywordList is the provider's endpoint keywords, sorted and comma-joined.

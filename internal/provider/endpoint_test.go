@@ -260,6 +260,9 @@ func TestClassifySettings(t *testing.T) {
 					t.Errorf("refusal %q missing %q", err, want)
 				}
 			}
+			if !errors.Is(err, ErrUnknownEndpoint) {
+				t.Errorf("refusal %q does not wrap ErrUnknownEndpoint", err)
+			}
 		})
 	}
 }

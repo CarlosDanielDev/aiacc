@@ -558,7 +558,14 @@ func TestAddSettingsPathUnchanged(t *testing.T) {
 // valid keywords near the start so a long typo cannot truncate them off the
 // row, and leave nothing written to the dir.
 func TestAddSettingsKeywordTypo(t *testing.T) {
-	for _, typo := range []string{"kimi", "kimi-coding-plan-v2"} {
+	for _, tc := range []struct {
+		typo     string
+		overflow bool // the full refusal is longer than the hint row: the list must survive truncation
+	}{
+		{"kimi", false},
+		{"kimi-coding-plan-v2-enterprise-tier-x", true},
+	} {
+		typo := tc.typo
 		t.Run(typo, func(t *testing.T) {
 			dir := t.TempDir()
 			out := &bytes.Buffer{}
@@ -569,6 +576,16 @@ func TestAddSettingsKeywordTypo(t *testing.T) {
 			}
 			if res.OK {
 				t.Fatalf("got %+v, want the create aborted for the typo", res)
+			}
+			// The hint is cut to innerWidth-4 runes (see RenderAdd). Pin that the
+			// untruncated refusal really overflows it, so the keyword assertion
+			// below keeps exercising truncation if the wording ever changes.
+			if tc.overflow {
+				cap := innerWidth(80) - 4
+				_, _, cerr := provider.ClassifySettings("claude", typo)
+				if full := utf8.RuneCountInString(cerr.Error()); full <= cap {
+					t.Fatalf("refusal is %d runes, not over the %d-rune hint cap: the truncation case is not exercised", full, cap)
+				}
 			}
 			frames := strings.Split(out.String(), "\x1b[H")
 			last := ansi.ReplaceAllString(frames[len(frames)-1], "")
