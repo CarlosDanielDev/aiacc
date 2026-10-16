@@ -76,12 +76,13 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 	if err != nil {
 		return err
 	}
+	// The wizard only adds accounts to providers the picker offers: the presets
+	// and the ones already configured. A brand-new custom provider is created by
+	// the flag form, which takes the env var and the command it needs.
 	if _, ok := provider.Presets[providerName]; !ok {
-		// A custom provider can be registered in one step when its env var and
-		// command are given, exactly as the flag path allows.
-		_, configured := cfg.Providers[providerName]
-		if !configured && (pre.Env == "" || pre.Command == "") {
-			return fmt.Errorf("unknown provider %q (valid: %s)",
+		if _, configured := cfg.Providers[providerName]; !configured {
+			return fmt.Errorf("unknown provider %q (valid: %s); to create a new provider run "+
+				"\"aiacc add <provider> <account> --dir <dir> --env <ENV_VAR> --command <cli>\"",
 				providerName, strings.Join(validProviders(cfg), ", "))
 		}
 	}

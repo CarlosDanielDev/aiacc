@@ -90,7 +90,7 @@ func TestAddWizardUnknownProviderRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("unknown provider was accepted")
 	}
-	for _, want := range []string{"clade", "claude", "codex"} {
+	for _, want := range []string{"clade", "claude", "codex", "aiacc add <provider> <account>", "--env", "--command"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error does not mention %q: %v", want, err)
 		}
@@ -264,27 +264,69 @@ func TestAddWizardSettingsNoneMeansNone(t *testing.T) {
 	}
 }
 
-// TestAddWizardCustomProviderLaunchLine: a provider registered in one step with
-// --env and --command is launched by the CLI it registered, so the closing line
-// names that CLI rather than the provider.
+// TestAddWizardCustomProviderLaunchLine: a configured custom provider that has
+// no launch command yet takes --command from the prefill when the account is
+// saved, so the closing line must name that CLI, read after the save, rather
+// than the provider's name.
 func TestAddWizardCustomProviderLaunchLine(t *testing.T) {
 	home := hermeticHome(t)
 	path := filepath.Join(home, "config.toml")
+	seeded := &config.Config{Providers: map[string]config.Provider{
+		"myprov": {EnvVar: "MYCLI_HOME", Accounts: map[string]config.Account{}},
+	}}
+	if err := config.Save(path, seeded); err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(home, "mycli-acct")
-	pre := addPrefill{Dir: dir, Env: "MYCLI_HOME", Command: "mycli"}
 	var out bytes.Buffer
-	if err := runAddWizard(bytes.NewBufferString("work\nmyprov\n"), &out, path, pre); err != nil {
+	if err := runAddWizard(bytes.NewBufferString("work\nmyprov\n"), &out, path, addPrefill{Dir: dir, Command: "mycli"}); err != nil {
 		t.Fatalf("wizard: %v", err)
 	}
 	if !strings.Contains(out.String(), "Launch mycli as this profile:") {
 		t.Fatalf("closing line names the wrong CLI:\n%s", out.String())
 	}
-	c, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
+}
+
+// TestAddWizardUnknownProviderRegistersNothing: an unknown provider is refused
+// with the actionable message, before anything is written — no account, no
+// config dir, no launcher — whether or not --env and --command were given,
+// since the wizard never creates a provider.
+func TestAddWizardUnknownProviderRegistersNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		pre  addPrefill
+	}{
+		{"plain", addPrefill{}},
+		{"with env and command", addPrefill{Env: "MYCLI_HOME", Command: "mycli"}},
 	}
-	if _, ok := c.Providers["myprov"]; !ok {
-		t.Fatalf("custom provider not registered: %+v", c.Providers)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := hermeticHome(t)
+			path := filepath.Join(home, "config.toml")
+			dir := filepath.Join(home, "newprov-acct")
+			pre := tc.pre
+			pre.Dir = dir
+			err := runAddWizard(bytes.NewBufferString("work\nnewprov\n"), &bytes.Buffer{}, path, pre)
+			if err == nil {
+				t.Fatal("unknown provider was accepted")
+			}
+			if !strings.Contains(err.Error(), "aiacc add <provider> <account> --dir <dir> --env <ENV_VAR> --command <cli>") {
+				t.Fatalf("refusal does not name the flag form that creates a provider: %v", err)
+			}
+			if _, statErr := os.Stat(dir); statErr == nil {
+				t.Fatalf("config dir was created before the refusal: %s", dir)
+			}
+			if _, statErr := os.Stat(filepath.Join(home, ".local", "bin", "work")); statErr == nil {
+				t.Fatal("a launcher was written before the refusal")
+			}
+			c, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(c.Providers) != 0 {
+				t.Fatalf("something was registered before the refusal: %+v", c.Providers)
+			}
+		})
 	}
 }
 
