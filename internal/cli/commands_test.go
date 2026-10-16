@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -161,6 +162,105 @@ func TestHandoffCopiesSessionAndPrintsResume(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Fatalf("output missing %q:\n%s", want, s)
 		}
+	}
+}
+
+// TestHandoffDirectRejectsNonClaude pins the claude-only boundary: hand off
+// copies Claude Code transcripts, so a codex pair is refused, not silently
+// copied into a directory claude will never read.
+func TestHandoffDirectRejectsNonClaude(t *testing.T) {
+	path := withTempConfig(t)
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"codex": {EnvVar: "CODEX_HOME", Command: "codex", Accounts: map[string]config.Account{
+			"work":     {Dir: t.TempDir()},
+			"personal": {Dir: t.TempDir()},
+		}},
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newHandoffCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"codex", "work", "personal"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected handoff between codex accounts to be refused")
+	}
+	if !strings.Contains(err.Error(), "claude") {
+		t.Fatalf("error should name the claude-only boundary, got: %v", err)
+	}
+}
+
+// TestClaudeAccountsListsClaudeOnly pins the interactive handoff list to the
+// accounts whose launcher is Claude Code — a codex row must not start a flow
+// that ends in claude.
+func TestClaudeAccountsListsClaudeOnly(t *testing.T) {
+	c := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude", Accounts: map[string]config.Account{
+			"work":     {Dir: "/w"},
+			"personal": {Dir: "/p"},
+		}},
+		"codex": {EnvVar: "CODEX_HOME", Command: "codex", Accounts: map[string]config.Account{
+			"main": {Dir: "/c"},
+		}},
+	}}
+	var got []string
+	for _, a := range claudeAccounts(c) {
+		got = append(got, a.provider+"/"+a.account)
+	}
+	want := []string{"claude/personal", "claude/work"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("claudeAccounts = %v, want %v", got, want)
+	}
+}
+
+// TestLaunchesClaude pins the predicate every handoff entry point gates on.
+func TestLaunchesClaude(t *testing.T) {
+	c := &config.Config{Providers: map[string]config.Provider{
+		"claude":   {EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude"},
+		"codex":    {EnvVar: "CODEX_HOME", Command: "codex"},
+		"nolaunch": {EnvVar: "X_DIR", Command: ""},
+	}}
+	for _, tt := range []struct {
+		provider string
+		want     bool
+	}{
+		{"claude", true},
+		{"codex", false},
+		{"nolaunch", false},
+		{"unknown", false},
+	} {
+		if got := launchesClaude(c, tt.provider); got != tt.want {
+			t.Errorf("launchesClaude(%q) = %v, want %v", tt.provider, got, tt.want)
+		}
+	}
+}
+
+// TestResumeCmdBuildsArgvAndEnv pins the argv/env assembly factored out of the
+// exec: the account's launch args come ahead of --resume, and the target dir
+// overrides the config-dir env var without dropping the rest of the environment.
+func TestResumeCmdBuildsArgvAndEnv(t *testing.T) {
+	environ := []string{"HOME=/home/x", "CLAUDE_CONFIG_DIR=/old", "PATH=/bin"}
+	argv, env := resumeCmd([]string{"--settings", "/w/settings.json"}, "/acct/dir", "abc-123", environ)
+	wantArgv := []string{"claude", "--settings", "/w/settings.json", "--resume", "abc-123"}
+	if !slices.Equal(argv, wantArgv) {
+		t.Fatalf("argv = %v, want %v", argv, wantArgv)
+	}
+	if !slices.Contains(env, "CLAUDE_CONFIG_DIR=/acct/dir") {
+		t.Fatalf("env missing the config-dir override: %v", env)
+	}
+	if !slices.Contains(env, "HOME=/home/x") {
+		t.Fatalf("env dropped unrelated vars: %v", env)
+	}
+	if slices.Contains(env, "CLAUDE_CONFIG_DIR=/old") {
+		t.Fatalf("env kept the stale config dir: %v", env)
+	}
+
+	argv, _ = resumeCmd(nil, "/acct/dir", "abc-123", nil)
+	if want := []string{"claude", "--resume", "abc-123"}; !slices.Equal(argv, want) {
+		t.Fatalf("argv without launch args = %v, want %v", argv, want)
 	}
 }
 
