@@ -121,7 +121,8 @@ func TestReplaceTwiceKeepsBothGenerations(t *testing.T) {
 	}
 	mustFile(t, filepath.Join(acct, "CLAUDE.md"), "gen two")
 
-	if _, err := Link(b, acct, entries, true); err != nil {
+	res, err := Link(b, acct, entries, true)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(acct, "CLAUDE.md.aiacc-bak")); err != nil || string(got) != "gen one" {
@@ -132,6 +133,48 @@ func TestReplaceTwiceKeepsBothGenerations(t *testing.T) {
 	}
 	if _, err := os.Readlink(filepath.Join(acct, "CLAUDE.md")); err != nil {
 		t.Fatalf("replace did not link: %v", err)
+	}
+	// The chosen backup path is part of the outcome, so the user can be told
+	// where each generation went.
+	if got := backupOf(res, "CLAUDE.md"); got != filepath.Join(acct, "CLAUDE.md.aiacc-bak2") {
+		t.Fatalf("Entry.Backup = %q, want the uniquified path", got)
+	}
+}
+
+// The probe must be Lstat: any entry occupying a backup slot — a symlink
+// included — has to push the new backup to the next suffix. A Stat probe would
+// follow a symlink and, when the target is gone, read the slot as free and
+// rename over the user's link.
+func TestReplaceStepsAsideFromSymlinkBackup(t *testing.T) {
+	b, acct := base(t), t.TempDir()
+	mustFile(t, filepath.Join(acct, "CLAUDE.md"), "gen one")
+
+	if _, err := Link(b, acct, entries, true); err != nil {
+		t.Fatal(err)
+	}
+	// Between rounds: the profile re-owns its copy, and the first backup slot
+	// is occupied by the user's own (dangling) symlink.
+	if err := os.Remove(filepath.Join(acct, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	mustFile(t, filepath.Join(acct, "CLAUDE.md"), "gen two")
+	first := filepath.Join(acct, "CLAUDE.md.aiacc-bak")
+	if err := os.Remove(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(acct, "gone.txt"), first); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Link(b, acct, entries, true); err != nil {
+		t.Fatal(err)
+	}
+	if target, err := os.Readlink(first); err != nil || target != filepath.Join(acct, "gone.txt") {
+		t.Fatalf("replace clobbered the symlink at %s: %q %v", first, target, err)
+	}
+	got, err := os.ReadFile(filepath.Join(acct, "CLAUDE.md.aiacc-bak2"))
+	if err != nil || string(got) != "gen two" {
+		t.Fatalf("second original not backed up past the symlink: %q %v", got, err)
 	}
 }
 
@@ -252,6 +295,16 @@ func status(r Result, name string) Status {
 	for _, e := range r.Entries {
 		if e.Name == name {
 			return e.Status
+		}
+	}
+	return ""
+}
+
+// backupOf is the recorded Backup path for one entry name.
+func backupOf(r Result, name string) string {
+	for _, e := range r.Entries {
+		if e.Name == name {
+			return e.Backup
 		}
 	}
 	return ""
