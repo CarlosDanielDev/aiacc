@@ -19,6 +19,9 @@ import (
 // configPath is indirected so tests can point it at a temp file.
 var configPath = config.DefaultPath
 
+// stdinIsTerminal is indirected so tests can drive both add surfaces.
+var stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
+
 func newAddCmd() *cobra.Command {
 	var dir, envVar, command, settings string
 	var quota int
@@ -35,12 +38,23 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			if len(args) == 0 {
-				// Interactive terminal → the framed add screen. Piped/scripted
-				// (and tests) → the line wizard, which reads stdin.
-				if isTerminal(os.Stdin) {
+				// Interactive terminal → the framed add screen — but only
+				// when no flag needs applying: the screen has no field for
+				// them, so they would be silently dropped. Piped/scripted
+				// (and tests) → the line wizard, which reads stdin and lets
+				// each given flag preempt its question.
+				if stdinIsTerminal() {
+					for _, flag := range []string{"dir", "settings", "env", "command", "quota"} {
+						if cmd.Flags().Changed(flag) {
+							return fmt.Errorf("--%s needs <provider> <account> arguments — "+
+								"run \"aiacc add <provider> <account> --dir …\" for the flag form, "+
+								"or \"aiacc add\" with no flags for the interactive screen", flag)
+						}
+					}
 					return runAddTUI(path)
 				}
-				return runAddWizard(cmd.InOrStdin(), cmd.OutOrStdout(), path)
+				return runAddWizard(cmd.InOrStdin(), cmd.OutOrStdout(), path,
+					addPrefill{Dir: dir, Settings: settings, Env: envVar, Command: command, Quota: quota})
 			}
 			if len(args) != 2 {
 				return fmt.Errorf("give both <provider> and <account>, or no arguments for the wizard")
