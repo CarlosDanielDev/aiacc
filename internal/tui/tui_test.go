@@ -553,23 +553,35 @@ func TestAddSettingsPathUnchanged(t *testing.T) {
 }
 
 // A bare word that names no keyword is refused with the valid ones listed —
-// the same gate the CLI's --settings flag applies — and the refusal shows in
-// the hint row, so the create never registers a bogus settings path.
+// the same gate the CLI's --settings flag applies. The refusal must stay in the
+// hint row of the LAST frame (the screen the user is left looking at), name the
+// valid keywords near the start so a long typo cannot truncate them off the
+// row, and leave nothing written to the dir.
 func TestAddSettingsKeywordTypo(t *testing.T) {
-	out := &bytes.Buffer{}
-	keys := "w\t\tkimi\r\x1b"
-	res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), out)
-	if err != nil {
-		t.Fatalf("driveAdd: %v", err)
-	}
-	if res.OK {
-		t.Fatalf("got %+v, want the create aborted for the typo", res)
-	}
-	screen := ansi.ReplaceAllString(out.String(), "")
-	for _, want := range []string{"kimi", "glm", "custom"} {
-		if !strings.Contains(screen, want) {
-			t.Errorf("hint does not name the typo and the valid keywords (missing %q):\n%s", want, screen)
-		}
+	for _, typo := range []string{"kimi", "kimi-coding-plan-v2"} {
+		t.Run(typo, func(t *testing.T) {
+			dir := t.TempDir()
+			out := &bytes.Buffer{}
+			keys := "w\t" + dir + "\t" + typo + "\r\x1b"
+			res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), out)
+			if err != nil {
+				t.Fatalf("driveAdd: %v", err)
+			}
+			if res.OK {
+				t.Fatalf("got %+v, want the create aborted for the typo", res)
+			}
+			frames := strings.Split(out.String(), "\x1b[H")
+			last := ansi.ReplaceAllString(frames[len(frames)-1], "")
+			if !strings.Contains(last, "valid keywords: custom, glm") {
+				t.Errorf("last frame's hint does not name the valid keywords up front:\n%s", last)
+			}
+			if !strings.Contains(last, typo) {
+				t.Errorf("last frame's hint does not name the typo %q:\n%s", typo, last)
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				t.Fatalf("a typo wrote %d file(s) into the dir", len(entries))
+			}
+		})
 	}
 }
 

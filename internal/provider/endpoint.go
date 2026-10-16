@@ -48,8 +48,7 @@ func ResolveEndpoint(providerName, name string) (Endpoint, error) {
 	}
 	ep, ok := p.Endpoints[name]
 	if !ok {
-		names := strings.Join(slices.Sorted(maps.Keys(p.Endpoints)), ", ")
-		return Endpoint{}, fmt.Errorf("%w: %q (valid: %s)", ErrUnknownEndpoint, name, names)
+		return Endpoint{}, fmt.Errorf("%w: %q (valid: %s)", ErrUnknownEndpoint, name, keywordList(p))
 	}
 	return ep, nil
 }
@@ -77,7 +76,14 @@ func ClassifySettings(providerName, value string) (ep Endpoint, keyword bool, er
 	if !errors.Is(err, ErrUnknownEndpoint) || looksLikePath(value) {
 		return Endpoint{}, false, nil
 	}
-	return Endpoint{}, false, err
+	// The keywords lead the message: the add screen's hint row truncates long
+	// text at its right edge, and a long typo must not cut them off.
+	return Endpoint{}, false, fmt.Errorf("valid keywords: %s (not %q)", keywordList(Presets[providerName]), value)
+}
+
+// keywordList is the provider's endpoint keywords, sorted and comma-joined.
+func keywordList(p Preset) string {
+	return strings.Join(slices.Sorted(maps.Keys(p.Endpoints)), ", ")
 }
 
 // looksLikePath reports whether a settings value reads as a file path rather
