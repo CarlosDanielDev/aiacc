@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
+	"github.com/CarlosDanielDev/aiacc/internal/session"
 	"github.com/CarlosDanielDev/aiacc/internal/shell"
+	"github.com/CarlosDanielDev/aiacc/internal/tui"
 )
 
 // seedConfig writes a single-provider config with one account at dir and
@@ -201,6 +203,25 @@ func TestHandoffQuotesResumePath(t *testing.T) {
 	want := `cd '/Users/x/my proj'\''; echo pwned'`
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("output missing %q:\n%s", want, out.String())
+	}
+}
+
+// TestHandoffDoneScreenQuotesResumePath: the "hand off · done" screen is the
+// interactive twin of handoffDirect's printed resume command, and its Blue
+// lines are exactly what ctrl-C copies to the clipboard — so the recorded cwd
+// must be single-quote escaped there too.
+func TestHandoffDoneScreenQuotesResumePath(t *testing.T) {
+	meta := session.Meta{Cwd: `/Users/x/my proj'; echo pwned`, Title: "t"}
+	lines := handoffDoneLines("personal", meta, "abc123")
+	var cds []string
+	for _, l := range lines {
+		if l.Color == tui.Blue && strings.HasPrefix(l.Text, "cd ") {
+			cds = append(cds, l.Text)
+		}
+	}
+	want := `cd '/Users/x/my proj'\''; echo pwned'`
+	if len(cds) != 1 || cds[0] != want {
+		t.Fatalf("done screen cd line = %q, want %q", cds, want)
 	}
 }
 

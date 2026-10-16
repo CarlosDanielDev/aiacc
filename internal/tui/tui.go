@@ -711,9 +711,10 @@ func (f AddForm) fields() int {
 // ValidName reports whether s is a legal profile name: a letter/underscore, then
 // letters, digits, hyphens, or underscores. The name is also the launcher
 // command, so it must be a legal shell function name — which is why a name like
-// "??????????" cannot be entered. The CLI registration path (saveAccount,
-// renameAccount) enforces the same rule, so a name only ever reaches the config
-// through here or through this check.
+// "??????????" cannot be entered. The rule is enforced at registration on every
+// surface — here on the picker as you type, and by saveAccount/renameAccount on
+// the CLI. A hand-edited config.toml is read as-is, though; doctor is the
+// backstop for anything that got in that way.
 func ValidName(s string) bool {
 	if s == "" {
 		return false

@@ -79,15 +79,21 @@ func TestAddRefusesUnsafeName(t *testing.T) {
 
 // TestRenameRefusesUnsafeName: a rename is a second way in for the same
 // traversal (the new name becomes the launcher filename), so a junk name is
-// refused with the rule named and the old registration survives.
+// refused with the rule named and the old registration survives. Driven
+// through the cobra command, so the guard holds wherever it lives between
+// the command and renameAccount.
 func TestRenameRefusesUnsafeName(t *testing.T) {
 	path := withTempConfig(t)
 	dir := t.TempDir()
 	seedConfig(t, path, dir, 0) // provider claude, account "work"
 
-	if err := renameAccount(path, "claude", "work", "bad name"); err == nil {
+	rename := newRenameCmd()
+	rename.SetArgs([]string{"claude", "work", "bad name"})
+	err := rename.Execute()
+	if err == nil {
 		t.Fatalf("rename to a junk name was accepted")
-	} else if !strings.Contains(err.Error(), "letters, digits") {
+	}
+	if !strings.Contains(err.Error(), "letters, digits") {
 		t.Fatalf("error does not name the rule: %v", err)
 	}
 	c, err := config.Load(path)
