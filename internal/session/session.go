@@ -146,6 +146,8 @@ func ReadMeta(path string) (Meta, error) {
 // symlink or hardlink swapped in between the stat and the open cannot make
 // Copy truncate the source. Not covered: a process that writes to the source
 // while it is being copied. That gives a partial copy, not a truncated source.
+// A close error is returned, so a short write is never reported as success;
+// the destination is left in place, since it may be a pre-existing session.
 func Copy(s Info, toConfigDir string) (string, error) {
 	destDir := filepath.Join(projectsRoot(toConfigDir), s.ProjectDir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -186,6 +188,12 @@ func Copy(s Info, toConfigDir string) (string, error) {
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		return "", err
+	}
+	// A write can fail only at close (NFS, quota, full disk). Returning it
+	// keeps a short transcript from being reported as handed off. The
+	// destination is left in place: it may be a pre-existing session file.
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("closing destination %s: %w", dest, err)
 	}
 	return dest, nil
 }
