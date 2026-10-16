@@ -132,7 +132,12 @@ func ReadMeta(path string) (Meta, error) {
 // Copy writes s into toConfigDir's projects, under the same project directory, so
 // the target account can resume it. It returns the destination path. Transcripts
 // are private (0600), and that mode is preserved. It refuses a destination that
-// resolves to the source file itself — truncating it would zero the transcript.
+// is the source file — truncating it would zero the transcript. "Is the source"
+// is checked by path string first, then, when the destination already exists,
+// by file identity (os.SameFile), which also catches a symlink or hardlink to
+// the source. Remaining limit: the identity check and the open are not atomic,
+// so a link created in that window is not seen; the account directories are
+// the user's own, not a shared writable location.
 func Copy(s Info, toConfigDir string) (string, error) {
 	destDir := filepath.Join(projectsRoot(toConfigDir), s.ProjectDir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -141,6 +146,11 @@ func Copy(s Info, toConfigDir string) (string, error) {
 	dest := filepath.Join(destDir, s.ID+".jsonl")
 	if filepath.Clean(dest) == filepath.Clean(s.Path) {
 		return "", fmt.Errorf("refusing to copy: destination %s is the source file", dest)
+	}
+	if dstInfo, err := os.Stat(dest); err == nil {
+		if srcInfo, err := os.Stat(s.Path); err == nil && os.SameFile(srcInfo, dstInfo) {
+			return "", fmt.Errorf("refusing to copy: destination %s is the source file (symlink or hardlink)", dest)
+		}
 	}
 
 	in, err := os.Open(s.Path)

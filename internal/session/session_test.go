@@ -146,3 +146,42 @@ func TestFind(t *testing.T) {
 		t.Fatal("Find should error on a missing id")
 	}
 }
+
+// TestCopyRefusesSymlinkAndHardlinkToSource pins the aliasing guard: a
+// destination whose path string differs from the source but resolves to the
+// same file (a symlink, or a hardlink) must be refused too, because O_TRUNC on
+// it would still zero the transcript. Both cases live in t.TempDir().
+func TestCopyRefusesSymlinkAndHardlinkToSource(t *testing.T) {
+	cfg := t.TempDir()
+	p := seed(t, cfg, "-proj-a", "s1", []string{`{"type":"user","cwd":"/proj/a"}`})
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, _ := List(cfg)
+
+	alias := func(t *testing.T, link func(old, new string) error) {
+		other := t.TempDir()
+		destDir := filepath.Join(other, "projects", "-proj-a")
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dest := filepath.Join(destDir, "s1.jsonl")
+		if err := link(p, dest); err != nil {
+			t.Skipf("OS refuses to create the link: %v", err)
+		}
+		if _, err := Copy(list[0], other); err == nil {
+			t.Fatal("expected Copy onto a destination aliasing the source to be refused")
+		}
+		after, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Fatalf("source transcript clobbered: want %q, got %q", before, after)
+		}
+	}
+
+	t.Run("symlink", func(t *testing.T) { alias(t, os.Symlink) })
+	t.Run("hardlink", func(t *testing.T) { alias(t, os.Link) })
+}
