@@ -2,7 +2,7 @@
 
 Status: Superseded by 0008
 
-Superseded by [0008](0008-launchers-replace-eval-hook.md): the `{name, env_var, command}` model is restated there; presets gained per-provider capabilities.
+Superseded by [0008](0008-launchers-replace-eval-hook.md): the env-var-to-account-directory model still holds there; presets gained per-provider capabilities, and claude is now special-cased.
 
 ## Context
 
