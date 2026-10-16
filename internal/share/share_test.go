@@ -104,6 +104,37 @@ func TestReplaceBacksUpFirst(t *testing.T) {
 	}
 }
 
+// Two replace rounds must never cost the user a generation: the first round's
+// original sits at <name>.aiacc-bak, so the second round has to step aside to
+// .aiacc-bak2 instead of renaming over the only copy of the first original.
+func TestReplaceTwiceKeepsBothGenerations(t *testing.T) {
+	b, acct := base(t), t.TempDir()
+	mustFile(t, filepath.Join(acct, "CLAUDE.md"), "gen one")
+
+	if _, err := Link(b, acct, entries, true); err != nil {
+		t.Fatal(err)
+	}
+	// Between rounds the profile goes back to owning its own copy — the state
+	// the second --replace round is meant to take over.
+	if err := os.Remove(filepath.Join(acct, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	mustFile(t, filepath.Join(acct, "CLAUDE.md"), "gen two")
+
+	if _, err := Link(b, acct, entries, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(acct, "CLAUDE.md.aiacc-bak")); err != nil || string(got) != "gen one" {
+		t.Fatalf("second replace destroyed the first backup: %q %v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(acct, "CLAUDE.md.aiacc-bak2")); err != nil || string(got) != "gen two" {
+		t.Fatalf("second original not backed up: %q %v", got, err)
+	}
+	if _, err := os.Readlink(filepath.Join(acct, "CLAUDE.md")); err != nil {
+		t.Fatalf("replace did not link: %v", err)
+	}
+}
+
 func TestLinkIntoBaseIsNoOp(t *testing.T) {
 	b := base(t)
 	res, err := Link(b, b, entries, true)
