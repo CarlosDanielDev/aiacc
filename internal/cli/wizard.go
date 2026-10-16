@@ -115,10 +115,20 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 		command = providerName
 	}
 	fmt.Fprintf(out, "\nRegistered '%s' → %s\n", name, dir)
-	fmt.Fprintf(out, "Launch %s as this profile:\n", command)
+	// Claude keeps the wording the wizard always printed; other providers name
+	// their own CLI, since the wizard now asks which provider it is.
+	if providerName == "claude" {
+		fmt.Fprintf(out, "Launch Claude Code as this profile:\n")
+	} else {
+		fmt.Fprintf(out, "Launch %s as this profile:\n", command)
+	}
 	fmt.Fprintf(out, "  aiacc            # pick it from the list, or\n")
 	fmt.Fprintf(out, "  %s               # after adding: aiacc shell-init <shell> to your startup file\n", name)
-	fmt.Fprintf(out, "The first run opens %s; log in there when prompted.\n", command)
+	if providerName == "claude" {
+		fmt.Fprintf(out, "The first run opens Claude Code; log in there with /login.\n")
+	} else {
+		fmt.Fprintf(out, "The first run opens %s; log in there when prompted.\n", command)
+	}
 	return nil
 }
 

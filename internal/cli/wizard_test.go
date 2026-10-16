@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
+	"github.com/CarlosDanielDev/aiacc/internal/provider"
 )
 
 func TestAddWizardRegistersAccount(t *testing.T) {
@@ -204,6 +205,9 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("HOME", filepath.Join(root, "home"))
 	os.Setenv("PATH", strings.Join([]string{bin, "/usr/bin", "/bin"}, string(os.PathListSeparator)))
+	// The developer's own Claude login and aiacc config must never be read.
+	os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(root, "claude-config"))
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
 	code := m.Run()
 	os.RemoveAll(root)
 	os.Exit(code)
@@ -211,7 +215,8 @@ func TestMain(m *testing.M) {
 
 // hermeticHome isolates the launcher install dir and the shared-asset base in
 // a temp HOME with that bin dir as the only PATH entry, so syncLauncher and
-// linkProfile land somewhere the test can inspect.
+// linkProfile land somewhere the test can inspect. The base ~/.claude is seeded
+// with one authored asset per shared entry, so linkProfile has real links to make.
 func hermeticHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -219,9 +224,34 @@ func hermeticHome(t *testing.T) string {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	seedSharedBase(t, filepath.Join(home, ".claude"))
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", bin)
 	return home
+}
+
+// seedSharedBase writes one authored file or directory per claude shared entry
+// (a name with an extension is a file, anything else a directory).
+func seedSharedBase(t *testing.T, base string) {
+	t.Helper()
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range provider.Presets["claude"].Shared {
+		p := filepath.Join(base, name)
+		if filepath.Ext(name) != "" {
+			if err := os.WriteFile(p, []byte("authored"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "item"), []byte("authored"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // addSnapshot is everything a piped add is supposed to produce: the registered
@@ -257,7 +287,15 @@ func snapshotAdd(t *testing.T, home, cfgPath string) addSnapshot {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if _, err := os.Stat(filepath.Join(dir, e.Name())); err != nil {
+			t.Fatalf("link %s does not resolve: %v", e.Name(), err)
+		}
 		links[e.Name()] = strings.ReplaceAll(target, home, "$HOME")
+	}
+	// Every claude shared entry must be linked: an empty map would make the
+	// parity comparison vacuous.
+	if want := len(provider.Presets["claude"].Shared); len(links) != want {
+		t.Fatalf("linked %d shared assets, want %d: %v", len(links), want, links)
 	}
 	return addSnapshot{*c, strings.ReplaceAll(string(raw), home, "$HOME"), links}
 }
