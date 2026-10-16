@@ -76,23 +76,24 @@ func ClassifySettings(providerName, value string) (ep Endpoint, keyword bool, er
 	if !errors.Is(err, ErrUnknownEndpoint) || looksLikePath(value) {
 		return Endpoint{}, false, nil
 	}
-	return Endpoint{}, false, keywordRefusal{keywords: keywordList(Presets[providerName]), value: value}
+	return Endpoint{}, false, KeywordRefusal{Keywords: keywordList(Presets[providerName]), Value: value}
 }
 
-// keywordRefusal is the settings-field refusal. Its text leads with the
-// keywords: the add screen's hint row keeps only the left edge of a long
-// message, so the list must come before the typo. At 32 terminal columns the
-// hint row is 26 runes and "keywords: custom, glm" (21) fits; narrower
-// terminals shrink the row further and the list truncates, an accepted limit.
-// It unwraps to ErrUnknownEndpoint, so errors.Is classifies it exactly as it
-// classifies ResolveEndpoint's refusal.
-type keywordRefusal struct{ keywords, value string }
+// KeywordRefusal is the settings-field refusal for a bare word that names no
+// keyword. Its text leads with the keywords: the add screen's hint row keeps
+// only the left edge of a long message, so the list must come before the
+// typo. At 32 terminal columns the hint row is 26 runes and "keywords:
+// custom, glm" (21) fits; narrower terminals shrink the row further and the
+// list truncates, an accepted limit. It unwraps to ErrUnknownEndpoint, so
+// errors.Is classifies it exactly as it classifies ResolveEndpoint's refusal.
+// Keywords and Value are exported so a surface can compose its own sentence.
+type KeywordRefusal struct{ Keywords, Value string }
 
-func (e keywordRefusal) Error() string {
-	return fmt.Sprintf("keywords: %s (not %q)", e.keywords, e.value)
+func (e KeywordRefusal) Error() string {
+	return fmt.Sprintf("keywords: %s (not %q)", e.Keywords, e.Value)
 }
 
-func (e keywordRefusal) Unwrap() error { return ErrUnknownEndpoint }
+func (e KeywordRefusal) Unwrap() error { return ErrUnknownEndpoint }
 
 // keywordList is the provider's endpoint keywords, sorted and comma-joined.
 func keywordList(p Preset) string {

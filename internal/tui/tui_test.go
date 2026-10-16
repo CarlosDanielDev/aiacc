@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -627,28 +628,44 @@ func TestAddSettingsKeywordTypo(t *testing.T) {
 	}
 }
 
-// At 32 terminal columns innerWidth reaches its 30-column floor and the hint
-// row keeps 26 runes, so the keyword list survives. This pins that point only.
-// Nothing enforces a terminal minimum: the list survives down to about 27
-// columns, and narrower terminals truncate it (an accepted limit).
+// The keyword list's width boundary, derived from innerWidth and trunc. At 32
+// columns innerWidth reaches its 30-column floor and the hint row keeps 26
+// runes. The list "keywords: custom, glm" (21 runes) survives from 28 columns
+// up: at 28 the hint cap is 22 runes and trunc keeps 21 plus "…" on overflow;
+// at 27 the cap is 21 and trunc keeps only 20, so the list truncates. Nothing
+// enforces a terminal minimum; narrower terminals truncate it (an accepted
+// limit). The 27-column case pins that limit so the boundary cannot rot.
 func TestAddSettingsKeywordsAtNarrowWidth(t *testing.T) {
-	const cols = 32
-	if innerWidth(cols) != 30 || innerWidth(cols-1) >= 30 {
-		t.Fatalf("innerWidth floor moved: innerWidth(%d)=%d, innerWidth(%d)=%d; update the minimum width",
-			cols, innerWidth(cols), cols-1, innerWidth(cols-1))
+	if innerWidth(32) != 30 || innerWidth(31) >= 30 {
+		t.Fatalf("innerWidth floor moved: innerWidth(31)=%d, innerWidth(32)=%d; update the narrow-width boundary",
+			innerWidth(31), innerWidth(32))
 	}
-	for _, typo := range []string{"kimi", "kimi-coding-plan-v2-enterprise-tier-x"} {
-		t.Run(typo, func(t *testing.T) {
-			out := &bytes.Buffer{}
-			keys := "w\t\t" + typo + "\r\x1b"
-			if _, err := driveAdd("", "claude", true, fixedGeom(cols, 24), bytes.NewBufferString(keys), out); err != nil {
-				t.Fatalf("driveAdd: %v", err)
-			}
-			hint := hintLine(lastFrame(out.String()))
-			if !strings.Contains(hint, "keywords: custom, glm") {
-				t.Errorf("at %d columns the hint row lost the keyword list: %q", cols, hint)
-			}
-		})
+	const list = "keywords: custom, glm"
+	for _, c := range []struct {
+		cols       int
+		wantIntact bool
+	}{
+		{32, true},
+		{28, true},
+		{27, false},
+	} {
+		for _, typo := range []string{"kimi", "kimi-coding-plan-v2-enterprise-tier-x"} {
+			t.Run(fmt.Sprintf("%dcols/%s", c.cols, typo), func(t *testing.T) {
+				out := &bytes.Buffer{}
+				keys := "w\t\t" + typo + "\r\x1b"
+				if _, err := driveAdd("", "claude", true, fixedGeom(c.cols, 24), bytes.NewBufferString(keys), out); err != nil {
+					t.Fatalf("driveAdd: %v", err)
+				}
+				hint := hintLine(lastFrame(out.String()))
+				intact := strings.Contains(hint, list)
+				if intact != c.wantIntact {
+					t.Errorf("at %d columns the list intact = %t, want %t: %q", c.cols, intact, c.wantIntact, hint)
+				}
+				if !c.wantIntact && !strings.Contains(hint, "keywords: custom, gl…") {
+					t.Errorf("at %d columns the truncated hint is not the expected prefix: %q", c.cols, hint)
+				}
+			})
+		}
 	}
 }
 

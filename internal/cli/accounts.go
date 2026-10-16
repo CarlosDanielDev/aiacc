@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -78,6 +79,23 @@ func newAddCmd() *cobra.Command {
 	return cmd
 }
 
+// settingsRefusal is the CLI's refusal of a --settings value that is neither a
+// file path nor a keyword. It states the value once, then the known keywords,
+// and unwraps to the shared refusal so errors.Is(err, provider.ErrUnknownEndpoint)
+// still holds.
+type settingsRefusal struct {
+	value, keywords string
+	cause           error
+}
+
+func (e settingsRefusal) Error() string {
+	return fmt.Sprintf("--settings %q is neither a file path nor a known endpoint keyword (known: %s). "+
+		"Give a settings file path instead, or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"",
+		e.value, e.keywords)
+}
+
+func (e settingsRefusal) Unwrap() error { return e.cause }
+
 // resolveSettings turns the --settings value into the path the account
 // registers, the CLI spelling of the add screen's settings field. Through the
 // shared classification rule (provider.ClassifySettings) an endpoint keyword
@@ -96,10 +114,13 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 	}
 	ep, keyword, err := provider.ClassifySettings(providerName, value)
 	if err != nil {
-		// err is the shared refusal: keyword-first, short enough for the add
-		// screen's hint row. The CLI says what is wrong first, then the refusal.
-		return "", fmt.Errorf("--settings %q is neither a file path nor a known endpoint keyword — %w. "+
-			"Give a settings file path instead, or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", value, err)
+		// err is the shared keyword refusal, worded for the add screen's hint
+		// row. The CLI composes its own sentence from the refusal's parts.
+		var kr provider.KeywordRefusal
+		if !errors.As(err, &kr) {
+			return "", err
+		}
+		return "", settingsRefusal{value: kr.Value, keywords: kr.Keywords, cause: err}
 	}
 	if !keyword {
 		return value, nil // not a keyword — today's path behavior, unchanged
