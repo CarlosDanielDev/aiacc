@@ -129,6 +129,10 @@ func ReadMeta(path string) (Meta, error) {
 	return m, sc.Err()
 }
 
+// closeDest closes the destination on Copy's success path. It is a variable so
+// a test can inject a close failure, which a normal filesystem does not produce.
+var closeDest = func(f *os.File) error { return f.Close() }
+
 // Copy writes s into toConfigDir's projects, under the same project directory, so
 // the target account can resume it. It returns the destination path. Transcripts
 // are private (0600), and that mode is preserved. It refuses a destination that
@@ -192,7 +196,7 @@ func Copy(s Info, toConfigDir string) (string, error) {
 	// A write can fail only at close (NFS, quota, full disk). Returning it
 	// keeps a short transcript from being reported as handed off. The
 	// destination is left in place: it may be a pre-existing session file.
-	if err := out.Close(); err != nil {
+	if err := closeDest(out); err != nil {
 		return "", fmt.Errorf("closing destination %s: %w", dest, err)
 	}
 	return dest, nil

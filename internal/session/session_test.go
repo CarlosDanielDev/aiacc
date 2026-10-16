@@ -247,3 +247,39 @@ func TestCopyFailsClosedWhenDestStatFails(t *testing.T) {
 		t.Fatalf("source transcript clobbered: want %q, got %q", before, after)
 	}
 }
+
+// TestCopyReturnsDestinationCloseError pins the success-path close: a write
+// that fails only at close must surface as an error naming the destination,
+// not as a short transcript reported as handed off. closeDest is swapped for
+// one that really closes the file (no fd leak) and then reports an injected
+// error. The destination is left in place, since it may be a pre-existing
+// session file.
+func TestCopyReturnsDestinationCloseError(t *testing.T) {
+	cfg := t.TempDir()
+	seed(t, cfg, "-proj-a", "s1", []string{`{"type":"user","cwd":"/proj/a"}`})
+	list, _ := List(cfg)
+	other := t.TempDir()
+
+	injected := errors.New("injected close failure")
+	old := closeDest
+	closeDest = func(f *os.File) error {
+		_ = f.Close()
+		return injected
+	}
+	t.Cleanup(func() { closeDest = old })
+
+	dest, err := Copy(list[0], other)
+	if !errors.Is(err, injected) {
+		t.Fatalf("want Copy to return the close error, got: %v", err)
+	}
+	want := filepath.Join(other, "projects", "-proj-a", "s1.jsonl")
+	if !strings.Contains(err.Error(), "closing destination "+want) {
+		t.Fatalf("error should name the destination %s, got: %v", want, err)
+	}
+	if dest != "" {
+		t.Fatalf("want no destination path on failure, got %q", dest)
+	}
+	if _, statErr := os.Stat(want); statErr != nil {
+		t.Fatalf("destination must be left in place after a close error: %v", statErr)
+	}
+}
