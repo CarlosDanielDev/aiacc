@@ -2,8 +2,11 @@ package session
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -184,4 +187,63 @@ func TestCopyRefusesSymlinkAndHardlinkToSource(t *testing.T) {
 
 	t.Run("symlink", func(t *testing.T) { alias(t, os.Symlink) })
 	t.Run("hardlink", func(t *testing.T) { alias(t, os.Link) })
+}
+
+// TestCopyFailsClosedWhenDestStatFails pins fail-closed behaviour: when the
+// destination cannot be stat'ed for a reason other than "does not exist", Copy
+// must refuse and leave the destination untouched, not fall through to the
+// truncating open. The destination's directory is made unsearchable, so the
+// stat fails with EACCES. The test's "can't stat" assertion is what tells the
+// guard apart from the open failing with the same EACCES.
+func TestCopyFailsClosedWhenDestStatFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions; cannot force a stat error")
+	}
+	cfg := t.TempDir()
+	p := seed(t, cfg, "-proj-a", "s1", []string{`{"type":"user","cwd":"/proj/a"}`})
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, _ := List(cfg)
+
+	other := t.TempDir()
+	destDir := filepath.Join(other, "projects", "-proj-a")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(destDir, "s1.jsonl")
+	const keep = `{"type":"user","keep":"dest"}` + "\n"
+	if err := os.WriteFile(dest, []byte(keep), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(destDir, 0o000); err != nil {
+		t.Skipf("chmod unsupported: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(destDir, 0o755) })
+
+	_, copyErr := Copy(list[0], other)
+	if err := os.Chmod(destDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if copyErr == nil {
+		t.Fatal("expected Copy to refuse when the destination cannot be stat'ed")
+	}
+	if !strings.Contains(copyErr.Error(), "can't stat destination") || !errors.Is(copyErr, fs.ErrPermission) {
+		t.Fatalf("want the stat guard's refusal wrapping EACCES, got: %v", copyErr)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != keep {
+		t.Fatalf("destination was touched: want %q, got %q", keep, got)
+	}
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("source transcript clobbered: want %q, got %q", before, after)
+	}
 }

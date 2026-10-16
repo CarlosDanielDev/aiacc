@@ -132,12 +132,20 @@ func ReadMeta(path string) (Meta, error) {
 // Copy writes s into toConfigDir's projects, under the same project directory, so
 // the target account can resume it. It returns the destination path. Transcripts
 // are private (0600), and that mode is preserved. It refuses a destination that
-// is the source file — truncating it would zero the transcript. "Is the source"
-// is checked by path string first, then, when the destination already exists,
-// by file identity (os.SameFile), which also catches a symlink or hardlink to
-// the source. Remaining limit: the identity check and the open are not atomic,
-// so a link created in that window is not seen; the account directories are
-// the user's own, not a shared writable location.
+// is the source file, because truncating it would zero the transcript. The
+// check is fail-closed and nothing is truncated until it passes:
+//
+//   - the source is opened, and its identity taken from that open file;
+//   - the destination path is stat'ed, and any error other than "does not
+//     exist" refuses the copy;
+//   - the destination is opened WITHOUT O_TRUNC, its identity is taken from the
+//     open file (os.SameFile against the source), and only a non-matching file
+//     is truncated and written.
+//
+// The identity check and the truncate act on the same descriptor, so a
+// symlink or hardlink swapped in between the stat and the open cannot make
+// Copy truncate the source. Not covered: a process that writes to the source
+// while it is being copied. That gives a partial copy, not a truncated source.
 func Copy(s Info, toConfigDir string) (string, error) {
 	destDir := filepath.Join(projectsRoot(toConfigDir), s.ProjectDir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -147,22 +155,35 @@ func Copy(s Info, toConfigDir string) (string, error) {
 	if filepath.Clean(dest) == filepath.Clean(s.Path) {
 		return "", fmt.Errorf("refusing to copy: destination %s is the source file", dest)
 	}
-	if dstInfo, err := os.Stat(dest); err == nil {
-		if srcInfo, err := os.Stat(s.Path); err == nil && os.SameFile(srcInfo, dstInfo) {
-			return "", fmt.Errorf("refusing to copy: destination %s is the source file (symlink or hardlink)", dest)
-		}
-	}
 
 	in, err := os.Open(s.Path)
 	if err != nil {
 		return "", err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	srcInfo, err := in.Stat()
+	if err != nil {
+		return "", fmt.Errorf("refusing to copy: can't stat source %s: %w", s.Path, err)
+	}
+
+	if _, err := os.Stat(dest); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("refusing to copy: can't stat destination %s: %w", dest, err)
+	}
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		return "", err
 	}
 	defer out.Close()
+	outInfo, err := out.Stat()
+	if err != nil {
+		return "", fmt.Errorf("refusing to copy: can't stat destination %s: %w", dest, err)
+	}
+	if os.SameFile(srcInfo, outInfo) {
+		return "", fmt.Errorf("refusing to copy: destination %s is the source file (symlink or hardlink)", dest)
+	}
+	if err := out.Truncate(0); err != nil {
+		return "", err
+	}
 	if _, err := io.Copy(out, in); err != nil {
 		return "", err
 	}
