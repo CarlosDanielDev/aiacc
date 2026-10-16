@@ -14,13 +14,17 @@ function that `eval`s the binary's export output. There is no `use` subcommand n
 
 [0002](0002-generic-provider-driver.md) modelled a provider as
 `{name, env_var, config_dir}` with "no provider special-cased in code". Claude is
-now special-cased: handoff is gated to claude (`internal/cli/handoff.go:226`), and
+now special-cased: handoff is gated to claude (`internal/cli/handoff.go:223`), and
 presets carry per-provider capability fields (`internal/provider/provider.go:19-38`).
 
 ## Decision
 
 Still holds from 0002: a provider is selected by an env var that points at an
-account directory, configured by the user (`internal/config/config.go:25-29`).
+account directory. For built-in providers that env var comes from the preset
+(`internal/provider/provider.go:54-97`); for custom providers it is configured by
+the user (`internal/config/config.go:25-29`). User config overrides the preset
+(`internal/provider/provider.go:106-114`).
+
 Still holds from 0002 as a known limit: CLIs that select accounts by some other
 means (a flag, an interactive login) are out of scope; revisit with a new ADR if
 demand appears.
@@ -46,14 +50,15 @@ Changed:
    entries with an optional `command` (`internal/config/config.go:25-29`). An
    account may carry a settings path (`internal/config/config.go:17-23`).
 4. **Reversal of 0002's "no provider is special-cased in code".** Claude is
-   special-cased in handoff and detection (`internal/cli/handoff.go:226`,
-   `internal/claude/detect.go:34`). `Shared`/`State` are also set for codex
-   (`provider.go:90-96`), so the capability fields are not claude-only.
+   special-cased: its login detection lives in a claude-only package
+   (`internal/claude/detect.go:34`), and handoff is gated to claude
+   (`internal/cli/handoff.go:223`, `launchesClaude`). `Shared`/`State` are also set
+   for codex (`provider.go:90-96`), so the capability fields are not claude-only.
 
 ## Consequences
 
-- Shell quoting is reduced as the default path, not removed. The launcher body
-  uses `PosixQuote` (`internal/shell/shell.go:114`), and `PosixQuote` and
-  `fishSingleQuote` still guard `shell-init` (`internal/shell/shell.go:171,179`).
+- Shell quoting guards both paths: the launcher body and `shell-init` use the same
+  `PosixQuote`/`fishSingleQuote` idiom (launcher `internal/shell/shell.go:114`;
+  `shell-init` `internal/shell/shell.go:171,179`).
 - A CLI-specific feature needs a preset field or a claude gate, not a generic
   code path.
