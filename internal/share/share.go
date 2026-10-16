@@ -142,11 +142,16 @@ func linkOne(baseDir, dir, name string, replace bool) Entry {
 		return Entry{Name: name, Status: st}
 	}
 
-	if err := os.Symlink(src, dst); err != nil {
-		return Entry{Name: name, Status: Failed, Err: err}
+	if err := symlink(src, dst); err != nil {
+		return Entry{Name: name, Status: Failed, Err: err, Backup: backup}
 	}
 	return Entry{Name: name, Status: Linked, Backup: backup}
 }
+
+// symlink is the syscall behind the shared link, swappable in tests — the one
+// failure (symlink-unsupported filesystems) that can hit after the backup
+// rename has already moved the original.
+var symlink = os.Symlink
 
 // backupName returns dst suffixed with ".aiacc-bak", or ".aiacc-bak2",
 // ".aiacc-bak3", ... — the first suffix nothing occupies. Renaming over an

@@ -141,6 +141,30 @@ func TestReplaceTwiceKeepsBothGenerations(t *testing.T) {
 	}
 }
 
+// A rename that succeeded must not become a silent move: when the symlink that
+// follows it fails (a filesystem without symlink support, say), the Failed
+// entry still has to name where the original went — only .aiacc-bakN is
+// knowable by convention, and only from inside this package.
+func TestFailedSymlinkStillNamesTheBackup(t *testing.T) {
+	b, acct := base(t), t.TempDir()
+	mustFile(t, filepath.Join(acct, "CLAUDE.md"), "mine")
+
+	orig := symlink
+	symlink = func(_, _ string) error { return os.ErrPermission }
+	t.Cleanup(func() { symlink = orig })
+
+	e := linkOne(b, acct, "CLAUDE.md", true)
+	if e.Status != Failed {
+		t.Fatalf("status = %q, want %q", e.Status, Failed)
+	}
+	if e.Backup == "" {
+		t.Fatal("Failed entry lost the backup path — the moved original is unnamed")
+	}
+	if got, err := os.ReadFile(e.Backup); err != nil || string(got) != "mine" {
+		t.Fatalf("original not recoverable at the named backup: %q %v", got, err)
+	}
+}
+
 // The probe must be Lstat: any entry occupying a backup slot — a symlink
 // included — has to push the new backup to the next suffix. A Stat probe would
 // follow a symlink and, when the target is gone, read the slot as free and
