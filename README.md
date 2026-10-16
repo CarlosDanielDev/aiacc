@@ -171,9 +171,10 @@ usage counters — isolating those is the whole point of a profile.
 
 > **Nothing is overwritten.** An entry a profile already has of its own is left
 > exactly as it is and reported instead. `--replace` opts into taking it over,
-> and even then the original is renamed to `<name>.aiacc-bak` first, never
-> deleted. Custom (non-preset) providers are skipped — aiacc doesn't guess at a
-> CLI's asset layout.
+> and even then the original is renamed to `<name>.aiacc-bak` first
+> (`.aiacc-bak2`, `.aiacc-bak3`, … when one is already there — the report names
+> the path chosen), never deleted. Custom (non-preset) providers are skipped —
+> aiacc doesn't guess at a CLI's asset layout.
 
 ## 🔑 A profile with its own endpoint
 

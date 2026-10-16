@@ -17,6 +17,7 @@ package share
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // Status is what happened to one shared entry.
@@ -50,6 +51,10 @@ type Entry struct {
 	Name   string
 	Status Status
 	Err    error
+
+	// Backup is where Link moved the account's own copy before replacing it —
+	// the path the user undoes by hand. Empty when nothing was backed up.
+	Backup string
 }
 
 // Result is the outcome of linking one account.
@@ -89,9 +94,10 @@ func (r Result) Conflicts() []Entry {
 //
 // Poka-yoke: an entry the account already owns is never silently destroyed. With
 // replace false it is left exactly as it is; with replace true it is renamed to
-// "<name>.aiacc-bak" first, so the take-over is always undoable by hand. Linking
-// the base directory into itself is a no-op — the base profile already has the
-// originals.
+// "<name>.aiacc-bak" first — or ".aiacc-bak2", ".aiacc-bak3", ... when a backup
+// of an earlier take-over is already there — so the take-over is always undoable
+// by hand and no earlier backup is ever overwritten. Linking the base directory
+// into itself is a no-op — the base profile already has the originals.
 func Link(baseDir, dir string, entries []string, replace bool) (Result, error) {
 	res := Result{Base: baseDir, Dir: dir}
 	if baseDir == "" || dir == "" {
@@ -112,6 +118,7 @@ func Link(baseDir, dir string, entries []string, replace bool) (Result, error) {
 func linkOne(baseDir, dir, name string, replace bool) Entry {
 	src := filepath.Join(baseDir, name)
 	dst := filepath.Join(dir, name)
+	var backup string
 
 	switch st := classify(src, dst); st {
 	case Missing:
@@ -127,17 +134,40 @@ func linkOne(baseDir, dir, name string, replace bool) Entry {
 		if !replace {
 			return Entry{Name: name, Status: st}
 		}
-		if err := os.Rename(dst, dst+".aiacc-bak"); err != nil {
+		backup = backupName(dst)
+		if err := os.Rename(dst, backup); err != nil {
 			return Entry{Name: name, Status: Failed, Err: err}
 		}
 	default: // Absent, Already
 		return Entry{Name: name, Status: st}
 	}
 
-	if err := os.Symlink(src, dst); err != nil {
-		return Entry{Name: name, Status: Failed, Err: err}
+	if err := symlink(src, dst); err != nil {
+		return Entry{Name: name, Status: Failed, Err: err, Backup: backup}
 	}
-	return Entry{Name: name, Status: Linked}
+	return Entry{Name: name, Status: Linked, Backup: backup}
+}
+
+// symlink is the syscall behind the shared link, swappable in tests — the one
+// failure (symlink-unsupported filesystems) that can hit after the backup
+// rename has already moved the original.
+var symlink = os.Symlink
+
+// backupName returns dst suffixed with ".aiacc-bak", or ".aiacc-bak2",
+// ".aiacc-bak3", ... — the first suffix nothing occupies. Renaming over an
+// existing backup would destroy the only copy of an earlier original. Lstat, not
+// Stat, so a backup that is itself a symlink still counts as taken.
+//
+// The probe and the caller's rename are not atomic: a backup created in this
+// window is replaced — accepted: single-user CLI, serial runs.
+func backupName(dst string) string {
+	name := dst + ".aiacc-bak"
+	for n := 2; ; n++ {
+		if _, err := os.Lstat(name); err != nil {
+			return name
+		}
+		name = dst + ".aiacc-bak" + strconv.Itoa(n)
+	}
 }
 
 // classify reads what is at dst against the src it should link to, changing
