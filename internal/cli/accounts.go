@@ -12,6 +12,7 @@ import (
 	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
+	"github.com/CarlosDanielDev/aiacc/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -136,6 +137,12 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 	// Update holds the config file lock across load-modify-save, so a
 	// concurrent add/remove cannot turn this into a lost update.
 	return config.Update(path, func(c *config.Config) error {
+		// The name is also the launcher filename (`binDir/<name>`) and a token
+		// in every generated script, so a traversal or junk name is refused
+		// here — the same rule the add screen enforces as you type.
+		if !tui.ValidName(account) {
+			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", account)
+		}
 		env := envOverride
 		if env == "" {
 			env, _ = provider.EnvVar(c, providerName) // preset, else ""
@@ -221,6 +228,10 @@ func renameAccount(path, providerName, oldName, newName string) error {
 		return nil
 	}
 	return config.Update(path, func(c *config.Config) error {
+		// Same rule as saveAccount: the new name becomes the launcher filename.
+		if !tui.ValidName(newName) {
+			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", newName)
+		}
 		p, ok := c.Providers[providerName]
 		if !ok {
 			return fmt.Errorf("unknown provider %q", providerName)

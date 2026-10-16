@@ -13,6 +13,7 @@ import (
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/session"
+	"github.com/CarlosDanielDev/aiacc/internal/shell"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -82,7 +83,9 @@ func handoffDirect(cmd *cobra.Command, cfgPath, providerName, from, to, sessionI
 	}
 	fmt.Fprintln(out, "Resume it:")
 	if meta.Cwd != "" {
-		fmt.Fprintf(out, "  cd %s && %s --resume %s\n", meta.Cwd, to, sess.ID)
+		// The line is meant to be pasted into a shell, so the recorded cwd is
+		// quoted — it comes from the session transcript, not from aiacc.
+		fmt.Fprintf(out, "  cd %s && %s --resume %s\n", shell.PosixQuote(meta.Cwd), to, sess.ID)
 	} else {
 		fmt.Fprintf(out, "  %s --resume %s\n", to, sess.ID)
 	}
@@ -189,16 +192,23 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 	if _, err := session.Copy(sess, target.dir); err != nil {
 		return err
 	}
+	return showMessage("hand off · done", handoffDoneLines(target.account, meta, sess.ID))
+}
+
+// handoffDoneLines is the "hand off · done" screen body: what was copied and
+// the resume commands, the Blue lines the clipboard hands over. The cwd is
+// quoted exactly like handoffDirect's printed resume command — it comes from
+// the session transcript, not from aiacc. Pure, for tests.
+func handoffDoneLines(to string, meta session.Meta, id string) []tui.Line {
 	body := []tui.Line{
-		{Text: "✓ Copied to " + target.account, Color: tui.Green},
+		{Text: "✓ Copied to " + to, Color: tui.Green},
 		{},
 		{Text: "Resume it:", Color: tui.White},
 	}
 	if meta.Cwd != "" {
-		body = append(body, tui.Line{Text: "cd " + meta.Cwd, Color: tui.Blue})
+		body = append(body, tui.Line{Text: "cd " + shell.PosixQuote(meta.Cwd), Color: tui.Blue})
 	}
-	body = append(body, tui.Line{Text: target.account + " --resume " + sess.ID, Color: tui.Blue})
-	return showMessage("hand off · done", body)
+	return append(body, tui.Line{Text: to + " --resume " + id, Color: tui.Blue})
 }
 
 // acctRef is a launchable account (provider, account, expanded dir).
