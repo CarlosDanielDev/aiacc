@@ -878,9 +878,10 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 	}
 	path, err := provider.EnsureSkeleton(dir, ep)
 	if err != nil {
-		// The hint row truncates at the frame's inner width, so the file name
-		// leads the message and its glyph survives any width; the dir follows
-		// it (and also sits in the dir field right above the hint).
+		// The hint row truncates at the inner width minus 4 columns (the
+		// padding and the ⚠ marker), so the file name leads the message and
+		// its glyph survives any width; the dir follows it (and also sits in
+		// the dir field right above the hint).
 		if errors.Is(err, provider.ErrSettingsExists) {
 			return "", fmt.Errorf("%s already exists in %s — remove it or pick another dir", ep.Filename, dir)
 		}

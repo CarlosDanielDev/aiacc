@@ -486,8 +486,9 @@ func TestAddSettingsExisting(t *testing.T) {
 }
 
 // TestAddSettingsExistingLongDir pins the refusal against the canonical flow's
-// long dir: the hint row truncates at the frame's inner width, so the file
-// name leads the message and its glyph must survive any real width.
+// long dir: the hint row truncates at the inner width minus 4 columns (the
+// padding and the ⚠ marker), so the file name leads the message and its glyph
+// must survive any real width.
 func TestAddSettingsExistingLongDir(t *testing.T) {
 	home, err := os.MkdirTemp("/tmp", "")
 	if err != nil {
