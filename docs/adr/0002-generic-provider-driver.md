@@ -1,8 +1,8 @@
 # 0002 — Generic env-var provider driver
 
-Status: Accepted
+Status: Superseded by 0008
 
-Amended by [0008](0008-launchers-replace-eval-hook.md): presets now carry per-provider capabilities, so "no provider is special-cased" holds only for env-var switching.
+Superseded by [0008](0008-launchers-replace-eval-hook.md): the `{name, env_var, command}` model is restated there; presets gained per-provider capabilities.
 
 ## Context
 

@@ -2,7 +2,7 @@
 
 Status: Superseded by 0008
 
-Superseded by [0008](0008-launchers-replace-eval-hook.md): launcher executables replace the eval hook.
+Superseded by [0008](0008-launchers-replace-eval-hook.md): launcher executables are the default; `shell-init` remains an opt-in eval alternative.
 
 ## Context
 
