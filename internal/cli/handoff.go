@@ -13,6 +13,7 @@ import (
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/session"
+	"github.com/CarlosDanielDev/aiacc/internal/shell"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -79,7 +80,9 @@ func handoffDirect(cmd *cobra.Command, cfgPath, providerName, from, to, sessionI
 	}
 	fmt.Fprintln(out, "Resume it:")
 	if meta.Cwd != "" {
-		fmt.Fprintf(out, "  cd %s && %s --resume %s\n", meta.Cwd, to, sess.ID)
+		// The line is meant to be pasted into a shell, so the recorded cwd is
+		// quoted — it comes from the session transcript, not from aiacc.
+		fmt.Fprintf(out, "  cd %s && %s --resume %s\n", shell.PosixQuote(meta.Cwd), to, sess.ID)
 	} else {
 		fmt.Fprintf(out, "  %s --resume %s\n", to, sess.ID)
 	}

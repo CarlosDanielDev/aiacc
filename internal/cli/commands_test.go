@@ -155,12 +155,52 @@ func TestHandoffCopiesSessionAndPrintsResume(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(toDir, "projects", "-Users-x-proj", sid+".jsonl")); err != nil {
 		t.Fatalf("session not copied to target: %v", err)
 	}
-	// Resume instructions point at the recorded cwd and the target launcher.
+	// Resume instructions point at the recorded cwd (quoted — the line is
+	// meant to be pasted into a shell) and the target launcher.
 	s := out.String()
-	for _, want := range []string{"personal --resume " + sid, "cd /Users/x/proj"} {
+	for _, want := range []string{"personal --resume " + sid, `cd '/Users/x/proj'`} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("output missing %q:\n%s", want, s)
 		}
+	}
+}
+
+// TestHandoffQuotesResumePath: the resume command is printed for the user to
+// paste into a shell, so a recorded cwd with spaces or a quote cannot break
+// out of the cd — it is single-quote escaped, POSIX-style.
+func TestHandoffQuotesResumePath(t *testing.T) {
+	path := withTempConfig(t)
+	fromDir, toDir := t.TempDir(), t.TempDir()
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]config.Account{
+			"work":     {Dir: fromDir},
+			"personal": {Dir: toDir},
+		}},
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	sdir := filepath.Join(fromDir, "projects", "-Users-x-proj")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := "abc123de-0000-0000-0000-000000000000"
+	cwd := `/Users/x/my proj'; echo pwned`
+	line := `{"type":"user","cwd":"` + cwd + `","lastPrompt":"hello"}` + "\n"
+	if err := os.WriteFile(filepath.Join(sdir, sid+".jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newHandoffCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"claude", "work", "personal"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	want := `cd '/Users/x/my proj'\''; echo pwned'`
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("output missing %q:\n%s", want, out.String())
 	}
 }
 

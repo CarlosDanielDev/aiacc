@@ -61,7 +61,7 @@ func Launcher(shellName, name, command, envVar, dir string, args ...string) (str
 	switch shellName {
 	case "bash", "zsh":
 		return fmt.Sprintf("%s() { %s=%s command %s%s \"$@\"; }\n",
-			name, envVar, posixSingleQuote(dir), command, quoted(args, posixSingleQuote)), nil
+			name, envVar, PosixQuote(dir), command, quoted(args, PosixQuote)), nil
 	case "fish":
 		return fmt.Sprintf("function %s; env %s=%s %s%s $argv; end\n",
 			name, envVar, fishSingleQuote(dir), command, quoted(args, fishSingleQuote)), nil
@@ -111,8 +111,8 @@ func LauncherScript(command, envVar, dir string, args ...string) (string, error)
 	}
 	return "#!/bin/sh\n" +
 		LauncherMark + " — do not edit; re-run `aiacc setup`\n" +
-		"exec env " + envVar + "=" + posixSingleQuote(dir) + " " + command +
-		quoted(args, posixSingleQuote) + " \"$@\"\n", nil
+		"exec env " + envVar + "=" + PosixQuote(dir) + " " + command +
+		quoted(args, PosixQuote) + " \"$@\"\n", nil
 }
 
 // quoted renders args as space-prefixed quoted words, "" when there are none —
@@ -132,7 +132,7 @@ func PathLine(shellName, dir string) (string, error) {
 	case "fish":
 		return "fish_add_path " + fishSingleQuote(dir), nil
 	case "bash", "zsh":
-		return "export PATH=" + posixSingleQuote(dir) + `:"$PATH"`, nil
+		return "export PATH=" + PosixQuote(dir) + `:"$PATH"`, nil
 	default:
 		return "", ErrUnknownShell
 	}
@@ -162,11 +162,13 @@ func validateDir(dir string) error {
 	return nil
 }
 
-// posixSingleQuote wraps s in single quotes for bash/zsh, replacing each embedded
-// single quote with the close-quote / escaped-quote / reopen-quote idiom.
+// PosixQuote wraps s in single quotes for bash/zsh (fish reads the same idiom),
+// replacing each embedded single quote with the close-quote / escaped-quote /
+// reopen-quote idiom. Exported for printed shell commands like handoff's resume
+// line, which the user is told to paste into a shell.
 // Backslashes are literal inside POSIX single quotes, so the quote is the only
 // character that needs handling.
-func posixSingleQuote(s string) string {
+func PosixQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 

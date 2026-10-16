@@ -12,6 +12,7 @@ import (
 	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
+	"github.com/CarlosDanielDev/aiacc/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -133,6 +134,12 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 	if settings != "" && provider.Presets[providerName].SettingsFlag == "" {
 		return fmt.Errorf("%s has no settings flag, so --settings cannot apply to it", providerName)
 	}
+	// The name is also the launcher filename (`binDir/<name>`) and a token in
+	// every generated script, so a traversal or junk name is refused here —
+	// the same rule the add screen enforces as you type.
+	if !tui.ValidName(account) {
+		return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", account)
+	}
 	c, err := config.Load(path)
 	if err != nil {
 		return err
@@ -221,6 +228,10 @@ func newRenameCmd() *cobra.Command {
 func renameAccount(path, providerName, oldName, newName string) error {
 	if newName == oldName {
 		return nil
+	}
+	// Same rule as saveAccount: the new name becomes the launcher filename.
+	if !tui.ValidName(newName) {
+		return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", newName)
 	}
 	c, err := config.Load(path)
 	if err != nil {

@@ -49,6 +49,56 @@ func TestAddThenListShowsAccount(t *testing.T) {
 	}
 }
 
+// TestAddRefusesUnsafeName: the account name is also the launcher filename
+// (`binDir/<name>`), so a traversal or junk name must be refused at
+// registration with the rule named — before it can reach setup, remove,
+// doctor or shell-init. Nothing is registered.
+func TestAddRefusesUnsafeName(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+
+	add := newAddCmd()
+	add.SetArgs([]string{"claude", "../x", "--dir", dir})
+	err := add.Execute()
+	if err == nil {
+		t.Fatalf(`add claude '../x' was accepted`)
+	}
+	for _, want := range []string{"../x", "letters, digits"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error does not mention %q: %v", want, err)
+		}
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Providers["claude"].Accounts) != 0 {
+		t.Fatalf("account registered despite the refusal: %+v", c.Providers["claude"].Accounts)
+	}
+}
+
+// TestRenameRefusesUnsafeName: a rename is a second way in for the same
+// traversal (the new name becomes the launcher filename), so a junk name is
+// refused with the rule named and the old registration survives.
+func TestRenameRefusesUnsafeName(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	seedConfig(t, path, dir, 0) // provider claude, account "work"
+
+	if err := renameAccount(path, "claude", "work", "bad name"); err == nil {
+		t.Fatalf("rename to a junk name was accepted")
+	} else if !strings.Contains(err.Error(), "letters, digits") {
+		t.Fatalf("error does not name the rule: %v", err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Providers["claude"].Accounts["work"]; !ok {
+		t.Fatal("the old registration was lost despite the refusal")
+	}
+}
+
 func TestRemoveDeletesAccount(t *testing.T) {
 	withTempConfig(t)
 	dir := t.TempDir()

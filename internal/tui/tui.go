@@ -708,11 +708,13 @@ func (f AddForm) fields() int {
 	return 2
 }
 
-// validName reports whether s is a legal profile name: a letter/underscore, then
+// ValidName reports whether s is a legal profile name: a letter/underscore, then
 // letters, digits, hyphens, or underscores. The name is also the launcher
 // command, so it must be a legal shell function name — which is why a name like
-// "??????????" cannot be entered.
-func validName(s string) bool {
+// "??????????" cannot be entered. The CLI registration path (saveAccount,
+// renameAccount) enforces the same rule, so a name only ever reaches the config
+// through here or through this check.
+func ValidName(s string) bool {
 	if s == "" {
 		return false
 	}
@@ -790,7 +792,7 @@ func RenderAdd(currentLogin, provider string, f AddForm, hint string, sz Size) s
 
 	// The name becomes the launcher command, so spell that out.
 	tip := "type name"
-	if validName(f.Name) {
+	if ValidName(f.Name) {
 		tip = "launches as: " + f.Name
 	}
 	legend := legendLine([][2]string{{"", tip}, {"⇥", "field"}, {"⏎", "create"}, {"esc", "cancel"}})
@@ -820,7 +822,7 @@ func driveAdd(currentLogin, providerName string, withSettings bool, g *geom, in 
 		case '\t':
 			f.Field, hint = (f.Field+1)%f.fields(), ""
 		case '\r', '\n':
-			if !validName(f.Name) {
+			if !ValidName(f.Name) {
 				f.Field, hint = 0, "name: a letter first, then letters, digits, - or _"
 				continue
 			}
@@ -930,7 +932,7 @@ func driveRename(oldName string, taken map[string]bool, g *geom, in io.Reader, o
 			switch {
 			case buf == oldName:
 				return "", nil // unchanged — nothing to do
-			case !validName(buf):
+			case !ValidName(buf):
 				hint = "name: a letter first, then letters, digits, - or _"
 			case taken[buf]:
 				hint = "a profile named " + buf + " already exists"
