@@ -16,9 +16,9 @@ func TestAddWizardRegistersAccount(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir()) // hermetic: don't read real ~/.claude
 	path := filepath.Join(t.TempDir(), "config.toml")
 	customDir := t.TempDir()
-	in := bytes.NewBufferString("demo\n" + customDir + "\nclaude\n\n")
+	in := bytes.NewBufferString("demo\n" + customDir + "\n")
 	var out bytes.Buffer
-	if err := runAddWizard(in, &out, path, addPrefill{}); err != nil {
+	if err := runAddWizard(in, &out, path); err != nil {
 		t.Fatalf("wizard: %v", err)
 	}
 	c, err := config.Load(path)
@@ -36,7 +36,7 @@ func TestAddWizardRegistersAccount(t *testing.T) {
 func TestAddWizardEmptyNameErrors(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := runAddWizard(bytes.NewBufferString("\n\n"), &bytes.Buffer{}, path, addPrefill{}); err == nil {
+	if err := runAddWizard(bytes.NewBufferString("\n"), &bytes.Buffer{}, path); err == nil {
 		t.Fatal("want error for empty name")
 	}
 }
@@ -408,6 +408,61 @@ func TestAddWizardRefusesBadNameBeforeAnyWrite(t *testing.T) {
 	}
 	if len(c.Providers) != 0 {
 		t.Fatalf("something was registered: %+v", c.Providers)
+	}
+}
+
+// TestAddWizardRefusedSettingsWritesNothing: a settings answer the rules refuse
+// (a typo keyword, the custom keyword, or any settings value for a provider with
+// no settings flag) is refused before the account dir is created, so nothing is
+// left on disk or in the config.
+func TestAddWizardRefusedSettingsWritesNothing(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   func(dir string) string
+		pre     func(dir string) addPrefill
+		wantErr string
+	}{
+		{
+			name:    "typo keyword at the settings prompt",
+			input:   func(d string) string { return "foo\n" + d + "\nclaude\nkimi\n" },
+			wantErr: `"kimi"`,
+		},
+		{
+			name:    "custom keyword at the settings prompt",
+			input:   func(d string) string { return "foo\n" + d + "\nclaude\ncustom\n" },
+			wantErr: "needs a base URL",
+		},
+		{
+			name:    "prefilled --settings for a provider with no settings flag",
+			input:   func(string) string { return "work\ncodex\n" },
+			pre:     func(d string) addPrefill { return addPrefill{Dir: d, Settings: "glm"} },
+			wantErr: "has no settings flag",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := hermeticHome(t)
+			path := filepath.Join(home, "config.toml")
+			dir := filepath.Join(home, "acct")
+			var pre addPrefill
+			if tc.pre != nil {
+				pre = tc.pre(dir)
+			}
+			err := runAddWizard(bytes.NewBufferString(tc.input(dir)), &bytes.Buffer{}, path, pre)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want refusal mentioning %q, got %v", tc.wantErr, err)
+			}
+			if _, statErr := os.Stat(dir); statErr == nil {
+				t.Fatalf("refused settings left the account dir behind: %s", dir)
+			}
+			c, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(c.Providers) != 0 {
+				t.Fatalf("something was registered before the refusal: %+v", c.Providers)
+			}
+		})
 	}
 }
 

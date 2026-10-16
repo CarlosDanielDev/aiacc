@@ -94,20 +94,13 @@ func newAddCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveSettings turns the --settings value into the path the account
-// registers, the CLI spelling of the add screen's settings field. An endpoint
-// keyword (glm) generates the settings skeleton into the account dir and
-// yields the generated path, exactly as if the user had written the file by
-// hand and passed its path. A keyword whose preset has no base URL (custom)
-// is refused: its base URL is the user's to type, and only the interactive
-// add screen can ask for it. A bare word that names no keyword is refused
-// with the valid ones listed — a typo must not silently register a bogus
-// settings path — while anything path-like keeps today's verbatim path
-// behavior. A file already at the target aborts the add with its path named;
-// nothing is overwritten (the aiacc link rule).
-func resolveSettings(providerName, dir, value string) (string, error) {
+// settingsEndpoint classifies a settings value without writing anything. It
+// returns the endpoint and true when the value is a keyword whose skeleton
+// resolveSettings generates; (zero, false, nil) when the value is registered
+// verbatim; or the refusal resolveSettings would give.
+func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, error) {
 	if value == "" {
-		return "", nil
+		return provider.Endpoint{}, false, nil
 	}
 	ep, err := provider.ResolveEndpoint(providerName, value)
 	if err != nil {
@@ -116,20 +109,47 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		// names no keyword; anything else (unknown provider, no flag) falls
 		// through to saveAccount's refusal.
 		if !errors.Is(err, provider.ErrUnknownEndpoint) || looksLikePath(value) {
-			return value, nil // not a keyword — today's path behavior, unchanged
+			return provider.Endpoint{}, false, nil // not a keyword — today's path behavior, unchanged
 		}
 		// The error already names the typo and lists the valid keywords.
-		return "", fmt.Errorf("%w — give a settings file path instead, "+
+		return provider.Endpoint{}, false, fmt.Errorf("%w — give a settings file path instead, "+
 			"or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", err)
 	}
 	if ep.BaseURL == "" {
-		return "", fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
+		return provider.Endpoint{}, false, fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
 			"run \"aiacc add\" with no arguments and pick it there (\"glm\" works right on the command line)", value)
+	}
+	return ep, true, nil
+}
+
+// resolveSettings turns the --settings value into the path the account
+// registers, the CLI spelling of the add screen's settings field. An endpoint
+// keyword (glm) generates the settings skeleton into the account dir and
+// yields the generated path. A refusal is returned by settingsEndpoint before
+// anything is written. A file already at the target aborts the add with its
+// path named; nothing is overwritten (the aiacc link rule).
+func resolveSettings(providerName, dir, value string) (string, error) {
+	ep, keyword, err := settingsEndpoint(providerName, value)
+	if err != nil {
+		return "", err
+	}
+	if !keyword {
+		return value, nil // a path, registered verbatim
 	}
 	// The screen and the CLI register through the same sequence, so the
 	// skeleton lands in the real profile while the registered path keeps the
 	// as-typed form (stored paths re-expand at launch; see EnsureSkeleton).
 	return provider.EnsureSkeleton(dir, ep)
+}
+
+// settingsFlagRefusal refuses a settings value for a provider whose CLI has no
+// flag to load one. saveAccount applies it, and the wizard checks it before
+// anything is written.
+func settingsFlagRefusal(providerName, settings string) error {
+	if settings != "" && provider.Presets[providerName].SettingsFlag == "" {
+		return fmt.Errorf("%s has no settings flag, so --settings cannot apply to it", providerName)
+	}
+	return nil
 }
 
 // looksLikePath reports whether a --settings value reads as a file path rather
@@ -145,8 +165,8 @@ func looksLikePath(value string) bool {
 // extra settings file, refused for a provider whose CLI has no flag to load one.
 // Used by `add` and the wizard.
 func saveAccount(path, providerName, account, dir string, quota int, envOverride, cmdOverride, settings string) error {
-	if settings != "" && provider.Presets[providerName].SettingsFlag == "" {
-		return fmt.Errorf("%s has no settings flag, so --settings cannot apply to it", providerName)
+	if err := settingsFlagRefusal(providerName, settings); err != nil {
+		return err
 	}
 	// Update holds the config file lock across load-modify-save, so a
 	// concurrent add/remove cannot turn this into a lost update.

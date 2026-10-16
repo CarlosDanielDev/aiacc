@@ -35,7 +35,11 @@ type addPrefill struct {
 // exactly like the flag path and the add screen. Logging in is left to the CLI
 // itself — aiacc never handles credentials. Answers are read from in, prompts
 // written to out (decoupled from os.Stdin/Stdout for testability).
-func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) error {
+func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPrefill) error {
+	pre := addPrefill{}
+	if len(prefill) > 0 {
+		pre = prefill[0]
+	}
 	r := bufio.NewReader(in)
 
 	if cur := currentClaudeDir(); cur != "" {
@@ -119,12 +123,18 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 		}
 	}
 
+	// Every refusal is decided before the first filesystem write: the settings
+	// answer (a typo keyword, custom, a provider with no settings flag). Only
+	// then is the dir created; a generated skeleton creates it too, and the
+	// account name was already checked above.
+	if _, _, err := settingsEndpoint(providerName, settings); err != nil {
+		return err
+	}
+	if err := settingsFlagRefusal(providerName, settings); err != nil {
+		return err
+	}
 	// The dir is created expanded — a literal ~ must not grow a "./~" tree in
-	// the working directory — while the account registers the as-typed form:
-	// the same one-expansion rule the flag path and the add screen follow.
-	// The settings answer resolves the same way too, so a keyword generates
-	// its skeleton into the real profile and a refusal lands before anything
-	// is registered.
+	// the working directory — while the account registers the as-typed form.
 	realDir, err := provider.ExpandHome(dir)
 	if err != nil {
 		return err
