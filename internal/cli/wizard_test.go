@@ -330,6 +330,87 @@ func TestAddWizardUnknownProviderRegistersNothing(t *testing.T) {
 	}
 }
 
+// TestAddWizardShowsResolvedDefaultDir: a provider other than claude defaults the
+// config dir to ~/.<provider>-<name>, which the dir question cannot know yet. The
+// resolved dir must be shown before the account is registered under it.
+func TestAddWizardShowsResolvedDefaultDir(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	var out bytes.Buffer
+	if err := runAddWizard(bytes.NewBufferString("work\n\ncodex\n"), &out, path, addPrefill{}); err != nil {
+		t.Fatalf("wizard: %v", err)
+	}
+	want := filepath.Join(home, ".codex-work")
+	if !strings.Contains(out.String(), "Config dir: "+want+" (default for codex)") {
+		t.Fatalf("resolved default dir was not shown before registering:\n%s", out.String())
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Providers["codex"].Accounts["work"].Dir; got != want {
+		t.Fatalf("codex account dir = %q, want %q", got, want)
+	}
+}
+
+// TestAddWizardNotesIgnoredFlags: --env and --command only fill a provider that
+// has neither yet. When the provider already has them, the wizard says which
+// flag was ignored and what the provider already uses, instead of dropping it.
+func TestAddWizardNotesIgnoredFlags(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	seeded := &config.Config{Providers: map[string]config.Provider{
+		"myprov": {EnvVar: "MYCLI_HOME", Command: "mycli", Accounts: map[string]config.Account{}},
+	}}
+	if err := config.Save(path, seeded); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	pre := addPrefill{Dir: filepath.Join(home, "acct"), Env: "OTHER_HOME", Command: "other"}
+	if err := runAddWizard(bytes.NewBufferString("work\nmyprov\n"), &out, path, pre); err != nil {
+		t.Fatalf("wizard: %v", err)
+	}
+	for _, want := range []string{
+		`note: --env ignored — provider myprov already uses "MYCLI_HOME"`,
+		`note: --command ignored — provider myprov already uses "mycli"`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in output:\n%s", want, out.String())
+		}
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := c.Providers["myprov"]; p.EnvVar != "MYCLI_HOME" || p.Command != "mycli" {
+		t.Fatalf("existing provider changed: %+v", p)
+	}
+}
+
+// TestAddWizardRefusesBadNameBeforeAnyWrite: a name the rules reject (here a
+// path separator) is refused right after it is read, so no config dir, parent
+// directory or launcher is left behind — even when the dir was left to default.
+func TestAddWizardRefusesBadNameBeforeAnyWrite(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	err := runAddWizard(bytes.NewBufferString("a/b\n\n\n"), &bytes.Buffer{}, path, addPrefill{})
+	if err == nil || !strings.Contains(err.Error(), "invalid account name") {
+		t.Fatalf("bad name was not refused with the rule: %v", err)
+	}
+	for _, p := range []string{filepath.Join(home, ".claude-a"), filepath.Join(home, ".local", "bin", "a")} {
+		if _, statErr := os.Stat(p); statErr == nil {
+			t.Fatalf("residue left by a refused name: %s", p)
+		}
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Providers) != 0 {
+		t.Fatalf("something was registered: %+v", c.Providers)
+	}
+}
+
 // TestMain runs the whole package under a temp HOME and a temp bin dir first on
 // PATH (system dirs kept for any tool a test execs). Add, rename and remove
 // write and delete launchers in the first writable PATH dir, so without this

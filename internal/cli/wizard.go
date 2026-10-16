@@ -12,6 +12,7 @@ import (
 	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
+	"github.com/CarlosDanielDev/aiacc/internal/tui"
 )
 
 // addPrefill carries the add flags into the wizard: a flag the user already
@@ -28,6 +29,8 @@ type addPrefill struct {
 // them, and an empty answer (or the end of input) means claude and no settings.
 // The active claude login is shown for context first. Answers may also arrive
 // piped (non-tty stdin), and every flag in pre is applied without re-asking.
+// The exception is --env and --command, which fill a provider only while it
+// has none; a note says when one is ignored.
 // After saving it keeps the launcher command and the shared assets in sync,
 // exactly like the flag path and the add screen. Logging in is left to the CLI
 // itself — aiacc never handles credentials. Answers are read from in, prompts
@@ -49,13 +52,17 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 	if name == "" {
 		return fmt.Errorf("account name is required")
 	}
+	// Refused here, before the dir question and any write: the name becomes a
+	// directory suffix and a launcher filename.
+	if !tui.ValidName(name) {
+		return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", name)
+	}
 
 	home, _ := os.UserHomeDir()
 	dir := pre.Dir
 	if dir == "" {
-		defaultDir := filepath.Join(home, ".claude-"+name)
 		dir = strings.TrimSpace(ask(r, out, fmt.Sprintf(
-			"Config dir [%s] (another provider: ~/.<provider>-%s): ", defaultDir, name)))
+			"Config dir [default: ~/.<provider>-%s, i.e. ~/.claude-%s for claude]: ", name, name)))
 	} else {
 		fmt.Fprintf(out, "Config dir: %s (from --dir)\n", dir)
 	}
@@ -70,6 +77,9 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 	}
 	if defaulted {
 		dir = filepath.Join(home, "."+providerName+"-"+name) // ~/.claude-<name> for claude
+		// The default was only a pattern when it was asked; show the path it
+		// resolved to before the account is registered under it.
+		fmt.Fprintf(out, "Config dir: %s (default for %s)\n", dir, providerName)
 	}
 
 	cfg, err := config.Load(cfgPath)
@@ -85,6 +95,17 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 				"\"aiacc add <provider> <account> --dir <dir> --env <ENV_VAR> --command <cli>\"",
 				providerName, strings.Join(validProviders(cfg), ", "))
 		}
+	}
+
+	// A prefilled --env or --command reaches saveAccount, which fills the
+	// provider's env var and command only while it has none. Say so when a
+	// flag will be ignored, instead of dropping it silently.
+	existing := cfg.Providers[providerName]
+	if pre.Env != "" && existing.EnvVar != "" {
+		fmt.Fprintf(out, "note: --env ignored — provider %s already uses %q\n", providerName, existing.EnvVar)
+	}
+	if pre.Command != "" && existing.Command != "" {
+		fmt.Fprintf(out, "note: --command ignored — provider %s already uses %q\n", providerName, existing.Command)
 	}
 
 	settings := pre.Settings
