@@ -552,20 +552,41 @@ func TestAddSettingsPathUnchanged(t *testing.T) {
 	}
 }
 
+// lastFrame is the screen the user is left looking at: the text after the
+// last cursor-home repaint, with escape codes stripped.
+func lastFrame(out string) string {
+	frames := strings.Split(out, "\x1b[H")
+	return ansi.ReplaceAllString(frames[len(frames)-1], "")
+}
+
+// hintLine is the rendered hint row (the one carrying the ⚠ marker). The
+// settings field echoes the typo on its own row, so assertions about the hint
+// must run on this line alone, never on the whole frame.
+func hintLine(frame string) string {
+	for _, l := range strings.Split(frame, "\n") {
+		if strings.Contains(l, "⚠") {
+			return l
+		}
+	}
+	return ""
+}
+
+// typoRefusal is the refusal text the add screen would show for a typo.
+func typoRefusal(t *testing.T, typo string) string {
+	t.Helper()
+	_, keyword, err := provider.ClassifySettings("claude", typo)
+	if err == nil || keyword {
+		t.Fatalf("ClassifySettings(%q) = keyword %t, err %v; want a refusal", typo, keyword, err)
+	}
+	return err.Error()
+}
+
 // A bare word that names no keyword is refused with the valid ones listed —
-// the same gate the CLI's --settings flag applies. The refusal must stay in the
-// hint row of the LAST frame (the screen the user is left looking at), name the
-// valid keywords near the start so a long typo cannot truncate them off the
-// row, and leave nothing written to the dir.
+// the same gate the CLI's --settings flag applies. The refusal stays in the
+// hint row of the last frame, leads with the keywords so a long typo cannot
+// truncate them off the row, and leaves nothing written to the dir.
 func TestAddSettingsKeywordTypo(t *testing.T) {
-	for _, tc := range []struct {
-		typo     string
-		overflow bool // the full refusal is longer than the hint row: the list must survive truncation
-	}{
-		{"kimi", false},
-		{"kimi-coding-plan-v2-enterprise-tier-x", true},
-	} {
-		typo := tc.typo
+	for _, typo := range []string{"kimi", "kimi-coding-plan-v2-enterprise-tier-x"} {
 		t.Run(typo, func(t *testing.T) {
 			dir := t.TempDir()
 			out := &bytes.Buffer{}
@@ -577,26 +598,54 @@ func TestAddSettingsKeywordTypo(t *testing.T) {
 			if res.OK {
 				t.Fatalf("got %+v, want the create aborted for the typo", res)
 			}
-			// The hint is cut to innerWidth-4 runes (see RenderAdd). Pin that the
-			// untruncated refusal really overflows it, so the keyword assertion
-			// below keeps exercising truncation if the wording ever changes.
-			if tc.overflow {
-				cap := innerWidth(80) - 4
-				_, _, cerr := provider.ClassifySettings("claude", typo)
-				if full := utf8.RuneCountInString(cerr.Error()); full <= cap {
-					t.Fatalf("refusal is %d runes, not over the %d-rune hint cap: the truncation case is not exercised", full, cap)
-				}
+			hint := hintLine(lastFrame(out.String()))
+			if hint == "" {
+				t.Fatalf("no hint row on the last frame:\n%s", lastFrame(out.String()))
 			}
-			frames := strings.Split(out.String(), "\x1b[H")
-			last := ansi.ReplaceAllString(frames[len(frames)-1], "")
-			if !strings.Contains(last, "valid keywords: custom, glm") {
-				t.Errorf("last frame's hint does not name the valid keywords up front:\n%s", last)
+			if !strings.Contains(hint, "keywords: custom, glm") {
+				t.Errorf("hint row does not name the valid keywords up front: %q", hint)
 			}
-			if !strings.Contains(last, typo) {
-				t.Errorf("last frame's hint does not name the typo %q:\n%s", typo, last)
+			// Whether the hint row must truncate is derived from the real refusal
+			// and the real cap, never hardcoded per row: the hint keeps at most
+			// innerWidth(80)-4 runes of the refusal.
+			cap := innerWidth(80) - 4
+			overflow := utf8.RuneCountInString(typoRefusal(t, typo)) > cap
+			truncated := strings.Contains(hint, "…")
+			if overflow != truncated {
+				t.Errorf("refusal overflows the %d-rune cap = %t, but hint truncated = %t: %q", cap, overflow, truncated, hint)
+			}
+			if overflow && strings.Contains(hint, typo) {
+				t.Errorf("hint row shows the whole typo %q although the refusal overflows: %q", typo, hint)
+			}
+			if !overflow && !strings.Contains(hint, typo) {
+				t.Errorf("hint row does not name the typo %q: %q", typo, hint)
 			}
 			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 				t.Fatalf("a typo wrote %d file(s) into the dir", len(entries))
+			}
+		})
+	}
+}
+
+// The keyword list must survive the narrowest hint row the add screen lays
+// out. innerWidth floors the box at 30 columns, reached at 32 terminal columns,
+// so the hint keeps 26 runes there. Pins that floor and the list at it.
+func TestAddSettingsKeywordsAtMinWidth(t *testing.T) {
+	const cols = 32
+	if innerWidth(cols) != 30 || innerWidth(cols-1) >= 30 {
+		t.Fatalf("innerWidth floor moved: innerWidth(%d)=%d, innerWidth(%d)=%d; update the minimum width",
+			cols, innerWidth(cols), cols-1, innerWidth(cols-1))
+	}
+	for _, typo := range []string{"kimi", "kimi-coding-plan-v2-enterprise-tier-x"} {
+		t.Run(typo, func(t *testing.T) {
+			out := &bytes.Buffer{}
+			keys := "w\t\t" + typo + "\r\x1b"
+			if _, err := driveAdd("", "claude", true, fixedGeom(cols, 24), bytes.NewBufferString(keys), out); err != nil {
+				t.Fatalf("driveAdd: %v", err)
+			}
+			hint := hintLine(lastFrame(out.String()))
+			if !strings.Contains(hint, "keywords: custom, glm") {
+				t.Errorf("at %d columns the hint row lost the keyword list: %q", cols, hint)
 			}
 		})
 	}

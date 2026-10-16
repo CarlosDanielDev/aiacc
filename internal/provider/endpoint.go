@@ -76,12 +76,21 @@ func ClassifySettings(providerName, value string) (ep Endpoint, keyword bool, er
 	if !errors.Is(err, ErrUnknownEndpoint) || looksLikePath(value) {
 		return Endpoint{}, false, nil
 	}
-	// The keywords lead the message (after the sentinel's text): the add
-	// screen's hint row truncates long text at its right edge, and a long typo
-	// must not cut them off. The sentinel stays wrapped, so errors.Is holds
-	// exactly as it does for ResolveEndpoint.
-	return Endpoint{}, false, fmt.Errorf("%w: valid keywords: %s (not %q)", ErrUnknownEndpoint, keywordList(Presets[providerName]), value)
+	return Endpoint{}, false, keywordRefusal{keywords: keywordList(Presets[providerName]), value: value}
 }
+
+// keywordRefusal is the settings-field refusal. Its text leads with the
+// keywords: the add screen's hint row keeps only the left edge of a long
+// message, so the list must come before the typo, and the narrowest hint row
+// is 26 runes. It unwraps to ErrUnknownEndpoint, so errors.Is classifies it
+// exactly as it classifies ResolveEndpoint's refusal.
+type keywordRefusal struct{ keywords, value string }
+
+func (e keywordRefusal) Error() string {
+	return fmt.Sprintf("keywords: %s (not %q)", e.keywords, e.value)
+}
+
+func (e keywordRefusal) Unwrap() error { return ErrUnknownEndpoint }
 
 // keywordList is the provider's endpoint keywords, sorted and comma-joined.
 func keywordList(p Preset) string {
