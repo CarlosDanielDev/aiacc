@@ -96,9 +96,10 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 	}
 	ep, keyword, err := provider.ClassifySettings(providerName, value)
 	if err != nil {
-		// The error already names the typo and lists the valid keywords.
-		return "", fmt.Errorf("%w — give a settings file path instead, "+
-			"or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", err)
+		// err is the shared refusal: keyword-first, short enough for the add
+		// screen's hint row. The CLI says what is wrong first, then the refusal.
+		return "", fmt.Errorf("--settings %q is neither a file path nor a known endpoint keyword — %w. "+
+			"Give a settings file path instead, or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", value, err)
 	}
 	if !keyword {
 		return value, nil // not a keyword — today's path behavior, unchanged

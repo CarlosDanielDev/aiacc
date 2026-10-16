@@ -627,10 +627,11 @@ func TestAddSettingsKeywordTypo(t *testing.T) {
 	}
 }
 
-// The keyword list must survive the narrowest hint row the add screen lays
-// out. innerWidth floors the box at 30 columns, reached at 32 terminal columns,
-// so the hint keeps 26 runes there. Pins that floor and the list at it.
-func TestAddSettingsKeywordsAtMinWidth(t *testing.T) {
+// At 32 terminal columns innerWidth reaches its 30-column floor and the hint
+// row keeps 26 runes, so the keyword list survives. This pins that point only.
+// Nothing enforces a terminal minimum: the list survives down to about 27
+// columns, and narrower terminals truncate it (an accepted limit).
+func TestAddSettingsKeywordsAtNarrowWidth(t *testing.T) {
 	const cols = 32
 	if innerWidth(cols) != 30 || innerWidth(cols-1) >= 30 {
 		t.Fatalf("innerWidth floor moved: innerWidth(%d)=%d, innerWidth(%d)=%d; update the minimum width",

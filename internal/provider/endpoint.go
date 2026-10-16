@@ -81,9 +81,11 @@ func ClassifySettings(providerName, value string) (ep Endpoint, keyword bool, er
 
 // keywordRefusal is the settings-field refusal. Its text leads with the
 // keywords: the add screen's hint row keeps only the left edge of a long
-// message, so the list must come before the typo, and the narrowest hint row
-// is 26 runes. It unwraps to ErrUnknownEndpoint, so errors.Is classifies it
-// exactly as it classifies ResolveEndpoint's refusal.
+// message, so the list must come before the typo. At 32 terminal columns the
+// hint row is 26 runes and "keywords: custom, glm" (21) fits; narrower
+// terminals shrink the row further and the list truncates, an accepted limit.
+// It unwraps to ErrUnknownEndpoint, so errors.Is classifies it exactly as it
+// classifies ResolveEndpoint's refusal.
 type keywordRefusal struct{ keywords, value string }
 
 func (e keywordRefusal) Error() string {
