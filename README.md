@@ -171,9 +171,10 @@ usage counters — isolating those is the whole point of a profile.
 
 > **Nothing is overwritten.** An entry a profile already has of its own is left
 > exactly as it is and reported instead. `--replace` opts into taking it over,
-> and even then the original is renamed to `<name>.aiacc-bak` first, never
-> deleted. Custom (non-preset) providers are skipped — aiacc doesn't guess at a
-> CLI's asset layout.
+> and even then the original is renamed to `<name>.aiacc-bak` first
+> (`.aiacc-bak2`, `.aiacc-bak3`, … when one is already there — the report names
+> the path chosen), never deleted. Custom (non-preset) providers are skipped —
+> aiacc doesn't guess at a CLI's asset layout.
 
 ## 🔑 A profile with its own endpoint
 
@@ -238,7 +239,7 @@ isn't and fails when it's missing.
 | `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you; an existing file is never overwritten (claude). |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
-| `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
+| `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there — Claude profiles only for now, the transcript format is Claude's. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
 | `aiacc link [provider] [account]` | Share your skills, sub-agents, commands and hooks with a profile (all of them by default). `--replace` takes over entries a profile owns; `--prune` removes dead links (asks first). |
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
@@ -265,6 +266,11 @@ dir = "~/.claude-work"
 
 A leading `~` in a `dir` or `settings` path expands to your home directory. A missing config file is
 treated as empty, so read-only commands work before you register anything.
+
+Writes are serialized through a `config.toml.lock` sibling that appears next to the file during
+mutations and is left in place (empty and harmless) afterwards. A config holding keys this version of
+aiacc doesn't know — say, written by a newer release or by hand — refuses to be overwritten by
+`add` / `remove` / `rename`, with the keys named, so nothing is silently dropped.
 
 ## 🎬 Tutorials
 
@@ -306,7 +312,8 @@ aiacc handoff claude claude-work claude-personal --launch
 ```
 
 It copies just the session transcript into the other account and resumes it — same
-context, now billed to personal. (In the picker, press `h` on the source account.)
+context, now billed to personal. Claude profiles only for now — the transcript
+format is Claude's. (In the picker, press `h` on the source account.)
 
 </details>
 

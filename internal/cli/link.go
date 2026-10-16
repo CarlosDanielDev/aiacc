@@ -28,7 +28,8 @@ func newLinkCmd() *cobra.Command {
 			"the tooling the bare `claude` has.\n\n" +
 			"Credentials, transcripts and usage stay per-account. An entry a profile " +
 			"already has of its own is left untouched; --replace takes it over, " +
-			"renaming the original to <name>.aiacc-bak first.\n\n" +
+			"renaming the original to <name>.aiacc-bak first — or .aiacc-bak2, " +
+			".aiacc-bak3, … when one is already there.\n\n" +
 			"--prune removes shared symlinks whose target no longer exists — the dead " +
 			"links left behind when the CLI renames or drops a config directory. It " +
 			"lists them and asks before removing anything.",
@@ -56,7 +57,7 @@ func newLinkCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&replace, "replace", false, "take over entries a profile already has (originals renamed to <name>.aiacc-bak)")
+	cmd.Flags().BoolVar(&replace, "replace", false, "take over entries a profile already has (originals kept as <name>.aiacc-bak, or .aiacc-bak2, … when one already exists)")
 	cmd.Flags().BoolVar(&prune, "prune", false, "remove shared symlinks whose target no longer exists (asks first)")
 	return cmd
 }
@@ -229,8 +230,15 @@ func printLinkReport(w io.Writer, results []share.Result, replace bool) {
 		fmt.Fprintf(tw, "%s\t%d\t%s\n", r.Dir, r.Count(share.Linked, share.Already), detail)
 	}
 	tw.Flush()
+	for _, r := range results {
+		for _, e := range r.Entries {
+			if e.Backup != "" {
+				fmt.Fprintf(w, "%s: %s kept as %s\n", r.Dir, e.Name, e.Backup)
+			}
+		}
+	}
 	if conflicts > 0 && !replace {
-		fmt.Fprintln(w, "\nRun `aiacc link --replace` to share those too (originals kept as <name>.aiacc-bak).")
+		fmt.Fprintln(w, "\nRun `aiacc link --replace` to share those too (originals kept as <name>.aiacc-bak, or .aiacc-bak2, … when one already exists).")
 	}
 }
 
@@ -247,6 +255,14 @@ func linkLines(results []share.Result, replace bool) []tui.Line {
 			Text:  fmt.Sprintf("✓ %-16s %d shared", r.Dir, r.Count(share.Linked, share.Already)),
 			Color: tui.White,
 		})
+		for _, e := range r.Entries {
+			if e.Backup != "" {
+				body = append(body, tui.Line{
+					Text:  fmt.Sprintf("  %s kept as %s", e.Name, e.Backup),
+					Color: tui.Grey,
+				})
+			}
+		}
 	}
 	if conflicts > 0 && !replace {
 		body = append(body,

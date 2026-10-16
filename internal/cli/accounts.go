@@ -134,37 +134,37 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 	if settings != "" && provider.Presets[providerName].SettingsFlag == "" {
 		return fmt.Errorf("%s has no settings flag, so --settings cannot apply to it", providerName)
 	}
-	// The name is also the launcher filename (`binDir/<name>`) and a token in
-	// every generated script, so a traversal or junk name is refused here —
-	// the same rule the add screen enforces as you type.
-	if !tui.ValidName(account) {
-		return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", account)
-	}
-	c, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-	env := envOverride
-	if env == "" {
-		env, _ = provider.EnvVar(c, providerName) // preset, else ""
-	}
-	cmd := cmdOverride
-	if cmd == "" {
-		cmd, _ = provider.Command(c, providerName) // preset, else ""
-	}
-	p := c.Providers[providerName]
-	if p.Accounts == nil {
-		p.Accounts = map[string]config.Account{}
-	}
-	if p.EnvVar == "" {
-		p.EnvVar = env
-	}
-	if p.Command == "" {
-		p.Command = cmd
-	}
-	p.Accounts[account] = config.Account{Dir: dir, Quota: quota, Settings: settings}
-	c.Providers[providerName] = p
-	return config.Save(path, c)
+	// Update holds the config file lock across load-modify-save, so a
+	// concurrent add/remove cannot turn this into a lost update.
+	return config.Update(path, func(c *config.Config) error {
+		// The name is also the launcher filename (`binDir/<name>`) and a token
+		// in every generated script, so a traversal or junk name is refused
+		// here — the same rule the add screen enforces as you type.
+		if !tui.ValidName(account) {
+			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", account)
+		}
+		env := envOverride
+		if env == "" {
+			env, _ = provider.EnvVar(c, providerName) // preset, else ""
+		}
+		cmd := cmdOverride
+		if cmd == "" {
+			cmd, _ = provider.Command(c, providerName) // preset, else ""
+		}
+		p := c.Providers[providerName]
+		if p.Accounts == nil {
+			p.Accounts = map[string]config.Account{}
+		}
+		if p.EnvVar == "" {
+			p.EnvVar = env
+		}
+		if p.Command == "" {
+			p.Command = cmd
+		}
+		p.Accounts[account] = config.Account{Dir: dir, Quota: quota, Settings: settings}
+		c.Providers[providerName] = p
+		return nil
+	})
 }
 
 func newRemoveCmd() *cobra.Command {
@@ -186,15 +186,13 @@ func newRemoveCmd() *cobra.Command {
 // account's directory is left on disk — only the registration is dropped. Used
 // by both `remove` and the picker's `d`.
 func removeAccount(path, providerName, account string) error {
-	c, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-	if p, ok := c.Providers[providerName]; ok {
-		delete(p.Accounts, account)
-		c.Providers[providerName] = p
-	}
-	if err := config.Save(path, c); err != nil {
+	if err := config.Update(path, func(c *config.Config) error {
+		if p, ok := c.Providers[providerName]; ok {
+			delete(p.Accounts, account)
+			c.Providers[providerName] = p
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	removeLauncher(account) // drop the command too (best-effort)
@@ -229,29 +227,27 @@ func renameAccount(path, providerName, oldName, newName string) error {
 	if newName == oldName {
 		return nil
 	}
-	// Same rule as saveAccount: the new name becomes the launcher filename.
-	if !tui.ValidName(newName) {
-		return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", newName)
-	}
-	c, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-	p, ok := c.Providers[providerName]
-	if !ok {
-		return fmt.Errorf("unknown provider %q", providerName)
-	}
-	acct, ok := p.Accounts[oldName]
-	if !ok {
-		return fmt.Errorf("unknown account %q", oldName)
-	}
-	if _, exists := p.Accounts[newName]; exists {
-		return fmt.Errorf("account %q already exists", newName)
-	}
-	p.Accounts[newName] = acct
-	delete(p.Accounts, oldName)
-	c.Providers[providerName] = p
-	return config.Save(path, c)
+	return config.Update(path, func(c *config.Config) error {
+		// Same rule as saveAccount: the new name becomes the launcher filename.
+		if !tui.ValidName(newName) {
+			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", newName)
+		}
+		p, ok := c.Providers[providerName]
+		if !ok {
+			return fmt.Errorf("unknown provider %q", providerName)
+		}
+		acct, ok := p.Accounts[oldName]
+		if !ok {
+			return fmt.Errorf("unknown account %q", oldName)
+		}
+		if _, exists := p.Accounts[newName]; exists {
+			return fmt.Errorf("account %q already exists", newName)
+		}
+		p.Accounts[newName] = acct
+		delete(p.Accounts, oldName)
+		c.Providers[providerName] = p
+		return nil
+	})
 }
 
 func newListCmd() *cobra.Command {
