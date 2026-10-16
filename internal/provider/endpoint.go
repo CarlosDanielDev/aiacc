@@ -54,6 +54,39 @@ func ResolveEndpoint(providerName, name string) (Endpoint, error) {
 	return ep, nil
 }
 
+// ClassifySettings sorts a settings-field value into an endpoint keyword or a
+// file path — the one rule both add surfaces (the picker screen and the CLI
+// flag) share, so they cannot drift. A value naming a keyword returns its
+// preset with keyword true. A value that reads as a file path, or whose
+// lookup failure is not about the name itself, is not a keyword attempt: it
+// comes back with keyword false and the caller registers the value verbatim,
+// the path behavior both surfaces had before keywords existed. A bare word
+// that names no keyword is refused with the valid ones listed — a typo must
+// not silently register a bogus settings path.
+func ClassifySettings(providerName, value string) (ep Endpoint, keyword bool, err error) {
+	if value == "" {
+		return Endpoint{}, false, nil
+	}
+	ep, err = ResolveEndpoint(providerName, value)
+	if err == nil {
+		return ep, true, nil
+	}
+	// ResolveEndpoint only returns ErrUnknownEndpoint for a provider that has
+	// a settings flag, so any other error (unknown provider, no settings flag)
+	// belongs to the later registration step's refusal, not to this field.
+	if !errors.Is(err, ErrUnknownEndpoint) || looksLikePath(value) {
+		return Endpoint{}, false, nil
+	}
+	return Endpoint{}, false, err
+}
+
+// looksLikePath reports whether a settings value reads as a file path rather
+// than a keyword attempt: it holds a separator, a ~, or a dot (/abs, ./rel,
+// a/b, ~/x, file.json). A bare word (glm, kimi) is a keyword attempt.
+func looksLikePath(value string) bool {
+	return strings.ContainsAny(value, "/~.")
+}
+
 // WriteSettingsSkeleton writes a settings-file skeleton for ep into dir. The
 // file holds an env block with the endpoint's base URL, PlaceholderToken where
 // the key goes, and the endpoint's model fields; it is created with mode 0600,

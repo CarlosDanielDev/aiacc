@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"slices"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/CarlosDanielDev/aiacc/internal/claude"
@@ -81,11 +79,12 @@ func newAddCmd() *cobra.Command {
 }
 
 // resolveSettings turns the --settings value into the path the account
-// registers, the CLI spelling of the add screen's settings field. An endpoint
-// keyword (glm) generates the settings skeleton into the account dir and
-// yields the generated path, exactly as if the user had written the file by
-// hand and passed its path. A keyword whose preset has no base URL (custom)
-// is refused: its base URL is the user's to type, and only the interactive
+// registers, the CLI spelling of the add screen's settings field. Through the
+// shared classification rule (provider.ClassifySettings) an endpoint keyword
+// (glm) generates the settings skeleton into the account dir and yields the
+// generated path, exactly as if the user had written the file by hand and
+// passed its path. A keyword whose preset has no base URL (custom) is
+// refused: its base URL is the user's to type, and only the interactive
 // add screen can ask for it. A bare word that names no keyword is refused
 // with the valid ones listed — a typo must not silently register a bogus
 // settings path — while anything path-like keeps today's verbatim path
@@ -95,18 +94,14 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 	if value == "" {
 		return "", nil
 	}
-	ep, err := provider.ResolveEndpoint(providerName, value)
+	ep, keyword, err := provider.ClassifySettings(providerName, value)
 	if err != nil {
-		// ResolveEndpoint only returns ErrUnknownEndpoint for a provider that
-		// has a settings flag, so reaching this branch means a bare word that
-		// names no keyword; anything else (unknown provider, no flag) falls
-		// through to saveAccount's refusal.
-		if !errors.Is(err, provider.ErrUnknownEndpoint) || looksLikePath(value) {
-			return value, nil // not a keyword — today's path behavior, unchanged
-		}
 		// The error already names the typo and lists the valid keywords.
 		return "", fmt.Errorf("%w — give a settings file path instead, "+
 			"or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", err)
+	}
+	if !keyword {
+		return value, nil // not a keyword — today's path behavior, unchanged
 	}
 	if ep.BaseURL == "" {
 		return "", fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
@@ -116,13 +111,6 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 	// skeleton lands in the real profile while the registered path keeps the
 	// as-typed form (stored paths re-expand at launch; see EnsureSkeleton).
 	return provider.EnsureSkeleton(dir, ep)
-}
-
-// looksLikePath reports whether a --settings value reads as a file path rather
-// than a keyword attempt: it holds a separator, a ~, or a dot (/abs, ./rel,
-// a/b, ~/x, file.json). A bare word (glm, kimi) is a keyword attempt.
-func looksLikePath(value string) bool {
-	return strings.ContainsAny(value, "/~.")
 }
 
 // saveAccount registers (provider, account) at dir in the config file at path,

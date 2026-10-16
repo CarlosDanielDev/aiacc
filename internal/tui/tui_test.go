@@ -552,6 +552,27 @@ func TestAddSettingsPathUnchanged(t *testing.T) {
 	}
 }
 
+// A bare word that names no keyword is refused with the valid ones listed —
+// the same gate the CLI's --settings flag applies — and the refusal shows in
+// the hint row, so the create never registers a bogus settings path.
+func TestAddSettingsKeywordTypo(t *testing.T) {
+	out := &bytes.Buffer{}
+	keys := "w\t\tkimi\r\x1b"
+	res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), out)
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	if res.OK {
+		t.Fatalf("got %+v, want the create aborted for the typo", res)
+	}
+	screen := ansi.ReplaceAllString(out.String(), "")
+	for _, want := range []string{"kimi", "glm", "custom"} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("hint does not name the typo and the valid keywords (missing %q):\n%s", want, screen)
+		}
+	}
+}
+
 func TestRenderAddSettingsField(t *testing.T) {
 	sz := Size{Cols: 80, Rows: 24}
 	out := RenderAdd("", "claude", AddForm{Name: "glm", WithSettings: true}, "", sz)
