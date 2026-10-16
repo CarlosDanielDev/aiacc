@@ -210,10 +210,48 @@
     line-height: 1.5;
     overflow-x: auto;
   }
-  .term-body pre {
-    margin: 0;
-    font: inherit;
-    white-space: pre;
+  /* The picker frame: drawn with CSS borders, not box-drawing characters —
+     ▸ ⚙ ◆ ✓ ⏎ don't exist in IBM Plex Mono, so their fallback widths break
+     any character-aligned box. */
+  .frame {
+    position: relative;
+    border: 1px solid var(--line);
+    margin: 10px 2px 0;
+  }
+  .frame-title {
+    position: absolute;
+    top: -10px;
+    left: 14px;
+    background: #030805;
+    padding: 0 10px;
+    font: 600 12px "IBM Plex Mono", monospace;
+    letter-spacing: .28em;
+    color: var(--faint);
+  }
+  .frame-head { padding: 16px 16px 10px; }
+  .frame-list { border-top: 1px solid var(--line); }
+  .frame-row {
+    display: flex;
+    align-items: baseline;
+    padding: 7px 16px 7px 20px;
+  }
+  .frame-row .pname {
+    flex: 0 0 11.5em;
+    color: var(--fg);
+    min-width: 0;
+  }
+  .frame-row .pval { margin-left: auto; min-width: 0; }
+  .frame-row.sel .ptr { color: var(--green); margin-right: 2px; }
+  .frame-row .gear { color: var(--cyan); }
+  .frame-status {
+    display: flex;
+    gap: 22px;
+    border-top: 1px solid var(--line);
+    padding: 12px 16px 14px 20px;
+  }
+  .legend {
+    margin: 12px 4px 0;
+    font-size: 13px;
   }
   .t-dim { color: var(--faint); }
   .t-green { color: var(--green); }
@@ -451,17 +489,18 @@
 
     <div class="term" aria-label="The aiacc picker, as it looks in a terminal">
       <div class="term-bar"><i></i><i></i><i></i><span>aiacc — ~/projects/aiacc</span></div>
-      <div class="term-body"><pre><span class="t-dim">┏━ AIACC ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓</span>
-<span class="t-dim">┃</span>                                        <span class="t-dim">┃</span>
-<span class="t-dim">┃</span>  <span class="t-green">// launch a profile</span>                   <span class="t-dim">┃</span>
-<span class="t-dim">┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫</span>
-<span class="t-dim">┃</span>  <span class="t-green">▸ claude-work</span>      <span class="t-fg">carlos@work.io</span>     <span class="t-dim">┃</span>
-<span class="t-dim">┃</span>    claude-glm       <span class="t-cyan">⚙ glm.json</span>        <span class="t-dim">┃</span>
-<span class="t-dim">┃</span>    claude-personal  <span class="t-dim">not logged in</span>      <span class="t-dim">┃</span>
-<span class="t-dim">┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫</span>
-<span class="t-dim">┃</span>  <span class="t-green">◆ 3 profiles</span>   <span class="t-green">✓ ready</span>               <span class="t-dim">┃</span>
-<span class="t-dim">┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛</span>
-  <span class="t-dim">↑↓ move</span>  <span class="t-cyan">⏎</span> launch  <span class="t-cyan">a</span> add  <span class="t-cyan">d</span> remove  <span class="t-cyan">q</span> quit</pre>
+      <div class="term-body">
+        <div class="frame">
+          <div class="frame-title">AIACC</div>
+          <div class="frame-head"><span class="t-green">// launch a profile</span></div>
+          <div class="frame-list">
+            <div class="frame-row sel"><span class="pname"><span class="ptr">▸</span> <span class="t-green">claude-work</span></span><span class="pval">carlos@work.io</span></div>
+            <div class="frame-row"><span class="pname">claude-glm</span><span class="pval"><span class="gear">⚙</span> <span class="t-cyan">glm.json</span></span></div>
+            <div class="frame-row"><span class="pname">claude-personal</span><span class="pval t-dim">not logged in</span></div>
+          </div>
+          <div class="frame-status"><span class="t-green">◆ 3 profiles</span><span class="t-green">✓ ready</span></div>
+        </div>
+        <div class="legend mono"><span class="t-dim">↑↓ move</span>  <span class="t-cyan">⏎</span> launch  <span class="t-cyan">a</span> add  <span class="t-cyan">d</span> remove  <span class="t-cyan">q</span> quit</div>
       <div class="launch-line mono"><span class="prompt">$ </span><span class="typed" id="typed"></span><span class="cursor">▌</span></div>
       <div class="launch-out mono" id="launch-out" hidden><span class="ok">✓</span> Claude Code opened — signed in as carlos@work.io</div>
     </div></div>
@@ -557,8 +596,10 @@ claude-personal    <span class="c"># a different account entirely</span></pre>
       </div>
       <pre class="json"><span class="j-punc">{</span>
   <span class="j-key">"env"</span><span class="j-punc">: {</span>
-    <span class="j-key">"ANTHROPIC_BASE_URL"</span><span class="j-punc">:</span> <span class="j-str">"https://api.z.ai/api/anthropic"</span><span class="j-punc">,</span>
     <span class="j-key">"ANTHROPIC_AUTH_TOKEN"</span><span class="j-punc">:</span> <span class="j-hl">"PASTE-YOUR-KEY-HERE"</span><span class="j-punc">,</span>
+    <span class="j-key">"ANTHROPIC_BASE_URL"</span><span class="j-punc">:</span> <span class="j-str">"https://api.z.ai/api/anthropic"</span><span class="j-punc">,</span>
+    <span class="j-key">"ANTHROPIC_CUSTOM_MODEL_OPTION"</span><span class="j-punc">:</span> <span class="j-str">"glm-5.3-flash[1m]"</span><span class="j-punc">,</span>
+    <span class="j-key">"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"</span><span class="j-punc">:</span> <span class="j-str">"GLM 5.3 Flash 1M (z.ai)"</span><span class="j-punc">,</span>
     <span class="j-key">"ANTHROPIC_MODEL"</span><span class="j-punc">:</span> <span class="j-str">"glm-5.3-flash[1m]"</span>
   <span class="j-punc">}</span>
 <span class="j-punc">}</span></pre>
