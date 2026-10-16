@@ -16,7 +16,7 @@ func TestAddWizardRegistersAccount(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir()) // hermetic: don't read real ~/.claude
 	path := filepath.Join(t.TempDir(), "config.toml")
 	customDir := t.TempDir()
-	in := bytes.NewBufferString("claude\ndemo\n" + customDir + "\n\n")
+	in := bytes.NewBufferString("demo\n" + customDir + "\nclaude\n\n")
 	var out bytes.Buffer
 	if err := runAddWizard(in, &out, path, addPrefill{}); err != nil {
 		t.Fatalf("wizard: %v", err)
@@ -47,7 +47,7 @@ func TestAddWizardDefaultsToClaude(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	path := filepath.Join(t.TempDir(), "config.toml")
 	dir := t.TempDir()
-	in := bytes.NewBufferString("\ndemo\n" + dir + "\n\n")
+	in := bytes.NewBufferString("demo\n" + dir + "\n\n\n")
 	if err := runAddWizard(in, &bytes.Buffer{}, path, addPrefill{}); err != nil {
 		t.Fatalf("wizard: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestAddWizardRegistersOtherProvider(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	path := filepath.Join(t.TempDir(), "config.toml")
 	dir := t.TempDir()
-	in := bytes.NewBufferString("codex\nwork\n" + dir + "\n")
+	in := bytes.NewBufferString("work\n" + dir + "\ncodex\n")
 	if err := runAddWizard(in, &bytes.Buffer{}, path, addPrefill{}); err != nil {
 		t.Fatalf("wizard: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestAddWizardRegistersOtherProvider(t *testing.T) {
 func TestAddWizardUnknownProviderRefused(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	path := filepath.Join(t.TempDir(), "config.toml")
-	err := runAddWizard(bytes.NewBufferString("clade\nx\nfoo\n"), &bytes.Buffer{}, path, addPrefill{})
+	err := runAddWizard(bytes.NewBufferString("x\nfoo\nclade\n"), &bytes.Buffer{}, path, addPrefill{})
 	if err == nil {
 		t.Fatal("unknown provider was accepted")
 	}
@@ -104,7 +104,7 @@ func TestAddWizardSettingsKeyword(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	path := filepath.Join(t.TempDir(), "config.toml")
 	dir := t.TempDir()
-	in := bytes.NewBufferString("claude\nfoo\n" + dir + "\nglm\n")
+	in := bytes.NewBufferString("foo\n" + dir + "\nclaude\nglm\n")
 	if err := runAddWizard(in, &bytes.Buffer{}, path, addPrefill{}); err != nil {
 		t.Fatalf("wizard: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestAddWizardExpandsTildeDir(t *testing.T) {
 	t.Cleanup(func() { os.Chdir(oldWd) })
 
 	path := filepath.Join(tmpHome, "config.toml")
-	in := bytes.NewBufferString("claude\nfoo\n~/.claude-foo\nglm\n")
+	in := bytes.NewBufferString("foo\n~/.claude-foo\nclaude\nglm\n")
 	if err := runAddWizard(in, &bytes.Buffer{}, path, addPrefill{}); err != nil {
 		t.Fatalf("wizard: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestAddWizardPrefillsFromFlags(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	path := filepath.Join(t.TempDir(), "config.toml")
 	dir := t.TempDir()
-	in := bytes.NewBufferString("claude\nwork\n") // dir and settings come from the flags
+	in := bytes.NewBufferString("work\n") // dir and settings come from the flags
 	if err := runAddWizard(in, &bytes.Buffer{}, path, addPrefill{Dir: dir, Settings: "glm", Quota: 7}); err != nil {
 		t.Fatalf("wizard: %v", err)
 	}
@@ -187,6 +187,104 @@ func TestAddWizardPrefillsFromFlags(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "glm.json")); err != nil {
 		t.Fatalf("skeleton not written: %v", err)
+	}
+}
+
+// assertLegacyAccount checks the outcome of the wizard's original two-line
+// input: a claude account at dir, its launcher installed, and every shared
+// asset linked into the new profile.
+func assertLegacyAccount(t *testing.T, home, path, name, dir string) {
+	t.Helper()
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Providers["claude"].Accounts[name].Dir; got != dir {
+		t.Fatalf("claude account %q dir = %q, want %q (providers: %+v)", name, got, dir, c.Providers)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", name)); err != nil {
+		t.Fatalf("launcher not synced: %v", err)
+	}
+	links := 0
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Type()&os.ModeSymlink != 0 {
+			links++
+		}
+	}
+	if want := len(provider.Presets["claude"].Shared); links != want {
+		t.Fatalf("linked %d shared assets, want %d", links, want)
+	}
+}
+
+// TestAddWizardLegacyTwoLinesOutcome: the wizard's original input — a name and a
+// config dir, and nothing else — still registers a claude account at that dir,
+// syncs its launcher and links the shared assets. A script that pipes those
+// two lines must not break when the provider question was added after them.
+func TestAddWizardLegacyTwoLinesOutcome(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	dir := filepath.Join(home, "legacy")
+	if err := runAddWizard(bytes.NewBufferString("demo\n"+dir+"\n"), &bytes.Buffer{}, path, addPrefill{}); err != nil {
+		t.Fatalf("wizard: %v", err)
+	}
+	assertLegacyAccount(t, home, path, "demo", dir)
+}
+
+// TestAddWizardLegacyEmptyDirDefaults: the old "name then empty dir" input takes
+// the claude default ~/.claude-<name> with the same outcome.
+func TestAddWizardLegacyEmptyDirDefaults(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	if err := runAddWizard(bytes.NewBufferString("demo\n\n"), &bytes.Buffer{}, path, addPrefill{}); err != nil {
+		t.Fatalf("wizard: %v", err)
+	}
+	assertLegacyAccount(t, home, path, "demo", filepath.Join(home, ".claude-demo"))
+}
+
+// TestAddWizardSettingsNoneMeansNone: "none" is the settings prompt's default,
+// so in any case it registers without settings instead of being refused as an
+// unknown endpoint keyword.
+func TestAddWizardSettingsNoneMeansNone(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	dir := filepath.Join(home, "none-acct")
+	if err := runAddWizard(bytes.NewBufferString("foo\n"+dir+"\nclaude\nNone\n"), &bytes.Buffer{}, path, addPrefill{}); err != nil {
+		t.Fatalf("wizard refused settings \"None\": %v", err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Providers["claude"].Accounts["foo"].Settings; got != "" {
+		t.Fatalf("settings = %q, want none", got)
+	}
+}
+
+// TestAddWizardCustomProviderLaunchLine: a provider registered in one step with
+// --env and --command is launched by the CLI it registered, so the closing line
+// names that CLI rather than the provider.
+func TestAddWizardCustomProviderLaunchLine(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	dir := filepath.Join(home, "mycli-acct")
+	pre := addPrefill{Dir: dir, Env: "MYCLI_HOME", Command: "mycli"}
+	var out bytes.Buffer
+	if err := runAddWizard(bytes.NewBufferString("work\nmyprov\n"), &out, path, pre); err != nil {
+		t.Fatalf("wizard: %v", err)
+	}
+	if !strings.Contains(out.String(), "Launch mycli as this profile:") {
+		t.Fatalf("closing line names the wrong CLI:\n%s", out.String())
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Providers["myprov"]; !ok {
+		t.Fatalf("custom provider not registered: %+v", c.Providers)
 	}
 }
 
@@ -314,7 +412,7 @@ func TestAddWizardMatchesFlagPath(t *testing.T) {
 	flagSnap := snapshotAdd(t, flagHome, path)
 
 	wizHome := hermeticHome(t)
-	in := bytes.NewBufferString("claude\nwork\n~/.claude-work\nglm\n")
+	in := bytes.NewBufferString("work\n~/.claude-work\nclaude\nglm\n")
 	if err := runAddWizard(in, &bytes.Buffer{}, filepath.Join(wizHome, "config.toml"), addPrefill{}); err != nil {
 		t.Fatalf("wizard: %v", err)
 	}

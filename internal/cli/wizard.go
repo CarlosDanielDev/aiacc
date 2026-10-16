@@ -22,43 +22,26 @@ type addPrefill struct {
 	Quota                       int
 }
 
-// runAddWizard walks the user through registering a new account: it asks which
-// provider the account belongs to (empty answer = claude), shows the currently
-// active claude login for context, then asks for a name and config dir, creates
-// the dir, and registers it — asking for a settings file or endpoint keyword
-// when the provider's CLI can load one. Answers may also arrive piped
-// (non-tty stdin), and every flag in pre is applied without re-asking. After
-// saving it keeps the launcher command and the shared assets in sync, exactly
-// like the flag path and the add screen. Logging in is left to the CLI itself —
-// aiacc never handles credentials. Answers are read from in, prompts written to
-// out (decoupled from os.Stdin/Stdout for testability).
+// runAddWizard walks the user through registering a new account. The questions
+// keep their historical order — name, then config dir — so a script that pipes
+// those two lines still works; the provider and the settings are asked after
+// them, and an empty answer (or the end of input) means claude and no settings.
+// The active claude login is shown for context first. Answers may also arrive
+// piped (non-tty stdin), and every flag in pre is applied without re-asking.
+// After saving it keeps the launcher command and the shared assets in sync,
+// exactly like the flag path and the add screen. Logging in is left to the CLI
+// itself — aiacc never handles credentials. Answers are read from in, prompts
+// written to out (decoupled from os.Stdin/Stdout for testability).
 func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) error {
 	r := bufio.NewReader(in)
 
-	providerName := strings.TrimSpace(ask(r, out, "Provider [claude]: "))
-	if providerName == "" {
-		providerName = "claude"
-	}
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return err
-	}
-	if _, ok := provider.Presets[providerName]; !ok {
-		if _, configured := cfg.Providers[providerName]; !configured {
-			return fmt.Errorf("unknown provider %q (valid: %s)",
-				providerName, strings.Join(validProviders(cfg), ", "))
-		}
-	}
-
-	if providerName == "claude" {
-		if cur := currentClaudeDir(); cur != "" {
-			if info := claude.Detect(cur); info.LoggedIn {
-				fmt.Fprintf(out, "Current Claude login: %s", info.Email)
-				if info.Organization != "" {
-					fmt.Fprintf(out, " (%s)", info.Organization)
-				}
-				fmt.Fprintln(out)
+	if cur := currentClaudeDir(); cur != "" {
+		if info := claude.Detect(cur); info.LoggedIn {
+			fmt.Fprintf(out, "Current Claude login: %s", info.Email)
+			if info.Organization != "" {
+				fmt.Fprintf(out, " (%s)", info.Organization)
 			}
+			fmt.Fprintln(out)
 		}
 	}
 
@@ -67,16 +50,40 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 		return fmt.Errorf("account name is required")
 	}
 
+	home, _ := os.UserHomeDir()
 	dir := pre.Dir
 	if dir == "" {
-		home, _ := os.UserHomeDir()
 		defaultDir := filepath.Join(home, ".claude-"+name)
-		dir = strings.TrimSpace(ask(r, out, fmt.Sprintf("Config dir [%s]: ", defaultDir)))
-		if dir == "" {
-			dir = defaultDir
-		}
+		dir = strings.TrimSpace(ask(r, out, fmt.Sprintf(
+			"Config dir [%s] (another provider: ~/.<provider>-%s): ", defaultDir, name)))
 	} else {
 		fmt.Fprintf(out, "Config dir: %s (from --dir)\n", dir)
+	}
+	// The default depends on the provider, which is only known after this
+	// question: an empty answer takes ~/.claude-<name> for claude and
+	// ~/.<provider>-<name> for any other provider.
+	defaulted := dir == ""
+
+	providerName := strings.TrimSpace(ask(r, out, "Provider [claude]: "))
+	if providerName == "" {
+		providerName = "claude"
+	}
+	if defaulted {
+		dir = filepath.Join(home, "."+providerName+"-"+name) // ~/.claude-<name> for claude
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	if _, ok := provider.Presets[providerName]; !ok {
+		// A custom provider can be registered in one step when its env var and
+		// command are given, exactly as the flag path allows.
+		_, configured := cfg.Providers[providerName]
+		if !configured && (pre.Env == "" || pre.Command == "") {
+			return fmt.Errorf("unknown provider %q (valid: %s)",
+				providerName, strings.Join(validProviders(cfg), ", "))
+		}
 	}
 
 	settings := pre.Settings
@@ -85,6 +92,9 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 		fmt.Fprintf(out, "Settings: %s (from --settings)\n", settings)
 	case provider.Presets[providerName].SettingsFlag != "":
 		settings = strings.TrimSpace(ask(r, out, "Settings file or endpoint keyword [none]: "))
+		if strings.EqualFold(settings, "none") {
+			settings = "" // "none" is the prompt's default, so it means no settings
+		}
 	}
 
 	// The dir is created expanded — a literal ~ must not grow a "./~" tree in
@@ -110,6 +120,12 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, pre addPrefill) e
 	syncLauncher(cfgPath, providerName, name) // keep the command in sync (best-effort)
 	linkProfile(providerName, realDir)        // same skills/agents as the bare CLI
 
+	// Read the command after the save: saving may have registered a custom
+	// provider (--env/--command), which the config loaded above does not know.
+	cfg, err = config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
 	command, _ := provider.Command(cfg, providerName)
 	if command == "" {
 		command = providerName

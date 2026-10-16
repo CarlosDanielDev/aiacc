@@ -350,7 +350,7 @@ func TestAddFlagsWithNoArgsPrefillWizard(t *testing.T) {
 	t.Cleanup(func() { stdinIsTerminal = oldTerm })
 
 	add := newAddCmd()
-	add.SetIn(bytes.NewBufferString("claude\nwork\n")) // dir and settings come from the flags
+	add.SetIn(bytes.NewBufferString("work\n")) // dir and settings come from the flags
 	add.SetArgs([]string{"--dir", dir, "--settings", "glm", "--quota", "7"})
 	if err := add.Execute(); err != nil {
 		t.Fatalf("add: %v", err)
