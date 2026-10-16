@@ -15,7 +15,7 @@ function that `eval`s the binary's export output. There is no `use` subcommand n
 [0002](0002-generic-provider-driver.md) modelled a provider as
 `{name, env_var, config_dir}` with "no provider special-cased in code". Claude is
 now special-cased: handoff is gated to claude (`internal/cli/handoff.go:226`), and
-presets carry claude-only fields (`internal/provider/provider.go:19-38`).
+presets carry per-provider capability fields (`internal/provider/provider.go:19-38`).
 
 ## Decision
 
@@ -38,7 +38,8 @@ Changed:
 2. **Opt-in alternative: `aiacc shell-init <shell>`.** It prints static per-account
    shell functions (`internal/cli/shellinit.go:35-72`, built on `shell.Launcher`,
    `internal/shell/shell.go:48-71`) that the user evals or sources. There is no
-   `aiacc` wrapper, and the binary's output is never eval'd.
+   `aiacc` wrapper function; what the user evals or sources is the printed function
+   definitions, not output the binary computes per command.
 3. **Presets carry per-provider capabilities:** `SettingsFlag`, `Endpoints`,
    `Installs`, `Shared`, `State` (`internal/provider/provider.go:19-38`). Built-in
    presets are Go map entries (`provider.go:54-97`); custom providers are config

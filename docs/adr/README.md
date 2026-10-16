@@ -17,11 +17,11 @@ instead, a later record **supersedes** it and both link each other. Status value
 
 ## Index
 
-- [0001](0001-language-go.md) — Implementation language: Go (Accepted)
-- [0002](0002-generic-provider-driver.md) — Generic env-var provider driver (Superseded by [0008](0008-launchers-replace-eval-hook.md))
-- [0003](0003-shell-eval-switching.md) — Shell switching via eval hook (Superseded by [0008](0008-launchers-replace-eval-hook.md))
-- [0004](0004-plan-quota-best-effort.md) — Plan/rate-limit reporting is best-effort (Accepted)
-- [0005](0005-doctor-diagnoses-never-repairs.md) — Launchers resolve by name; `doctor` diagnoses, never repairs (Accepted)
-- [0006](0006-account-settings-path-not-secret.md) — An account can carry a settings file; aiacc stores its path, never its contents (Accepted)
-- [0007](0007-generate-never-read.md) — aiacc may generate a settings skeleton it never reads (Accepted)
-- [0008](0008-launchers-replace-eval-hook.md) — Launcher executables are the default switching mechanism; presets carry provider capabilities (Accepted)
+- [0001](0001-language-go.md) — Implementation language: Go
+- [0002](0002-generic-provider-driver.md) — Generic env-var provider driver (Superseded by 0008)
+- [0003](0003-shell-eval-switching.md) — Shell switching via eval hook (Superseded by 0008)
+- [0004](0004-plan-quota-best-effort.md) — Plan/rate-limit reporting is best-effort
+- [0005](0005-doctor-diagnoses-never-repairs.md) — Launchers resolve by name; `doctor` diagnoses, never repairs
+- [0006](0006-account-settings-path-not-secret.md) — An account can carry a settings file; aiacc stores its path, never its contents
+- [0007](0007-generate-never-read.md) — aiacc may generate a settings skeleton it never reads
+- [0008](0008-launchers-replace-eval-hook.md) — Launchers are the default switching mechanism; presets carry provider capabilities
