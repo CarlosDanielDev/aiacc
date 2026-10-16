@@ -2,6 +2,8 @@
 
 Status: Accepted
 
+Amended by [0008](0008-launchers-replace-eval-hook.md): presets now carry per-provider capabilities, so "no provider is special-cased" holds only for env-var switching.
+
 ## Context
 
 Different AI CLIs select their config directory through different environment

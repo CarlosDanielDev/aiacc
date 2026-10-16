@@ -1,6 +1,8 @@
 # 0003 — Shell switching via eval hook
 
-Status: Accepted
+Status: Superseded by 0008
+
+Superseded by [0008](0008-launchers-replace-eval-hook.md): launcher executables replace the eval hook.
 
 ## Context
 

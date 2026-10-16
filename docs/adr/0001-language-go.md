@@ -2,6 +2,8 @@
 
 Status: Accepted
 
+Amended by [0008](0008-launchers-replace-eval-hook.md): the TUI is hand-rolled ANSI, not bubbletea. The language decision stands.
+
 ## Context
 
 aiacc is a CLI that reads config, parses local JSONL session logs, emits shell
