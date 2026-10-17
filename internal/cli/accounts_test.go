@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
+	"github.com/CarlosDanielDev/aiacc/internal/usage"
+	"github.com/spf13/cobra"
 )
 
 func withTempConfig(t *testing.T) string {
@@ -541,5 +545,163 @@ func TestCheckNameOnDiskSeesRegistrationAfterSnapshot(t *testing.T) {
 	}
 	if err := checkNameOnDisk(path, "codex", "work"); err == nil {
 		t.Fatal("checkNameOnDisk accepted a name registered on disk")
+	}
+}
+
+// runList executes list with args and returns its stdout.
+func runList(t *testing.T, args ...string) string {
+	t.Helper()
+	cmd := newListCmd()
+	cmd.SetArgs(append([]string{}, args...))
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("list %v: %v", args, err)
+	}
+	return out.String()
+}
+
+// seedClaudeLogs writes two assistant turns (input 30, output 12) under dir.
+func seedClaudeLogs(t *testing.T, dir string) {
+	t.Helper()
+	logDir := filepath.Join(dir, "projects", "x")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	lines := `{"message":{"usage":{"input_tokens":10,"output_tokens":5}}}
+{"message":{"usage":{"input_tokens":20,"output_tokens":7}}}
+`
+	if err := os.WriteFile(filepath.Join(logDir, "s.jsonl"), []byte(lines), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+}
+
+// TestListUsageFlagShowsUsageTotals: `list --usage` adds the same totals and
+// USED/QUOTA cells `usage` prints for the account.
+func TestListUsageFlagShowsUsageTotals(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	seedClaudeLogs(t, dir)
+	seedConfig(t, path, dir, 100)
+
+	header, row := splitRows(t, runList(t, "--usage"), "claude", "work")
+	if want := []string{"INPUT", "OUTPUT", "TOTAL", "USED/QUOTA"}; !slices.Equal(header[len(header)-4:], want) {
+		t.Fatalf("list --usage header = %v, want suffix %v", header, want)
+	}
+	if want := []string{"30", "12", "42", "42/100"}; !slices.Equal(row[len(row)-4:], want) {
+		t.Fatalf("list --usage cells = %v, want suffix %v", row, want)
+	}
+}
+
+// TestListStatusFlagMarksActiveAccount: `list --status` adds the ACTIVE marker
+// and LAST-USED that `status` prints for the account.
+func TestListStatusFlagMarksActiveAccount(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	seedConfig(t, path, dir, 0)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	header, row := splitRows(t, runList(t, "--status"), "claude", "work")
+	if want := []string{"ACTIVE", "LAST-USED"}; !slices.Equal(header[len(header)-2:], want) {
+		t.Fatalf("list --status header = %v, want suffix %v", header, want)
+	}
+	if want := "*"; !slices.Contains(row, want) {
+		t.Fatalf("list --status did not mark the active account: %v", row)
+	}
+}
+
+// TestListDefaultSkipsUsageWalk: the session-log walk is opt-in. A plain
+// `list` must not call usage.Aggregate, and its header stays LOGIN/DIR only.
+func TestListDefaultSkipsUsageWalk(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	seedClaudeLogs(t, dir)
+	seedConfig(t, path, dir, 100)
+
+	calls := 0
+	old := aggregateUsage
+	aggregateUsage = func(d string) (usage.Totals, error) { calls++; return old(d) }
+	t.Cleanup(func() { aggregateUsage = old })
+
+	out := runList(t)
+	if calls != 0 {
+		t.Fatalf("default list walked session logs %d times", calls)
+	}
+	if got := strings.Fields(strings.SplitN(out, "\n", 2)[0]); !slices.Equal(got, []string{"PROVIDER", "ACCOUNT", "LOGIN", "DIR"}) {
+		t.Fatalf("default list header = %v", got)
+	}
+}
+
+// TestStatusAndUsageAliasesKeepOutput pins the hidden aliases' stdout to the
+// bytes the commands printed before they shared list's code. LAST-USED is
+// fixed by setting the dir's mtime.
+func TestStatusAndUsageAliasesKeepOutput(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	seedClaudeLogs(t, dir)
+	seedConfig(t, path, dir, 100)
+	mtime := time.Date(2026, 1, 2, 3, 4, 0, 0, time.Local)
+	if err := os.Chtimes(dir, mtime, mtime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	run := func(cmd *cobra.Command, args ...string) string {
+		t.Helper()
+		cmd.SetArgs(append([]string{}, args...))
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%s %v: %v", cmd.Name(), args, err)
+		}
+		return out.String()
+	}
+	const wantStatus = "PROVIDER  ACCOUNT  ACTIVE  LAST-USED\n" +
+		"claude    work     *       2026-01-02 03:04\n"
+	const wantUsage = "PROVIDER  ACCOUNT  INPUT  OUTPUT  TOTAL  USED/QUOTA\n" +
+		"claude    work     30     12      42     42/100\n"
+	if got := run(newStatusCmd()); got != wantStatus {
+		t.Fatalf("status output changed:\n%q\nwant\n%q", got, wantStatus)
+	}
+	if got := run(newUsageCmd()); got != wantUsage {
+		t.Fatalf("usage output changed:\n%q\nwant\n%q", got, wantUsage)
+	}
+	if got := run(newUsageCmd(), "claude"); got != wantUsage {
+		t.Fatalf("usage claude output changed:\n%q\nwant\n%q", got, wantUsage)
+	}
+	const wantEmpty = "PROVIDER  ACCOUNT  INPUT  OUTPUT  TOTAL  USED/QUOTA\n"
+	if got := run(newUsageCmd(), "codex"); got != wantEmpty {
+		t.Fatalf("usage codex (no rows) output changed:\n%q\nwant\n%q", got, wantEmpty)
+	}
+}
+
+// splitRows returns the header fields and the fields of the row for provider
+// account from a tabwriter table.
+func splitRows(t *testing.T, out, provider, account string) (header, row []string) {
+	t.Helper()
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	header = strings.Fields(lines[0])
+	for _, l := range lines[1:] {
+		if f := strings.Fields(l); len(f) > 1 && f[0] == provider && f[1] == account {
+			return header, f
+		}
+	}
+	t.Fatalf("no row for %s %s in %q", provider, account, out)
+	return nil, nil
+}
+
+// TestListKeepsUnresolvableRowUnlessColumnsNeedDir: with HOME unset a "~/" dir
+// cannot be resolved. The plain list keeps the row, as before; a column that
+// needs the resolved dir (--status, which the status alias also uses) drops it.
+func TestListKeepsUnresolvableRowUnlessColumnsNeedDir(t *testing.T) {
+	path := withTempConfig(t)
+	seedConfig(t, path, "~/aiacc-109-unresolvable", 0)
+	t.Setenv("HOME", "")
+
+	if plain := runList(t); !strings.Contains(plain, "aiacc-109-unresolvable") {
+		t.Fatalf("plain list dropped the unresolvable row: %q", plain)
+	}
+	if withStatus := runList(t, "--status"); strings.Contains(withStatus, "work") {
+		t.Fatalf("list --status kept a row it cannot resolve: %q", withStatus)
 	}
 }
