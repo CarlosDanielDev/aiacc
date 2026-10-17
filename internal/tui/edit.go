@@ -2,7 +2,6 @@ package tui
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -75,12 +74,7 @@ func RenderEdit(account, file, hint string, f EditForm, sz Size) string {
 		boxBlank(w),
 	)
 
-	if hint != "" {
-		lines = append(lines, boxRow([]seg{pad(2), {"⚠ " + trunc(hint, w-4), inkRed}}, w))
-	} else {
-		lines = append(lines, boxBlank(w))
-	}
-	lines = append(lines, boxBottom(w))
+	lines = append(lines, hintRow(hint, w), boxBottom(w))
 	legend := legendLine([][2]string{{"", "edit settings"}, {"⇥", "field"}, {"⏎", "save"}, {"esc", "cancel"}})
 	return frame(lines, legend, sz, w)
 }
@@ -92,54 +86,48 @@ func RenderEdit(account, file, hint string, f EditForm, sz Size) string {
 func driveEdit(path, account string, f EditForm, g *geom, in io.Reader, out io.Writer) (bool, error) {
 	file := filepath.Base(path)
 	hint := ""
-	r := bufio.NewReader(in)
-	for {
-		fmt.Fprint(out, repaint(g)+RenderEdit(account, file, hint, f, g.get()))
-		b, err := r.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				return false, nil
+	saved := false
+	err := screenLoop(g, in, out, (*bufio.Reader).ReadByte,
+		func(sz Size) string { return RenderEdit(account, file, hint, f, sz) },
+		func(b byte) bool {
+			focused := []*string{&f.Token, &f.BaseURL, &f.Model}[f.Field]
+			switch b {
+			case 0x1b, 3: // Esc / Ctrl-C
+				return true
+			case '\t':
+				f.Field, hint = (f.Field+1)%editFields, ""
+			case '\r', '\n':
+				// An empty field keeps what the file has, so the save can't clear a key.
+				err := provider.EditSettings(path, provider.SettingsEdit{
+					Token:   f.Token,
+					BaseURL: f.BaseURL,
+					Model:   f.Model,
+				})
+				if err != nil {
+					hint = err.Error() + " — nothing written"
+					return false
+				}
+				saved = true
+				return true
+			case 0x7f, 0x08: // Backspace / Delete
+				*focused, hint = trimLastByte(*focused), ""
+			default:
+				if printableByte(b) {
+					*focused += string(b)
+				}
+				hint = ""
 			}
-			return false, err
-		}
-		focused := []*string{&f.Token, &f.BaseURL, &f.Model}[f.Field]
-		switch b {
-		case 0x1b, 3: // Esc / Ctrl-C
-			return false, nil
-		case '\t':
-			f.Field, hint = (f.Field+1)%editFields, ""
-		case '\r', '\n':
-			// An empty field keeps what the file has, so the save can't clear a key.
-			err := provider.EditSettings(path, provider.SettingsEdit{
-				Token:   f.Token,
-				BaseURL: f.BaseURL,
-				Model:   f.Model,
-			})
-			if err != nil {
-				hint = err.Error() + " — nothing written"
-				continue
-			}
-			return true, nil
-		case 0x7f, 0x08: // Backspace / Delete
-			*focused, hint = trimLastByte(*focused), ""
-		default:
-			if printableByte(b) {
-				*focused += string(b)
-			}
-			hint = ""
-		}
-	}
+			return false
+		})
+	return saved, err
 }
 
 // RunEdit shows the edit-account screen on /dev/tty for the settings file at
 // path. It reports whether the file was saved.
 func RunEdit(account, path string, f EditForm) (bool, error) {
-	tty, g, restore, err := openRawTTY()
-	if err != nil {
-		return false, err
-	}
-	defer restore()
-	return driveEdit(path, account, f, g, tty, tty)
+	return onTTY(false, func(tty *os.File, g *geom) (bool, error) {
+		return driveEdit(path, account, f, g, tty, tty)
+	})
 }
 
 // exitOnSignal waits for the first shutdown signal, restores the terminal,
