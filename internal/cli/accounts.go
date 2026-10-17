@@ -71,6 +71,14 @@ func newAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Every settings refusal is decided before the dir is created, so a
+			// refused add leaves nothing on disk.
+			if _, _, err := settingsEndpoint(providerName, settings); err != nil {
+				return err
+			}
+			if err := settingsFlagRefusal(providerName, settings); err != nil {
+				return err
+			}
 			if err := os.MkdirAll(realDir, 0o755); err != nil {
 				return err
 			}
@@ -130,7 +138,12 @@ func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, erro
 		return provider.Endpoint{}, false, settingsRefusal{value: kr.Value, keywords: kr.Keywords, cause: err}
 	}
 	if !keyword {
-		return provider.Endpoint{}, false, nil // not a keyword — today's path behavior, unchanged
+		// Today's path behavior, unchanged, except a directory is refused here,
+		// before any caller creates the account dir.
+		if err := provider.RefuseSettingsDir(value); err != nil {
+			return provider.Endpoint{}, false, err
+		}
+		return provider.Endpoint{}, false, nil
 	}
 	if ep.BaseURL == "" {
 		return provider.Endpoint{}, false, fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
@@ -158,10 +171,7 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		return "", err
 	}
 	if !keyword {
-		if err := provider.RefuseSettingsDir(value); err != nil {
-			return "", err
-		}
-		return value, nil
+		return value, nil // settingsEndpoint has already refused a directory
 	}
 	// The screen and the CLI register through the same sequence, so the
 	// skeleton lands in the real profile while the registered path keeps the
