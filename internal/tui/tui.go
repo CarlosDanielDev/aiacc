@@ -874,7 +874,11 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		return "", err // names the typo and the valid keywords
 	}
 	if !keyword {
-		return value, nil // not a keyword — today's path behavior, unchanged
+		// Today's path behavior, unchanged, except a directory is refused.
+		if err := provider.RefuseSettingsDir(value); err != nil {
+			return "", err
+		}
+		return value, nil
 	}
 	path, err := provider.EnsureSkeleton(dir, ep)
 	if err != nil {

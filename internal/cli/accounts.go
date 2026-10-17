@@ -158,6 +158,9 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		return "", err
 	}
 	if !keyword {
+		if err := provider.RefuseSettingsDir(value); err != nil {
+			return "", err
+		}
 		return value, nil
 	}
 	// The screen and the CLI register through the same sequence, so the
