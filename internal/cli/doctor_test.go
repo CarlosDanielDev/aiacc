@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -327,5 +329,75 @@ func TestCheckLaunchersReportsProviderWithoutEnvOnce(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(hits[0].detail, "\n"), "aiacc add custom <account>") {
 		t.Fatalf("finding does not name the fix command: %v", hits[0].detail)
+	}
+}
+
+// doctor is a CI gate: a broken config must surface as errUnhealthy (non-zero
+// exit), and a clean one must not. Tally alone is not enough; the RunE wiring
+// is what turns a finding into an exit code.
+func TestDoctorExitCodeTracksBrokenFindings(t *testing.T) {
+	path := withTempConfig(t)
+	broken := &config.Config{Providers: map[string]config.Provider{"claude": {
+		EnvVar:  "CLAUDE_CONFIG_DIR",
+		Command: "sh",
+		Accounts: map[string]config.Account{"work": {
+			Dir:      t.TempDir(),
+			Settings: filepath.Join(t.TempDir(), "missing.json"),
+		}},
+	}}}
+	if err := config.Save(path, broken); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newDoctorCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); !errors.Is(err, errUnhealthy) {
+		t.Fatalf("broken config: doctor returned %v, want errUnhealthy", err)
+	}
+
+	if err := config.Save(path, &config.Config{Providers: map[string]config.Provider{}}); err != nil {
+		t.Fatal(err)
+	}
+	cmd = newDoctorCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("clean config: doctor returned %v, want nil", err)
+	}
+}
+
+// A launcher-shaped file aiacc wrote for a removed account is an orphan. A
+// user's own script in the same dir, a registered launcher, and an oversized
+// file carrying the mark are not: doctor must never blame them.
+func TestOrphanLaunchersFlagsOnlyAiaccLeftovers(t *testing.T) {
+	binDir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("old", shell.LauncherMark+"\nexec claude\n")
+	write("mine", "#!/bin/sh\necho my own script\n")
+	write("kept", shell.LauncherMark+"\nexec claude\n")
+	write("huge", shell.LauncherMark+strings.Repeat("x", maxLauncherSize))
+
+	f := orphanLaunchers(binDir, map[string]bool{"kept": true})
+	if len(f) != 1 {
+		t.Fatalf("want one finding, got %+v", f)
+	}
+	if f[0].sev != sevWarn || f[0].text != "1 launcher(s) for accounts aiacc no longer has" {
+		t.Fatalf("finding = %+v", f[0])
+	}
+	detail := strings.Join(f[0].detail, "\n")
+	if !strings.Contains(detail, "  old") {
+		t.Errorf("the aiacc leftover must be named: %q", detail)
+	}
+	for _, name := range []string{"mine", "kept", "huge"} {
+		if strings.Contains(detail, name) {
+			t.Errorf("doctor blamed %q: %q", name, detail)
+		}
 	}
 }
