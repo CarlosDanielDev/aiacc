@@ -385,6 +385,12 @@ command — `--launch` runs it for you, or `ctrl-c` on the result screen copies 
 never touched, and each account's usage stays separate.** It defaults to the most
 recent session; `--session <id>` picks a specific one.
 
+A hand-off copies the main session transcript only, not the `subagents/` run files.
+A subagent that had already finished has its final report in that transcript. A
+subagent still running or paused when you hand off does not resume in the new
+account, and you should not expect a notification from it after `--resume`; re-run
+it there if you still need its result.
+
 ## 🔌 Providers — any AI CLI
 
 A provider is `{env_var, command}` plus its accounts: aiacc isolates each account
@@ -502,6 +508,19 @@ with one; any other CLI gets one when you give it `--command`. Re-running
 `aiacc add <provider> <account> --dir <path> --env <ENV_VAR> --command <cli>` sets
 it, and the profile is then launchable. Until then it stays registered, and
 `aiacc` shows why it is blocked.
+
+</details>
+
+<details>
+<summary>A background subagent never finished after a hand-off</summary>
+
+<br>
+
+A hand-off copies the main session transcript only. A subagent that had already
+finished has its final report there. A subagent that was still running or paused
+when you handed off does not resume in the new account, and you should not expect a
+notification from it after `--resume`. Re-run it in the new account if you still
+need its result.
 
 </details>
 
