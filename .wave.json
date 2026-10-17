@@ -1,0 +1,11 @@
+{
+  "gate": [
+    "go vet ./...",
+    "go test ./...",
+    "go build ./..."
+  ],
+  "base": "main",
+  "serial": [
+    "go.mod"
+  ]
+}
