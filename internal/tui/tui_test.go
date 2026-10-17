@@ -982,3 +982,137 @@ func TestAddSettingsRefusesDirectory(t *testing.T) {
 		t.Errorf("screen does not name the refusal:\n%s", out)
 	}
 }
+
+// checkBody is a toggling message body: its resume line carries the flag only
+// when the box is checked, which is what the hand-off done screen does.
+func checkBody(checked bool) []Line {
+	cmd := "work --resume abc123"
+	if checked {
+		cmd = "work --dangerously-skip-permissions --resume abc123"
+	}
+	return []Line{{Text: "✓ Copied to work", Color: Green}, {}, {Text: cmd, Color: Blue}}
+}
+
+var testBox = Checkbox{Label: "bypass permissions (--dangerously-skip-permissions)", Warning: "the agent will run tools without asking"}
+
+// runCheck drives a checkbox message with keys, returning the final frame, the
+// text handed to the clipboard (or "" if none) and any error.
+func runCheck(t *testing.T, keys string) (frame, copied string) {
+	t.Helper()
+	out := &bytes.Buffer{}
+	err := driveMessage("hand off · done", checkBody, &testBox, fixedGeom(80, 24),
+		bytes.NewBufferString(keys), out, func(s string) bool { copied = s; return true })
+	if err != nil {
+		t.Fatalf("driveMessage: %v", err)
+	}
+	return lastFrame(out.String()), copied
+}
+
+// TestCheckboxDefaultsOff: the box opens unchecked and the resume line is the
+// plain one, without the flag.
+func TestCheckboxDefaultsOff(t *testing.T) {
+	frame, _ := runCheck(t, "q")
+	if !strings.Contains(frame, "[ ] bypass permissions (--dangerously-skip-permissions)") {
+		t.Fatalf("unchecked box missing:\n%s", frame)
+	}
+	if strings.Contains(frame, "--dangerously-skip-permissions --resume") || strings.Contains(frame, "will run tools") {
+		t.Fatalf("flag or warning shown while unchecked:\n%s", frame)
+	}
+}
+
+// TestCheckboxSpaceAndBToggle: space and b both flip the box, and the frame
+// then shows the flag in the resume line and the warning under the box.
+func TestCheckboxSpaceAndBToggle(t *testing.T) {
+	on, _ := runCheck(t, " q")
+	if !strings.Contains(on, "[x] bypass permissions") || !strings.Contains(on, "work --dangerously-skip-permissions --resume abc123") {
+		t.Fatalf("space did not check the box:\n%s", on)
+	}
+	if !strings.Contains(on, "the agent will run tools without asking") {
+		t.Fatalf("no warning line when checked:\n%s", on)
+	}
+	if b, _ := runCheck(t, "bq"); !strings.Contains(b, "[x] bypass permissions") {
+		t.Fatalf("b did not check the box:\n%s", b)
+	}
+	off, _ := runCheck(t, " bq")
+	if !strings.Contains(off, "[ ] bypass permissions") || strings.Contains(off, "--dangerously-skip-permissions --resume") {
+		t.Fatalf("second toggle did not uncheck:\n%s", off)
+	}
+}
+
+// TestCheckboxCopyMatchesShown: ^C copies exactly the command lines the frame
+// shows, so the flag is in the clipboard iff it is on the screen.
+func TestCheckboxCopyMatchesShown(t *testing.T) {
+	frame, copied := runCheck(t, " \x03q")
+	want := "work --dangerously-skip-permissions --resume abc123"
+	if copied != want {
+		t.Fatalf("copied %q, want %q", copied, want)
+	}
+	if !strings.Contains(frame, want) {
+		t.Fatalf("copied line is not the one shown:\n%s", frame)
+	}
+	_, plain := runCheck(t, "\x03q")
+	if plain != "work --resume abc123" {
+		t.Fatalf("unchecked copy = %q", plain)
+	}
+}
+
+// TestCheckboxLegendShowsKey: the legend names the toggle and says ^C copies.
+func TestCheckboxLegendShowsKey(t *testing.T) {
+	frame, _ := runCheck(t, "q")
+	if !strings.Contains(frame, "space/b") || !strings.Contains(frame, "bypass") {
+		t.Fatalf("legend does not show the toggle key:\n%s", frame)
+	}
+}
+
+// TestPlainMessageIgnoresToggleKeys: a message without a box is unchanged by
+// space and b, and draws no checkbox.
+func TestPlainMessageIgnoresToggleKeys(t *testing.T) {
+	out := &bytes.Buffer{}
+	body := []Line{{Text: "work --resume x", Color: Blue}}
+	err := driveMessage("hand off · done", func(bool) []Line { return body }, nil, fixedGeom(80, 24),
+		bytes.NewBufferString(" b q"), out, func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("driveMessage: %v", err)
+	}
+	frame := lastFrame(out.String())
+	if strings.Contains(frame, "[ ]") || strings.Contains(frame, "space/b") {
+		t.Fatalf("plain message grew a checkbox:\n%s", frame)
+	}
+}
+
+// TestCheckboxFramesFitTerminal: the checkbox, with and without its warning,
+// fits every size the other frames are held to.
+func TestCheckboxFramesFitTerminal(t *testing.T) {
+	for _, sz := range []Size{{20, 10}, {24, 12}, {40, 14}, {60, 8}, {80, 24}, {200, 60}} {
+		for _, checked := range []bool{false, true} {
+			out := renderCheckMessage("hand off · done", checkBody(checked), Line{}, &testBox, checked, sz)
+			if used := strings.Count(out, "\r\n"); used >= sz.Rows {
+				t.Errorf("checked=%t %dx%d: %d rows emitted into a %d-row terminal", checked, sz.Cols, sz.Rows, used, sz.Rows)
+			}
+			for _, ln := range strings.Split(out, "\r\n") {
+				if n := visibleLen(ln); n > sz.Cols {
+					t.Errorf("checked=%t %dx%d: line is %d wide:\n%q", checked, sz.Cols, sz.Rows, n, ln)
+					break
+				}
+			}
+		}
+	}
+}
+
+// TestPlainMessageStateNeverChanges: with no checkbox, space leaves the body in
+// its initial state even when the body reads the checked flag.
+func TestPlainMessageStateNeverChanges(t *testing.T) {
+	out := &bytes.Buffer{}
+	body := func(checked bool) []Line {
+		if checked {
+			return []Line{{Text: "CHECKED-STATE", Color: Blue}}
+		}
+		return []Line{{Text: "initial-state", Color: Blue}}
+	}
+	if err := driveMessage("t", body, nil, fixedGeom(80, 24), bytes.NewBufferString(" q"), out, func(string) bool { return true }); err != nil {
+		t.Fatalf("driveMessage: %v", err)
+	}
+	if strings.Contains(out.String(), "CHECKED-STATE") {
+		t.Fatalf("space changed the state of a plain message:\n%s", out.String())
+	}
+}

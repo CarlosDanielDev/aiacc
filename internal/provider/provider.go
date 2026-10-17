@@ -28,6 +28,11 @@ type Preset struct {
 	// the shared ones ("" = the CLI has none, so accounts cannot carry one).
 	SettingsFlag string
 
+	// BypassFlag is the CLI flag that turns off its permission prompts ("" =
+	// no known flag). aiacc never adds it to a launch: it only shows it, on an
+	// explicit user toggle, in the resume line a hand-off copies.
+	BypassFlag string
+
 	// Endpoints are the known remote API endpoints an account's settings file
 	// can point at, looked up through Endpoint. Only a provider with a
 	// settings flag carries any: a skeleton no CLI can load is meaningless.
@@ -68,6 +73,7 @@ var Presets = map[string]Preset{
 			"settings.json",
 		},
 		SettingsFlag: "--settings",
+		BypassFlag:   "--dangerously-skip-permissions",
 		Endpoints: map[string]Endpoint{
 			"glm": {
 				BaseURL:               "https://api.z.ai/api/anthropic",
@@ -89,11 +95,12 @@ var Presets = map[string]Preset{
 		},
 	},
 	"codex": {
-		EnvVar:  "CODEX_HOME",
-		Command: "codex",
-		BaseDir: "~/.codex",
-		Shared:  []string{"AGENTS.md", "prompts"},
-		State:   []string{"cache", "log", "sessions"},
+		EnvVar:     "CODEX_HOME",
+		Command:    "codex",
+		BaseDir:    "~/.codex",
+		Shared:     []string{"AGENTS.md", "prompts"},
+		State:      []string{"cache", "log", "sessions"},
+		BypassFlag: "--dangerously-bypass-approvals-and-sandbox",
 	},
 }
 

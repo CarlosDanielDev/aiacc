@@ -605,3 +605,94 @@ func TestSaveAccountSettings(t *testing.T) {
 		t.Fatal("want an error for --settings on a provider without a settings flag")
 	}
 }
+
+// captureHandoffDone swaps showHandoffDone for a recorder and restores it on
+// cleanup: the captured box and body are what the checkbox screen would show.
+func captureHandoffDone(t *testing.T) (*tui.Checkbox, *func(bool) []tui.Line) {
+	t.Helper()
+	var box tui.Checkbox
+	var body func(bool) []tui.Line
+	old := showHandoffDone
+	showHandoffDone = func(_ string, b tui.Checkbox, fn func(bool) []tui.Line) error {
+		box, body = b, fn
+		return nil
+	}
+	t.Cleanup(func() { showHandoffDone = old })
+	return &box, &body
+}
+
+// resumeLines returns the blue command lines of a done-screen body, which are
+// exactly what ^C copies.
+func resumeLines(lines []tui.Line) []string {
+	var out []string
+	for _, l := range lines {
+		if l.Color == tui.Blue {
+			out = append(out, l.Text)
+		}
+	}
+	return out
+}
+
+// TestHandoffDoneLinesFlagPlacement: the flag sits after the launcher name, ahead
+// of --resume, and an empty flag leaves the line exactly as handoffDoneLines has
+// always printed it.
+func TestHandoffDoneLinesFlagPlacement(t *testing.T) {
+	meta := session.Meta{Cwd: "/Users/x/proj"}
+	const flag = "--dangerously-skip-permissions"
+	on := resumeLines(handoffDoneLinesFlag("personal", meta, "abc123", flag))
+	if want := "personal " + flag + " --resume abc123"; on[len(on)-1] != want {
+		t.Fatalf("checked resume line = %q, want %q", on[len(on)-1], want)
+	}
+	off := resumeLines(handoffDoneLinesFlag("personal", meta, "abc123", ""))
+	if want := "personal --resume abc123"; off[len(off)-1] != want {
+		t.Fatalf("unchecked resume line = %q, want %q", off[len(off)-1], want)
+	}
+	if !slices.Equal(off, resumeLines(handoffDoneLines("personal", meta, "abc123"))) {
+		t.Fatalf("unchecked lines differ from handoffDoneLines")
+	}
+}
+
+// TestHandoffDoneNoCheckboxWithoutBypassFlag: a target whose preset has no
+// bypass flag gets the plain screen, with no checkbox to offer.
+func TestHandoffDoneNoCheckboxWithoutBypassFlag(t *testing.T) {
+	lines := captureHandoffMessage(t)
+	old := showHandoffDone
+	showHandoffDone = func(string, tui.Checkbox, func(bool) []tui.Line) error {
+		t.Fatal("checkbox screen shown for a target with no bypass flag")
+		return nil
+	}
+	t.Cleanup(func() { showHandoffDone = old })
+	if err := showDone("", "personal", session.Meta{Cwd: "/x"}, "abc123"); err != nil {
+		t.Fatalf("showDone: %v", err)
+	}
+	if !slices.Equal(*lines, handoffDoneLines("personal", session.Meta{Cwd: "/x"}, "abc123")) {
+		t.Fatalf("plain screen changed:\n%v", *lines)
+	}
+}
+
+// TestHandoffDoneCheckboxCarriesFlagOnlyWhenChecked: with a bypass flag the done
+// screen offers the checkbox, default off, and the body it paints (and ^C copies)
+// carries the flag iff the box is checked. The warning is the checkbox's own.
+func TestHandoffDoneCheckboxCarriesFlagOnlyWhenChecked(t *testing.T) {
+	box, body := captureHandoffDone(t)
+	const flag = "--dangerously-skip-permissions"
+	meta := session.Meta{Cwd: "/Users/x/proj"}
+	if err := showDone(flag, "personal", meta, "abc123"); err != nil {
+		t.Fatalf("showDone: %v", err)
+	}
+	if box.Label != "bypass permissions ("+flag+")" {
+		t.Errorf("checkbox label = %q", box.Label)
+	}
+	if box.Warning == "" {
+		t.Errorf("checkbox has no warning line")
+	}
+	if got := resumeLines((*body)(false)); got[len(got)-1] != "personal --resume abc123" {
+		t.Errorf("unchecked resume = %q", got[len(got)-1])
+	}
+	if got := resumeLines((*body)(true)); got[len(got)-1] != "personal "+flag+" --resume abc123" {
+		t.Errorf("checked resume = %q", got[len(got)-1])
+	}
+	if got := resumeLines((*body)(true)); got[0] != "cd "+shell.PosixQuote("/Users/x/proj") {
+		t.Errorf("cd line lost its quoting: %q", got[0])
+	}
+}

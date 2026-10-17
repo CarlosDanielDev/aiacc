@@ -1079,19 +1079,43 @@ func RenderMessage(title string, body []Line, sz Size) string {
 // the confirmation that Ctrl-C put the commands on the clipboard, or the reason
 // it couldn't. Empty note renders the plain screen.
 func renderMessage(title string, body []Line, note Line, sz Size) string {
+	return renderCheckMessage(title, body, note, nil, false, sz)
+}
+
+// Checkbox is an optional toggle on a message screen: a row under the body that
+// space or b flips. While it is checked, Warning is drawn under it.
+type Checkbox struct {
+	Label   string // the row text after the box, e.g. "bypass permissions (--x)"
+	Warning string // one line, shown only while checked
+}
+
+// renderCheckMessage is renderMessage with an optional checkbox between the body
+// and the status note. box nil renders the plain screen.
+func renderCheckMessage(title string, body []Line, note Line, box *Checkbox, checked bool, sz Size) string {
 	w := innerWidth(sz.cols())
 	lines := []string{boxTop(title, w), boxBlank(w)}
 	for _, l := range body {
 		lines = append(lines, boxRow([]seg{pad(2), {l.Text, l.Color}}, w))
 	}
-	if note.Text != "" {
-		lines = append(lines, boxBlank(w), boxRow([]seg{pad(2), {trunc(note.Text, w-4), note.Color}}, w))
-	}
-	lines = append(lines, boxBottom(w))
 	keys := [][2]string{{"q", "close"}}
 	if copyText(body) != "" {
 		keys = [][2]string{{"^C", "copy"}, {"q", "close"}}
 	}
+	if box != nil {
+		mark := "[ ] "
+		if checked {
+			mark = "[x] "
+		}
+		lines = append(lines, boxBlank(w), boxRow([]seg{pad(2), {trunc(mark+box.Label, w-4), inkWhite}}, w))
+		if checked {
+			lines = append(lines, boxRow([]seg{pad(6), {trunc(box.Warning, w-8), inkYellow}}, w))
+		}
+		keys = append([][2]string{{"space/b", "bypass"}}, keys...)
+	}
+	if note.Text != "" {
+		lines = append(lines, boxBlank(w), boxRow([]seg{pad(2), {trunc(note.Text, w-4), note.Color}}, w))
+	}
+	lines = append(lines, boxBottom(w))
 	return frame(lines, legendLine(keys), sz, w)
 }
 
@@ -1102,10 +1126,31 @@ func RunMessage(title string, body []Line) error {
 		return err
 	}
 	defer restore()
-	r := bufio.NewReader(tty)
+	return driveMessage(title, func(bool) []Line { return body }, nil, g, tty, tty, clipCopy)
+}
+
+// RunMessageCheck is RunMessage with a checkbox (default unchecked). body is
+// rebuilt for the box's state on every repaint, so the lines shown and the lines
+// ^C copies always agree.
+func RunMessageCheck(title string, box Checkbox, body func(checked bool) []Line) error {
+	tty, g, restore, err := openRawTTY()
+	if err != nil {
+		return err
+	}
+	defer restore()
+	return driveMessage(title, body, &box, g, tty, tty, clipCopy)
+}
+
+// driveMessage runs a message screen until an exit key, decoupled from /dev/tty
+// for tests. box nil means no checkbox, and space and b do nothing. clip is the
+// clipboard writer, reporting whether it succeeded.
+func driveMessage(title string, body func(checked bool) []Line, box *Checkbox, g *geom, in io.Reader, out io.Writer, clip func(string) bool) error {
+	r := bufio.NewReader(in)
 	var note Line
+	checked := false
 	for {
-		fmt.Fprint(tty, repaint(g)+renderMessage(title, body, note, g.get()))
+		lines := body(checked)
+		fmt.Fprint(out, repaint(g)+renderCheckMessage(title, lines, note, box, checked, g.get()))
 		k, err := readKey(r)
 		if err != nil {
 			if err == io.EOF {
@@ -1116,15 +1161,20 @@ func RunMessage(title string, body []Line) error {
 		switch k {
 		case keyQuit, keyEnter:
 			return nil
+		case keyToggle:
+			if box != nil {
+				checked = !checked
+				note = Line{}
+			}
 		case keyCopy:
 			// Ctrl-C on a screen whose whole point is a command you're about to
 			// run: copy it rather than close, which is what the key means
 			// everywhere else text is on screen. `q` still closes.
-			text := copyText(body)
+			text := copyText(lines)
 			switch {
 			case text == "":
 				return nil // nothing to copy — fall back to closing
-			case clipCopy(text):
+			case clip(text):
 				note = Line{Text: "✓ copied to clipboard", Color: Green}
 			default:
 				note = Line{Text: "no clipboard tool (pbcopy/wl-copy/xclip/xsel)", Color: Red}
@@ -1148,6 +1198,7 @@ const (
 	keyRemove
 	keySetup
 	keyCopy
+	keyToggle
 	keyYes
 	keyNo
 	keyQuit
@@ -1458,6 +1509,8 @@ func readKey(r *bufio.Reader) (key, error) {
 	case 3: // Ctrl-C, delivered as a byte under -isig. Screens that have
 		// something worth copying take it; everywhere else it still quits.
 		return keyCopy, nil
+	case ' ', 'b', 'B':
+		return keyToggle, nil
 	case 'a', 'A':
 		return keyAdd, nil
 	case 'r', 'R':

@@ -195,7 +195,25 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 	if _, err := session.Copy(sess, target.dir); err != nil {
 		return err
 	}
-	return showMessage("hand off · done", handoffDoneLines(target.account, meta, sess.ID))
+	return showDone(provider.Presets[target.provider].BypassFlag, target.account, meta, sess.ID)
+}
+
+// showDone shows the "hand off · done" screen for the account to. A target with
+// no bypass flag gets the plain screen. Otherwise the screen carries the opt-in
+// checkbox: the resume line gets the flag only while it is checked, and ^C copies
+// whatever the screen shows.
+func showDone(bypass, to string, meta session.Meta, id string) error {
+	if bypass == "" {
+		return showMessage("hand off · done", handoffDoneLines(to, meta, id))
+	}
+	box := tui.Checkbox{Label: "bypass permissions (" + bypass + ")", Warning: bypassWarning}
+	return showHandoffDone("hand off · done", box, func(checked bool) []tui.Line {
+		flag := ""
+		if checked {
+			flag = bypass
+		}
+		return handoffDoneLinesFlag(to, meta, id, flag)
+	})
 }
 
 // handoffDoneLines is the "hand off · done" screen body: what was copied and
@@ -203,6 +221,14 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 // quoted exactly like handoffDirect's printed resume command — it comes from
 // the session transcript, not from aiacc. Pure, for tests.
 func handoffDoneLines(to string, meta session.Meta, id string) []tui.Line {
+	return handoffDoneLinesFlag(to, meta, id, "")
+}
+
+// handoffDoneLinesFlag is handoffDoneLines with an optional permission-bypass
+// flag, placed after the launcher name ahead of --resume. "" is no flag, and
+// the lines are then exactly handoffDoneLines'. The flag is a preset constant,
+// not user input, so it is written bare rather than shell-quoted.
+func handoffDoneLinesFlag(to string, meta session.Meta, id, bypass string) []tui.Line {
 	body := []tui.Line{
 		{Text: "✓ Copied to " + to, Color: tui.Green},
 		{},
@@ -211,7 +237,11 @@ func handoffDoneLines(to string, meta session.Meta, id string) []tui.Line {
 	if meta.Cwd != "" {
 		body = append(body, tui.Line{Text: "cd " + shell.PosixQuote(meta.Cwd), Color: tui.Blue})
 	}
-	return append(body, tui.Line{Text: to + " --resume " + id, Color: tui.Blue})
+	cmd := to
+	if bypass != "" {
+		cmd += " " + bypass
+	}
+	return append(body, tui.Line{Text: cmd + " --resume " + id, Color: tui.Blue})
 }
 
 // acctRef is a launchable account (provider, account, expanded dir).
@@ -232,6 +262,13 @@ func launchesClaude(c *config.Config, providerName string) bool {
 // showMessage renders a handoff screen. It is a variable so tests can capture
 // the message without a tty.
 var showMessage = tui.RunMessage
+
+// showHandoffDone renders the done screen with the bypass checkbox. A variable
+// for the same reason as showMessage.
+var showHandoffDone = tui.RunMessageCheck
+
+// bypassWarning is the one line under the bypass checkbox while it is checked.
+const bypassWarning = "warning: the agent will run tools without asking"
 
 // claudeAccounts lists the accounts of providers whose launcher is Claude Code
 // (the only rows hand off works between), sorted.

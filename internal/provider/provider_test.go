@@ -154,3 +154,18 @@ func TestRefuseSettingsDir(t *testing.T) {
 		t.Error("a ~ path with no resolvable home was skipped instead of refused")
 	}
 }
+
+// TestBypassFlagPerPreset pins the permission-bypass flag each built-in CLI
+// takes. A preset with no entry, and any provider with no preset, has none, so
+// the hand-off screen shows no checkbox for it.
+func TestBypassFlagPerPreset(t *testing.T) {
+	if got := Presets["claude"].BypassFlag; got != "--dangerously-skip-permissions" {
+		t.Errorf("claude BypassFlag = %q", got)
+	}
+	if got := Presets["codex"].BypassFlag; got != "--dangerously-bypass-approvals-and-sandbox" {
+		t.Errorf("codex BypassFlag = %q", got)
+	}
+	if got, ok := Presets["kimi"]; ok {
+		t.Errorf("unexpected preset kimi with BypassFlag %q", got.BypassFlag)
+	}
+}
