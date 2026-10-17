@@ -92,3 +92,16 @@ func TestTextFormsCtrlCCancels(t *testing.T) {
 		t.Fatalf("edit: got (%v, %v), want not saved", saved, err)
 	}
 }
+
+// TestOnTTYRestoresOnPanic: a panic inside the screen still restores the
+// terminal on the way out, so a crash mid-screen cannot leave raw mode behind.
+func TestOnTTYRestoresOnPanic(t *testing.T) {
+	restores := stubTerminal(t, func() error { return nil })
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = onTTY(-1, func(*os.File, *geom) (int, error) { panic("screen crashed") })
+	}()
+	if *restores != 1 {
+		t.Fatalf("restore ran %d times after a panic, want 1", *restores)
+	}
+}
