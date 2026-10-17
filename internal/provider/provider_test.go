@@ -154,3 +154,38 @@ func TestRefuseSettingsDir(t *testing.T) {
 		t.Error("a ~ path with no resolvable home was skipped instead of refused")
 	}
 }
+
+// TestBypassFlagPerPreset pins the permission-bypass flag each built-in CLI
+// takes. A preset with no entry, and any provider with no preset, has none, so
+// the hand-off screen shows no checkbox for it.
+func TestBypassFlagPerPreset(t *testing.T) {
+	if got := Presets["claude"].BypassFlag; got != "--dangerously-skip-permissions" {
+		t.Errorf("claude BypassFlag = %q", got)
+	}
+	if got := Presets["codex"].BypassFlag; got != "--dangerously-bypass-approvals-and-sandbox" {
+		t.Errorf("codex BypassFlag = %q", got)
+	}
+	if got, ok := Presets["kimi"]; ok {
+		t.Errorf("unexpected preset kimi with BypassFlag %q", got.BypassFlag)
+	}
+}
+
+// TestBypassFlagNeedsPresetCommand: the flag belongs to the CLI a preset names.
+// A user provider keyed like a preset but launching another command must get
+// no flag, or the copied line would carry codex's flag on a claude command.
+func TestBypassFlagNeedsPresetCommand(t *testing.T) {
+	c := &config.Config{Providers: map[string]config.Provider{
+		"codex":  {Command: "claude"}, // keyed codex, launches claude
+		"claude": {},                  // preset claude, its own command
+		"mine":   {Command: "claude"}, // no preset at all
+	}}
+	if got := BypassFlag(c, "codex"); got != "" {
+		t.Errorf("codex keyed to claude: BypassFlag = %q, want none", got)
+	}
+	if got := BypassFlag(c, "claude"); got != "--dangerously-skip-permissions" {
+		t.Errorf("claude preset: BypassFlag = %q", got)
+	}
+	if got := BypassFlag(c, "mine"); got != "" {
+		t.Errorf("unpreset provider: BypassFlag = %q, want none", got)
+	}
+}

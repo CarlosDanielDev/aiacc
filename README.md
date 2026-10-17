@@ -379,6 +379,13 @@ Resume it:
   cd ~/projects/aiacc && claude-personal --resume 2f1c…
 ```
 
+The interactive hand-off ends on a screen with the resume command and a
+`[ ] bypass permissions` checkbox. Unattended runs can need the CLI's bypass
+flag (`--dangerously-skip-permissions` for Claude Code), so `space` or `b` checks
+it: the command shown and the one `ctrl-c` copies then include the flag, and a
+warning line appears. It is off by default, and aiacc never saves the choice or
+adds the flag to a launcher.
+
 Claude Code keeps each session as a transcript at
 `<config-dir>/projects/<cwd>/<id>.jsonl`. `handoff` copies that transcript into
 the target account (preserving its project directory) and prints the exact resume
