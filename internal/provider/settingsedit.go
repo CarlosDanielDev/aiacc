@@ -184,6 +184,10 @@ func ResetSettingsWritesForTest() {
 // renaming it, the window a signal must not leave a token behind in.
 var SettingsWriteWindow = func() {}
 
+// SettingsCreateWindow is a test seam: it runs between creating the temp file
+// and registering it, under the registry lock. No abort can run in that window.
+var SettingsCreateWindow = func(tmp string) {}
+
 // AbortSettingsWrites removes the temp file of every write in flight and refuses
 // any write after it. The signal path calls it before the process exits.
 func AbortSettingsWrites() {
@@ -197,23 +201,30 @@ func AbortSettingsWrites() {
 }
 
 // writeSettings replaces the settings file at path with data through the shared
-// atomic writer. Its temp file is registered for AbortSettingsWrites while the
-// write is in flight.
+// atomic writer. The registry lock is held from the temp file's creation until
+// it is registered, so AbortSettingsWrites either sees the temp or runs before
+// the write starts; it never runs in the gap between the two.
 func writeSettings(path string, mode fs.FileMode, data []byte) error {
 	return fsutil.WriteFileAtomic(path, data, mode, fsutil.Options{
 		Pattern:      ".settings-*.tmp",
+		Guard:        guardWrites,
+		AfterCreate:  SettingsCreateWindow,
 		Track:        trackWrite,
 		BeforeRename: SettingsWriteWindow,
 	})
 }
 
-// trackWrite registers a write's temp file so an abort can remove it, or
-// refuses the write if the registry is already aborted. The returned func
-// forgets the temp once it is gone, so an abort never touches a name that is
-// no longer ours.
-func trackWrite(tmp string) (func(), error) {
+// guardWrites takes the registry lock for a write's create-and-register step.
+func guardWrites() func() {
 	writes.Lock()
-	defer writes.Unlock()
+	return writes.Unlock
+}
+
+// trackWrite registers a write's temp file so an abort can remove it, or
+// refuses the write if the registry is already aborted. It runs under the
+// guard, so it does not lock. The returned func forgets the temp once it is
+// gone, so an abort never touches a name that is no longer ours.
+func trackWrite(tmp string) (func(), error) {
 	if writes.aborted {
 		return nil, errWritesAborted
 	}

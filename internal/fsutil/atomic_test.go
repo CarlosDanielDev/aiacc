@@ -208,3 +208,72 @@ func TestWriteFileAtomicRenameErrorNamesTarget(t *testing.T) {
 		t.Fatalf("err = %v, want \"replace settings.json: ...\" wrapping the cause", err)
 	}
 }
+
+// TestWriteFileAtomicGuardCoversCreateAndTrack: Guard is taken before the temp
+// file is created and released once Track has registered it, so a caller's
+// lock makes "temp exists" and "temp registered" one step to any other holder.
+// AfterCreate and Track both run while the guard is held. Mutation check:
+// release the guard before Track and the held flag reads false in Track.
+func TestWriteFileAtomicGuardCoversCreateAndTrack(t *testing.T) {
+	dir := t.TempDir()
+	path := target(t, dir, "settings.json", "old", 0o600)
+
+	held, releases := false, 0
+	var steps []string
+	opts := Options{
+		Pattern: ".settings-*.tmp",
+		Guard: func() func() {
+			held = true
+			steps = append(steps, "guard")
+			return func() {
+				releases++
+				held = false
+				steps = append(steps, "release")
+			}
+		},
+		AfterCreate: func(tmp string) {
+			if !held {
+				t.Error("AfterCreate ran without the guard held")
+			}
+			steps = append(steps, "created")
+		},
+		Track: func(tmp string) (func(), error) {
+			if !held {
+				t.Error("Track ran without the guard held")
+			}
+			steps = append(steps, "track")
+			return nil, nil
+		},
+	}
+	if err := WriteFileAtomic(path, []byte("new"), 0o600, opts); err != nil {
+		t.Fatal(err)
+	}
+	if releases != 1 {
+		t.Fatalf("guard released %d times, want 1", releases)
+	}
+	if got := strings.Join(steps, ","); got != "guard,created,track,release" {
+		t.Fatalf("steps = %s, want guard,created,track,release", got)
+	}
+}
+
+// TestWriteFileAtomicGuardReleasedOnRefusal: a refused Track still releases the
+// guard exactly once and leaves no temp file behind.
+func TestWriteFileAtomicGuardReleasedOnRefusal(t *testing.T) {
+	dir := t.TempDir()
+	path := target(t, dir, "settings.json", "old", 0o600)
+	releases := 0
+	opts := Options{
+		Pattern: ".settings-*.tmp",
+		Guard:   func() func() { return func() { releases++ } },
+		Track:   func(string) (func(), error) { return nil, injected },
+	}
+	if err := WriteFileAtomic(path, []byte("new"), 0o600, opts); !errors.Is(err, injected) {
+		t.Fatalf("err = %v, want the injected refusal", err)
+	}
+	if releases != 1 {
+		t.Fatalf("guard released %d times, want 1", releases)
+	}
+	if names := dirEntries(t, dir); len(names) != 1 {
+		t.Fatalf("directory after refusal = %v, want only the target", names)
+	}
+}

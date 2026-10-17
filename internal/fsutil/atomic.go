@@ -19,10 +19,19 @@ type Options struct {
 	// Pattern names the temp file as os.CreateTemp does: the last "*" is
 	// replaced by a random string, and a pattern without one gets it appended.
 	Pattern string
-	// Track, when set, runs once the temp file exists and before any byte is
-	// written, so a caller can record it for a signal handler. It returns the
-	// func to call once the temp file is gone, renamed or removed. An error
-	// refuses the write, and the temp file is removed.
+	// Guard, when set, runs before the temp file is created and returns the
+	// func that releases it. The guard, AfterCreate and Track all run inside
+	// it, so a caller's lock makes "temp exists" and "temp registered" one
+	// step to any other holder. Guard is released exactly once, before any
+	// byte is written.
+	Guard func() (release func())
+	// AfterCreate, when set, runs once the temp file exists, under the guard,
+	// before Track. It is the window a test hooks.
+	AfterCreate func(tmp string)
+	// Track, when set, runs under the guard once the temp file exists and before
+	// any byte is written, so a caller can record it for a signal handler. It
+	// returns the func to call once the temp file is gone, renamed or removed.
+	// An error refuses the write, and the temp file is removed.
 	Track func(tmp string) (done func(), err error)
 	// BeforeRename, when set, runs after the temp file is closed and before it
 	// is renamed over the target. It is the window a test can hook.
@@ -44,15 +53,24 @@ var (
 // or the new one. The temp file is removed on every error path. The caller
 // resolves symlinks and creates the directory; this function only writes.
 func WriteFileAtomic(path string, data []byte, mode fs.FileMode, opts Options) error {
+	release := func() {}
+	if opts.Guard != nil {
+		release = opts.Guard()
+	}
 	tmp, err := createTemp(filepath.Dir(path), opts.Pattern, mode)
 	if err != nil {
+		release()
 		return err
 	}
 	name := tmp.Name()
+	if opts.AfterCreate != nil {
+		opts.AfterCreate(name)
+	}
 	done := func() {}
 	if opts.Track != nil {
-		var track func()
-		if track, err = opts.Track(name); err != nil {
+		track, err := opts.Track(name)
+		if err != nil {
+			release()
 			tmp.Close()
 			os.Remove(name)
 			return err
@@ -61,6 +79,7 @@ func WriteFileAtomic(path string, data []byte, mode fs.FileMode, opts Options) e
 			done = track
 		}
 	}
+	release()
 	defer done() // runs after the rename has moved the temp away, or the removal
 	fail := func(err error) error {
 		tmp.Close()
