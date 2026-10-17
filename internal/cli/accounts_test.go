@@ -437,6 +437,65 @@ func TestAddSettingsUnknown(t *testing.T) {
 	}
 }
 
+// A refused name must leave nothing on disk, whichever check refuses it: a name
+// another provider owns, or a name that is not a valid launcher filename. The
+// dir the user typed must never be created first (the issue's own scenario is
+// `aiacc add codex work --dir ~/.codex-work`).
+func TestAddRefusedNameCreatesNoDir(t *testing.T) {
+	cases := []struct {
+		name, provider, account string
+	}{
+		{"taken by another provider", "codex", "work"},
+		{"invalid launcher name", "claude", "../evil"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := withTempConfig(t)
+			seedConfig(t, path, t.TempDir(), 0) // claude "work"
+			dir := filepath.Join(t.TempDir(), "acct")
+
+			add := newAddCmd()
+			add.SetArgs([]string{tc.provider, tc.account, "--dir", dir})
+			if err := add.Execute(); err == nil {
+				t.Fatalf("%s %s was accepted", tc.provider, tc.account)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatalf("refused add still created %s (stat err: %v)", dir, err)
+			}
+		})
+	}
+}
+
+// The message must match the case: a same-provider re-add is not a cross-provider
+// collision, and both need a next step the user can take.
+func TestAddTakenNameMessageNamesTheCase(t *testing.T) {
+	path := withTempConfig(t)
+	seedConfig(t, path, t.TempDir(), 0) // claude "work"
+
+	err := saveAccount(path, "claude", "work", t.TempDir(), 0, "", "", "")
+	if err == nil {
+		t.Fatal("same-provider re-add was accepted")
+	}
+	for _, want := range []string{"already exists under claude", "pick another name", "aiacc remove claude work"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("same-provider message lacks %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "cannot use it too") {
+		t.Errorf("same-provider re-add is not a cross-provider collision: %v", err)
+	}
+
+	err = saveAccount(path, "codex", "work", t.TempDir(), 0, "", "", "")
+	if err == nil {
+		t.Fatal("cross-provider add was accepted")
+	}
+	for _, want := range []string{"already exists under claude", "codex cannot use it too", "aiacc remove claude work"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("cross-provider message lacks %q: %v", want, err)
+		}
+	}
+}
+
 // A directory is never registered as a settings file: add refuses it and
 // writes no account, so the launcher the profile would get is never generated.
 func TestAddSettingsRefusesDirectory(t *testing.T) {
@@ -463,5 +522,24 @@ func TestAddSettingsRefusesDirectory(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	} else if _, ok := c.Providers["claude"].Accounts["foo"]; ok {
 		t.Fatalf("a refused add still registered the account")
+	}
+}
+
+// A snapshot taken before another process registers a name passes the check, so
+// an interactive caller must re-read the config: checkNameOnDisk refuses the name
+// the snapshot would have let through.
+func TestCheckNameOnDiskSeesRegistrationAfterSnapshot(t *testing.T) {
+	path := withTempConfig(t)
+	snapshot, err := config.Load(path) // empty: taken before the other process writes
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedConfig(t, path, t.TempDir(), 0) // claude "work", registered meanwhile
+
+	if err := checkNewName(snapshot, "codex", "work"); err != nil {
+		t.Fatalf("the stale snapshot should pass (that is the race): %v", err)
+	}
+	if err := checkNameOnDisk(path, "codex", "work"); err == nil {
+		t.Fatal("checkNameOnDisk accepted a name registered on disk")
 	}
 }

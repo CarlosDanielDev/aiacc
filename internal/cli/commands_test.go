@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -603,5 +605,101 @@ func TestSaveAccountSettings(t *testing.T) {
 	// codex has no settings flag; storing a path it would never load is refused.
 	if err := saveAccount(path, "codex", "x", "/x", 0, "", "", "/s.json"); err == nil {
 		t.Fatal("want an error for --settings on a provider without a settings flag")
+	}
+}
+
+// A launcher is named by the bare account, so an account name may belong to one
+// provider only: codex "work" after claude "work" would silently take the command.
+func TestSaveAccountRefusesNameTakenByAnotherProvider(t *testing.T) {
+	path := withTempConfig(t)
+	seedConfig(t, path, t.TempDir(), 0) // claude "work"
+
+	err := saveAccount(path, "codex", "work", t.TempDir(), 0, "", "", "")
+	if err == nil {
+		t.Fatal("expected codex work to be refused while claude work exists")
+	}
+	if !strings.Contains(err.Error(), "claude") {
+		t.Errorf("the refusal should name the provider that owns the name: %v", err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Providers["codex"].Accounts["work"]; ok {
+		t.Fatal("refused add still wrote codex work")
+	}
+}
+
+func TestRenameAccountRefusesNameTakenByAnotherProvider(t *testing.T) {
+	path := withTempConfig(t)
+	c := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]config.Account{
+			"work": {Dir: t.TempDir()},
+		}},
+		"codex": {EnvVar: "CODEX_HOME", Accounts: map[string]config.Account{
+			"personal": {Dir: t.TempDir()},
+		}},
+	}}
+	if err := config.Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameAccount(path, "codex", "personal", "work"); err == nil {
+		t.Fatal("expected rename onto a name claude already uses to be refused")
+	}
+}
+
+// Setup must be repeatable: the same config writes the same launchers, in the
+// same order, on every run. The config has 27 accounts across three providers,
+// and the names are shared across providers so the launchers collide. A missing
+// sort only shows on some map iterations, so the run repeats eight times.
+func TestWriteAllLaunchersIsDeterministic(t *testing.T) {
+	envs := map[string]string{"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "glab": "GLAB_CONFIG_DIR"}
+	c := &config.Config{Providers: map[string]config.Provider{}}
+	total := 0
+	for _, pn := range []string{"claude", "codex", "glab"} {
+		p := config.Provider{EnvVar: envs[pn], Command: pn, Accounts: map[string]config.Account{}}
+		names := []string{"work", "personal"} // shared by every provider: collisions
+		for i := 0; i < 7; i++ {
+			names = append(names, fmt.Sprintf("%s-%02d", pn, i))
+		}
+		for _, an := range names {
+			p.Accounts[an] = config.Account{Dir: "/a/" + pn + "/" + an}
+			total++
+		}
+		c.Providers[pn] = p
+	}
+	if total < 20 {
+		t.Fatalf("fixture has %d accounts, want at least 20", total)
+	}
+
+	run := func() ([]string, map[string]string) {
+		bin := t.TempDir()
+		names, err := writeAllLaunchers(c, bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := map[string]string{}
+		ents, err := os.ReadDir(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range ents {
+			b, err := os.ReadFile(filepath.Join(bin, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[e.Name()] = string(b)
+		}
+		return names, files
+	}
+	wantNames, wantFiles := run()
+	for i := 1; i < 8; i++ {
+		gotNames, gotFiles := run()
+		if !slices.Equal(wantNames, gotNames) {
+			t.Fatalf("run %d: launcher order differs from run 0", i)
+		}
+		if !maps.Equal(wantFiles, gotFiles) {
+			t.Fatalf("run %d: launcher contents differ from run 0", i)
+		}
 	}
 }
