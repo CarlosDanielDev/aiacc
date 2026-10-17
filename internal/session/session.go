@@ -129,28 +129,75 @@ func ReadMeta(path string) (Meta, error) {
 	return m, sc.Err()
 }
 
+// closeDest closes the destination on Copy's success path. It is a variable so
+// a test can inject a close failure, which a normal filesystem does not produce.
+var closeDest = func(f *os.File) error { return f.Close() }
+
 // Copy writes s into toConfigDir's projects, under the same project directory, so
 // the target account can resume it. It returns the destination path. Transcripts
-// are private (0600), and that mode is preserved.
+// are private (0600), and that mode is preserved. It refuses a destination that
+// is the source file, because truncating it would zero the transcript. The
+// check is fail-closed and nothing is truncated until it passes:
+//
+//   - the source is opened, and its identity taken from that open file;
+//   - the destination path is stat'ed, and any error other than "does not
+//     exist" refuses the copy;
+//   - the destination is opened WITHOUT O_TRUNC, its identity is taken from the
+//     open file (os.SameFile against the source), and only a non-matching file
+//     is truncated and written.
+//
+// The identity check and the truncate act on the same descriptor, so a
+// symlink or hardlink swapped in between the stat and the open cannot make
+// Copy truncate the source. Not covered: a process that writes to the source
+// while it is being copied. That gives a partial copy, not a truncated source.
+// A close error is returned, so a short write is never reported as success;
+// the destination is left in place, since it may be a pre-existing session.
 func Copy(s Info, toConfigDir string) (string, error) {
 	destDir := filepath.Join(projectsRoot(toConfigDir), s.ProjectDir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return "", err
 	}
 	dest := filepath.Join(destDir, s.ID+".jsonl")
+	if filepath.Clean(dest) == filepath.Clean(s.Path) {
+		return "", fmt.Errorf("refusing to copy: destination %s is the source file", dest)
+	}
 
 	in, err := os.Open(s.Path)
 	if err != nil {
 		return "", err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	srcInfo, err := in.Stat()
+	if err != nil {
+		return "", fmt.Errorf("refusing to copy: can't stat source %s: %w", s.Path, err)
+	}
+
+	if _, err := os.Stat(dest); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("refusing to copy: can't stat destination %s: %w", dest, err)
+	}
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		return "", err
 	}
 	defer out.Close()
+	outInfo, err := out.Stat()
+	if err != nil {
+		return "", fmt.Errorf("refusing to copy: can't stat destination %s: %w", dest, err)
+	}
+	if os.SameFile(srcInfo, outInfo) {
+		return "", fmt.Errorf("refusing to copy: destination %s is the source file (symlink or hardlink)", dest)
+	}
+	if err := out.Truncate(0); err != nil {
+		return "", err
+	}
 	if _, err := io.Copy(out, in); err != nil {
 		return "", err
+	}
+	// A write can fail only at close (NFS, quota, full disk). Returning it
+	// keeps a short transcript from being reported as handed off. The
+	// destination is left in place: it may be a pre-existing session file.
+	if err := closeDest(out); err != nil {
+		return "", fmt.Errorf("closing destination %s: %w", dest, err)
 	}
 	return dest, nil
 }

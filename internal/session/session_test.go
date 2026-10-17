@@ -1,8 +1,12 @@
 package session
 
 import (
+	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,6 +113,32 @@ func TestCopyPreservesProjectDir(t *testing.T) {
 	}
 }
 
+// TestCopyRefusesSelfOverwrite pins the data-loss guard: handing a session to
+// the account it already lives in makes the destination resolve to the source
+// file, and truncating that before reading used to zero the transcript. Copy
+// must refuse and leave the source byte-identical.
+func TestCopyRefusesSelfOverwrite(t *testing.T) {
+	cfg := t.TempDir()
+	p := seed(t, cfg, "-proj-a", "s1", []string{`{"type":"user","cwd":"/proj/a"}`})
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, _ := List(cfg)
+	if _, err := Copy(list[0], cfg); err == nil {
+		t.Fatal("expected Copy into the source's own config dir to be refused")
+	}
+
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("transcript clobbered: want %q, got %q", before, after)
+	}
+}
+
 func TestFind(t *testing.T) {
 	cfg := t.TempDir()
 	seed(t, cfg, "-proj-a", "wanted", []string{`{"type":"user"}`})
@@ -117,5 +147,139 @@ func TestFind(t *testing.T) {
 	}
 	if _, err := Find(cfg, "nope"); err == nil {
 		t.Fatal("Find should error on a missing id")
+	}
+}
+
+// TestCopyRefusesSymlinkAndHardlinkToSource pins the aliasing guard: a
+// destination whose path string differs from the source but resolves to the
+// same file (a symlink, or a hardlink) must be refused too, because O_TRUNC on
+// it would still zero the transcript. Both cases live in t.TempDir().
+func TestCopyRefusesSymlinkAndHardlinkToSource(t *testing.T) {
+	cfg := t.TempDir()
+	p := seed(t, cfg, "-proj-a", "s1", []string{`{"type":"user","cwd":"/proj/a"}`})
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, _ := List(cfg)
+
+	alias := func(t *testing.T, link func(old, new string) error) {
+		other := t.TempDir()
+		destDir := filepath.Join(other, "projects", "-proj-a")
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dest := filepath.Join(destDir, "s1.jsonl")
+		if err := link(p, dest); err != nil {
+			t.Skipf("OS refuses to create the link: %v", err)
+		}
+		if _, err := Copy(list[0], other); err == nil {
+			t.Fatal("expected Copy onto a destination aliasing the source to be refused")
+		}
+		after, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Fatalf("source transcript clobbered: want %q, got %q", before, after)
+		}
+	}
+
+	t.Run("symlink", func(t *testing.T) { alias(t, os.Symlink) })
+	t.Run("hardlink", func(t *testing.T) { alias(t, os.Link) })
+}
+
+// TestCopyFailsClosedWhenDestStatFails pins fail-closed behaviour: when the
+// destination cannot be stat'ed for a reason other than "does not exist", Copy
+// must refuse and leave the destination untouched, not fall through to the
+// truncating open. The destination's directory is made unsearchable, so the
+// stat fails with EACCES. The test's "can't stat" assertion is what tells the
+// guard apart from the open failing with the same EACCES.
+func TestCopyFailsClosedWhenDestStatFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions; cannot force a stat error")
+	}
+	cfg := t.TempDir()
+	p := seed(t, cfg, "-proj-a", "s1", []string{`{"type":"user","cwd":"/proj/a"}`})
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, _ := List(cfg)
+
+	other := t.TempDir()
+	destDir := filepath.Join(other, "projects", "-proj-a")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(destDir, "s1.jsonl")
+	const keep = `{"type":"user","keep":"dest"}` + "\n"
+	if err := os.WriteFile(dest, []byte(keep), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(destDir, 0o000); err != nil {
+		t.Skipf("chmod unsupported: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(destDir, 0o755) })
+
+	_, copyErr := Copy(list[0], other)
+	if err := os.Chmod(destDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if copyErr == nil {
+		t.Fatal("expected Copy to refuse when the destination cannot be stat'ed")
+	}
+	if !strings.Contains(copyErr.Error(), "can't stat destination") || !errors.Is(copyErr, fs.ErrPermission) {
+		t.Fatalf("want the stat guard's refusal wrapping EACCES, got: %v", copyErr)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != keep {
+		t.Fatalf("destination was touched: want %q, got %q", keep, got)
+	}
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("source transcript clobbered: want %q, got %q", before, after)
+	}
+}
+
+// TestCopyReturnsDestinationCloseError pins the success-path close: a write
+// that fails only at close must surface as an error naming the destination,
+// not as a short transcript reported as handed off. closeDest is swapped for
+// one that really closes the file (no fd leak) and then reports an injected
+// error. The destination is left in place, since it may be a pre-existing
+// session file.
+func TestCopyReturnsDestinationCloseError(t *testing.T) {
+	cfg := t.TempDir()
+	seed(t, cfg, "-proj-a", "s1", []string{`{"type":"user","cwd":"/proj/a"}`})
+	list, _ := List(cfg)
+	other := t.TempDir()
+
+	injected := errors.New("injected close failure")
+	old := closeDest
+	closeDest = func(f *os.File) error {
+		_ = f.Close()
+		return injected
+	}
+	t.Cleanup(func() { closeDest = old })
+
+	dest, err := Copy(list[0], other)
+	if !errors.Is(err, injected) {
+		t.Fatalf("want Copy to return the close error, got: %v", err)
+	}
+	want := filepath.Join(other, "projects", "-proj-a", "s1.jsonl")
+	if !strings.Contains(err.Error(), "closing destination "+want) {
+		t.Fatalf("error should name the destination %s, got: %v", want, err)
+	}
+	if dest != "" {
+		t.Fatalf("want no destination path on failure, got %q", dest)
+	}
+	if _, statErr := os.Stat(want); statErr != nil {
+		t.Fatalf("destination must be left in place after a close error: %v", statErr)
 	}
 }
