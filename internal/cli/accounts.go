@@ -294,6 +294,18 @@ func checkNewName(c *config.Config, providerName, account string) error {
 	return nil
 }
 
+// checkNameOnDisk runs checkNewName against the config as it is on disk now. A
+// caller that was interactive after it loaded the config must use this: another
+// aiacc process may have registered the name in the meantime, and the dir must
+// not be created on the strength of a stale snapshot.
+func checkNameOnDisk(cfgPath, providerName, account string) error {
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	return checkNewName(c, providerName, account)
+}
+
 func newRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <provider> <account>",

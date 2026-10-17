@@ -524,3 +524,22 @@ func TestAddSettingsRefusesDirectory(t *testing.T) {
 		t.Fatalf("a refused add still registered the account")
 	}
 }
+
+// A snapshot taken before another process registers a name passes the check, so
+// an interactive caller must re-read the config: checkNameOnDisk refuses the name
+// the snapshot would have let through.
+func TestCheckNameOnDiskSeesRegistrationAfterSnapshot(t *testing.T) {
+	path := withTempConfig(t)
+	snapshot, err := config.Load(path) // empty: taken before the other process writes
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedConfig(t, path, t.TempDir(), 0) // claude "work", registered meanwhile
+
+	if err := checkNewName(snapshot, "codex", "work"); err != nil {
+		t.Fatalf("the stale snapshot should pass (that is the race): %v", err)
+	}
+	if err := checkNameOnDisk(path, "codex", "work"); err == nil {
+		t.Fatal("checkNameOnDisk accepted a name registered on disk")
+	}
+}

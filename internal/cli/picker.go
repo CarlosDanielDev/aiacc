@@ -149,8 +149,9 @@ func runAddTUI(cfgPath string) error {
 	if !res.OK {
 		return nil
 	}
-	// Before the dir is created: a refused name must leave nothing behind.
-	if err := checkNewName(c, prov, res.Name); err != nil {
+	// Before the dir is created: a refused name must leave nothing behind. The
+	// screens above were interactive, so check the config as it is now.
+	if err := checkNameOnDisk(cfgPath, prov, res.Name); err != nil {
 		return err
 	}
 	dir := expandTilde(res.Dir)

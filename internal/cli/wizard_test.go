@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -638,5 +639,50 @@ func TestAddWizardDirectorySettingsWritesNothing(t *testing.T) {
 	}
 	if _, statErr := os.Stat(path); statErr == nil {
 		t.Fatalf("refused settings wrote the config: %s", path)
+	}
+}
+
+// lineReader hands the wizard one line per Read, and runs hook just before it
+// returns line at. That lets a test change the config during an interactive
+// answer, the window a stale snapshot would hide.
+type lineReader struct {
+	lines []string
+	at    int
+	hook  func()
+	i     int
+}
+
+func (r *lineReader) Read(p []byte) (int, error) {
+	if r.i >= len(r.lines) {
+		return 0, io.EOF
+	}
+	if r.i == r.at && r.hook != nil {
+		r.hook()
+	}
+	n := copy(p, r.lines[r.i])
+	r.i++
+	return n, nil
+}
+
+// Another process registers the name while the settings question is open. The
+// wizard checked the name before that question, so only the re-check before the
+// dir write catches it: a refused answer must still leave no dir.
+func TestAddWizardNameRegisteredDuringSettingsPromptCreatesNoDir(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	dir := filepath.Join(home, "acct")
+	in := &lineReader{
+		lines: []string{"work\n", dir + "\n", "claude\n", "none\n"},
+		at:    3, // the settings answer
+		hook: func() {
+			seedConfig(t, path, t.TempDir(), 0) // claude "work", from another process
+		},
+	}
+	err := runAddWizard(in, &bytes.Buffer{}, path, addPrefill{})
+	if err == nil || !strings.Contains(err.Error(), "already exists under claude") {
+		t.Fatalf("want a refusal for the name registered meanwhile, got %v", err)
+	}
+	if _, statErr := os.Stat(dir); statErr == nil {
+		t.Fatalf("refused wizard created %s after the name was taken", dir)
 	}
 }

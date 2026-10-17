@@ -145,6 +145,11 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 	if err != nil {
 		return err
 	}
+	// The settings answer above was typed interactively: check the name against
+	// the config as it is now, before the dir is created.
+	if err := checkNameOnDisk(cfgPath, providerName, name); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(realDir, 0o755); err != nil {
 		return err
 	}
