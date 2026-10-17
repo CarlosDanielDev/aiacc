@@ -856,25 +856,32 @@ func trimLastByte(s string) string {
 }
 
 // resolveSettings turns the settings field's value into the path the profile
-// registers. An endpoint keyword (glm, custom) generates the settings skeleton
-// into the profile dir and yields the generated path, exactly as if the user
-// had written the file by hand and passed its path; anything else is a path
-// the user manages, taken verbatim as before. A file already at the target
-// aborts the create with its path — nothing is overwritten (the aiacc link
-// rule), and the caller stays on the screen.
+// registers, through the one classification rule the CLI's --settings flag
+// shares (provider.ClassifySettings): an endpoint keyword (glm, custom)
+// generates the settings skeleton into the profile dir and yields the
+// generated path, exactly as if the user had written the file by hand and
+// passed its path; a bare word that names no keyword is refused with the
+// valid ones listed, and the hint row keeps that refusal on screen; anything
+// path-like is taken verbatim as before. A file already at the target aborts
+// the create with its path — nothing is overwritten (the aiacc link rule),
+// and the caller stays on the screen.
 func resolveSettings(providerName, dir, value string) (string, error) {
 	if value == "" {
 		return "", nil
 	}
-	ep, err := provider.ResolveEndpoint(providerName, value)
+	ep, keyword, err := provider.ClassifySettings(providerName, value)
 	if err != nil {
+		return "", err // names the typo and the valid keywords
+	}
+	if !keyword {
 		return value, nil // not a keyword — today's path behavior, unchanged
 	}
 	path, err := provider.EnsureSkeleton(dir, ep)
 	if err != nil {
-		// The hint row truncates at the frame's inner width, so the file name
-		// leads the message and its glyph survives any width; the dir follows
-		// it (and also sits in the dir field right above the hint).
+		// The hint row truncates at the inner width minus 4 columns (the
+		// padding and the ⚠ marker), so the file name leads the message and
+		// its glyph survives any width; the dir follows it (and also sits in
+		// the dir field right above the hint).
 		if errors.Is(err, provider.ErrSettingsExists) {
 			return "", fmt.Errorf("%s already exists in %s — remove it or pick another dir", ep.Filename, dir)
 		}

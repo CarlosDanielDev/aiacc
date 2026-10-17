@@ -48,10 +48,63 @@ func ResolveEndpoint(providerName, name string) (Endpoint, error) {
 	}
 	ep, ok := p.Endpoints[name]
 	if !ok {
-		names := strings.Join(slices.Sorted(maps.Keys(p.Endpoints)), ", ")
-		return Endpoint{}, fmt.Errorf("%w: %q (valid: %s)", ErrUnknownEndpoint, name, names)
+		return Endpoint{}, fmt.Errorf("%w: %q (valid: %s)", ErrUnknownEndpoint, name, keywordList(p))
 	}
 	return ep, nil
+}
+
+// ClassifySettings sorts a settings-field value into an endpoint keyword or a
+// file path — the one rule both add surfaces (the picker screen and the CLI
+// flag) share, so they cannot drift. A value naming a keyword returns its
+// preset with keyword true. A value that reads as a file path, or whose
+// lookup failure is not about the name itself, is not a keyword attempt: it
+// comes back with keyword false and the caller registers the value verbatim,
+// the path behavior both surfaces had before keywords existed. A bare word
+// that names no keyword is refused with the valid ones listed — a typo must
+// not silently register a bogus settings path.
+func ClassifySettings(providerName, value string) (ep Endpoint, keyword bool, err error) {
+	if value == "" {
+		return Endpoint{}, false, nil
+	}
+	ep, err = ResolveEndpoint(providerName, value)
+	if err == nil {
+		return ep, true, nil
+	}
+	// ResolveEndpoint only returns ErrUnknownEndpoint for a provider that has
+	// a settings flag, so any other error (unknown provider, no settings flag)
+	// belongs to the later registration step's refusal, not to this field.
+	if !errors.Is(err, ErrUnknownEndpoint) || looksLikePath(value) {
+		return Endpoint{}, false, nil
+	}
+	return Endpoint{}, false, KeywordRefusal{Keywords: keywordList(Presets[providerName]), Value: value}
+}
+
+// KeywordRefusal is the settings-field refusal for a bare word that names no
+// keyword. Its text leads with the keywords: the add screen's hint row keeps
+// only the left edge of a long message, so the list must come before the
+// typo. The list is intact down to 28 terminal columns; at 27 the add screen's
+// hint row truncates it to "keywords: custom, gl…", an accepted limit (see
+// TestAddSettingsKeywordsAtNarrowWidth). It unwraps to ErrUnknownEndpoint, so
+// errors.Is classifies it exactly as it classifies ResolveEndpoint's refusal.
+// Keywords and Value are exported so a surface can compose its own sentence.
+type KeywordRefusal struct{ Keywords, Value string }
+
+func (e KeywordRefusal) Error() string {
+	return fmt.Sprintf("keywords: %s (not %q)", e.Keywords, e.Value)
+}
+
+func (e KeywordRefusal) Unwrap() error { return ErrUnknownEndpoint }
+
+// keywordList is the provider's endpoint keywords, sorted and comma-joined.
+func keywordList(p Preset) string {
+	return strings.Join(slices.Sorted(maps.Keys(p.Endpoints)), ", ")
+}
+
+// looksLikePath reports whether a settings value reads as a file path rather
+// than a keyword attempt: it holds a separator, a ~, or a dot (/abs, ./rel,
+// a/b, ~/x, file.json). A bare word (glm, kimi) is a keyword attempt.
+func looksLikePath(value string) bool {
+	return strings.ContainsAny(value, "/~.")
 }
 
 // WriteSettingsSkeleton writes a settings-file skeleton for ep into dir. The

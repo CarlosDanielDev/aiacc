@@ -208,3 +208,61 @@ func TestEndpointUnknown(t *testing.T) {
 		t.Errorf("ResolveEndpoint(codex) err = %v, want it to contain %q", err, want)
 	}
 }
+
+// TestClassifySettings pins the one path-vs-keyword rule both add surfaces
+// share: a keyword resolves to its preset, a path-like value — or a provider
+// problem that is not about the name — defers to verbatim path behavior, and
+// a bare-word typo is refused with the valid keywords listed.
+func TestClassifySettings(t *testing.T) {
+	tests := []struct {
+		name        string
+		provider    string
+		value       string
+		wantKeyword bool
+		wantErr     []string // substrings the refusal must carry; nil = no error
+	}{
+		{name: "keyword resolves to its preset", provider: "claude", value: "glm", wantKeyword: true},
+		{name: "custom is a keyword too", provider: "claude", value: "custom", wantKeyword: true},
+		{name: "slash reads as a path", provider: "claude", value: "a/b.json"},
+		{name: "dot reads as a path", provider: "claude", value: "settings.json"},
+		{name: "tilde reads as a path", provider: "claude", value: "~/.claude-glm/glm.json"},
+		{name: "empty is no settings", provider: "claude", value: ""},
+		{name: "unknown provider defers to registration's refusal", provider: "nosuch", value: "kimi"},
+		{name: "bare word typo is refused naming the valid keywords", provider: "claude", value: "kimi",
+			wantErr: []string{"kimi", "glm", "custom"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ep, keyword, err := ClassifySettings(tc.provider, tc.value)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("err = %v, want none", err)
+				}
+				if keyword != tc.wantKeyword {
+					t.Fatalf("keyword = %t, want %t", keyword, tc.wantKeyword)
+				}
+				if keyword {
+					want, err := ResolveEndpoint(tc.provider, tc.value)
+					if err != nil || ep != want {
+						t.Fatalf("ep = %+v (%v), want the resolved preset %+v", ep, err, want)
+					}
+				}
+				return
+			}
+			if keyword {
+				t.Fatalf("keyword = true, want false for a refusal")
+			}
+			if err == nil {
+				t.Fatalf("err = nil, want the typo refused")
+			}
+			for _, want := range tc.wantErr {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal %q missing %q", err, want)
+				}
+			}
+			if !errors.Is(err, ErrUnknownEndpoint) {
+				t.Errorf("refusal %q does not wrap ErrUnknownEndpoint", err)
+			}
+		})
+	}
+}
