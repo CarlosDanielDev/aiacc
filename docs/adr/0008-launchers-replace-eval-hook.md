@@ -2,6 +2,8 @@
 
 Status: Accepted
 
+See also: [0010](0010-retire-shell-init.md) retires the `shell-init` function output described below; the command stays as a stub.
+
 Supersedes [0002](0002-generic-provider-driver.md) and [0003](0003-shell-eval-switching.md).
 
 ## Context

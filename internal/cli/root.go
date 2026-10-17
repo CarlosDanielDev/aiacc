@@ -32,10 +32,8 @@ func NewRoot() *cobra.Command {
 			// hook's `eval $(...)` a harmless no-op.
 			if cmd.Flags().Changed("shell") {
 				fmt.Fprintln(cmd.ErrOrStderr(), "aiacc: an old aiacc shell hook is still loaded in this shell. "+
-					"Re-source the launchers to replace it:\n"+
-					"  bash/zsh:  eval \"$(aiacc shell-init <shell>)\"\n"+
-					"  fish:      aiacc shell-init fish | source\n"+
-					"(or just open a new terminal).")
+					"Open a new terminal, then run:\n"+
+					"  aiacc setup")
 				return nil
 			}
 			if !isTerminal(os.Stdin) {

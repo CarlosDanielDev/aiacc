@@ -1,16 +1,15 @@
-// Package shell builds the per-profile launcher functions that
-// `aiacc shell-init` emits. Each function runs the provider's CLI with the
-// profile's config directory selected via an environment variable — e.g.
-// `claude-work` runs `CLAUDE_CONFIG_DIR=<dir> claude`.
+// Package shell builds the per-profile launcher scripts that `aiacc setup`
+// installs onto PATH. Each script runs the provider's CLI with the profile's
+// config directory selected via an environment variable — e.g. `claude-work`
+// runs `CLAUDE_CONFIG_DIR=<dir> claude`.
 //
-// The directory value is embedded in a function definition the user's shell
-// sources, so it is the injection surface: directory values and identifiers are
-// validated and single-quote escaped here before they reach a shell.
+// The directory value is embedded in a script the shell executes, so it is the
+// injection surface: directory values and identifiers are validated and
+// single-quote escaped here before they reach a shell.
 package shell
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,47 +27,9 @@ var (
 var (
 	// envVarRe matches a POSIX shell identifier.
 	envVarRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	// aliasNameRe matches a launcher function name: a letter/underscore start,
-	// then letters, digits, hyphens, or underscores.
-	aliasNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 	// cmdRe matches a bare command token (no spaces or shell metacharacters).
 	cmdRe = regexp.MustCompile(`^[A-Za-z0-9_.+-]+$`)
 )
-
-// Launcher returns a shell function that launches command with envVar pointed at
-// dir — the profile launcher `aiacc shell-init` emits, e.g.
-//
-//	claude-work() { CLAUDE_CONFIG_DIR='/home/x/.claude-work' command claude "$@"; }
-//
-// Poka-yoke: when name, command, or envVar is not a safe token it returns ""
-// with no error, so the caller skips that profile silently — a malformed name is
-// never written into a script the shell sources. An unsafe dir (control chars)
-// is a hard error. dir and args are single-quote escaped so they cannot break
-// out; args go to the command ahead of the user's own.
-func Launcher(shellName, name, command, envVar, dir string, args ...string) (string, error) {
-	if !aliasNameRe.MatchString(name) || !cmdRe.MatchString(command) || !envVarRe.MatchString(envVar) {
-		if shellName != "bash" && shellName != "zsh" && shellName != "fish" {
-			return "", ErrUnknownShell
-		}
-		return "", nil
-	}
-	if err := validateDir(dir); err != nil {
-		return "", err
-	}
-	if err := validateArgs(args); err != nil {
-		return "", err
-	}
-	switch shellName {
-	case "bash", "zsh":
-		return fmt.Sprintf("%s() { %s=%s command %s%s \"$@\"; }\n",
-			name, envVar, PosixQuote(dir), command, quoted(args, PosixQuote)), nil
-	case "fish":
-		return fmt.Sprintf("function %s; env %s=%s %s%s $argv; end\n",
-			name, envVar, fishSingleQuote(dir), command, quoted(args, fishSingleQuote)), nil
-	default:
-		return "", ErrUnknownShell
-	}
-}
 
 // RcPath is the conventional startup file for a shell, absolute. It does not
 // check whether the file exists — callers create it on write.
