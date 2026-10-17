@@ -262,6 +262,15 @@ func boxRow(segs []seg, w int) string {
 }
 func boxBlank(w int) string { return boxRow(nil, w) }
 
+// hintRow is the refusal line a form shows under its fields: red, cut to the
+// frame, or a blank row while there is no hint to show.
+func hintRow(hint string, w int) string {
+	if hint == "" {
+		return boxBlank(w)
+	}
+	return boxRow([]seg{pad(2), {"⚠ " + trunc(hint, w-4), inkRed}}, w)
+}
+
 // Size is the terminal geometry a frame renders into. Zero values fall back to a
 // conventional 80x24, so a pure render is always well-defined (tests, pipes, a
 // terminal that won't report its size).
@@ -666,30 +675,13 @@ func RenderSetupResult(r SetupResult, sz Size) string {
 
 // driveSetupResult shows the result and waits for an exit key.
 func driveSetupResult(r SetupResult, g *geom, in io.Reader, out io.Writer) error {
-	rd := bufio.NewReader(in)
-	for {
-		fmt.Fprint(out, repaint(g)+RenderSetupResult(r, g.get()))
-		k, err := readKey(rd)
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		if k == keyQuit || k == keyEnter || k == keyCopy {
-			return nil
-		}
-	}
+	return screenLoop(g, in, out, readKey, func(sz Size) string { return RenderSetupResult(r, sz) },
+		func(k key) bool { return k == keyQuit || k == keyEnter || k == keyCopy })
 }
 
 // RunSetupResult shows the setup result screen on /dev/tty.
 func RunSetupResult(r SetupResult) error {
-	tty, g, restore, err := openRawTTY()
-	if err != nil {
-		return err
-	}
-	defer restore()
-	return driveSetupResult(r, g, tty, tty)
+	return onTTYErr(func(tty *os.File, g *geom) error { return driveSetupResult(r, g, tty, tty) })
 }
 
 // --- Add profile --------------------------------------------------------------
@@ -793,13 +785,7 @@ func RenderAdd(currentLogin, provider string, f AddForm, hint string, sz Size) s
 		lines = append(lines, input(2, "settings  ", f.Settings, "glm · custom — or a path"))
 	}
 
-	lines = append(lines, boxBlank(w))
-	if hint != "" {
-		lines = append(lines, boxRow([]seg{pad(2), {"⚠ " + trunc(hint, w-4), inkRed}}, w))
-	} else {
-		lines = append(lines, boxBlank(w))
-	}
-	lines = append(lines, boxBottom(w))
+	lines = append(lines, boxBlank(w), hintRow(hint, w), boxBottom(w))
 
 	// The name becomes the launcher command, so spell that out.
 	tip := "type name"
@@ -814,50 +800,46 @@ func RenderAdd(currentLogin, provider string, f AddForm, hint string, sz Size) s
 // filters keystrokes so the name field can only ever hold command-safe chars.
 func driveAdd(currentLogin, providerName string, withSettings bool, g *geom, in io.Reader, out io.Writer) (AddResult, error) {
 	f, hint := AddForm{WithSettings: withSettings}, ""
-	r := bufio.NewReader(in)
-	for {
-		fmt.Fprint(out, repaint(g)+RenderAdd(currentLogin, providerName, f, hint, g.get()))
-		b, err := r.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				return AddResult{}, nil
+	var result AddResult
+	err := screenLoop(g, in, out, (*bufio.Reader).ReadByte,
+		func(sz Size) string { return RenderAdd(currentLogin, providerName, f, hint, sz) },
+		func(b byte) bool {
+			// focused is the text the keystroke edits; the name field is the only
+			// one with a narrower alphabet.
+			focused := []*string{&f.Name, &f.Dir, &f.Settings}[f.Field]
+			switch b {
+			case 0x1b, 3: // Esc / Ctrl-C
+				return true
+			case '\t':
+				f.Field, hint = (f.Field+1)%f.fields(), ""
+			case '\r', '\n':
+				if !ValidName(f.Name) {
+					f.Field, hint = 0, "name: a letter first, then letters, digits, - or _"
+					return false
+				}
+				d := f.Dir
+				if d == "" {
+					d = defaultDir(providerName, f.Name)
+				}
+				settings, err := resolveSettings(providerName, d, f.Settings)
+				if err != nil {
+					hint = err.Error() // e.g. an existing target — nothing was overwritten
+					return false
+				}
+				result = AddResult{Name: f.Name, Dir: d, Settings: settings, OK: true}
+				return true
+			case 0x7f, 0x08: // Backspace / Delete
+				*focused, hint = trimLastByte(*focused), ""
+			default:
+				if (f.Field == 0 && nameByte(b)) || (f.Field > 0 && printableByte(b)) {
+					*focused += string(b)
+				}
+				hint = ""
 			}
-			return AddResult{}, err
-		}
-		// focused is the text the keystroke edits; the name field is the only
-		// one with a narrower alphabet.
-		focused := []*string{&f.Name, &f.Dir, &f.Settings}[f.Field]
-		switch b {
-		case 0x1b, 3: // Esc / Ctrl-C
-			return AddResult{}, nil
-		case '\t':
-			f.Field, hint = (f.Field+1)%f.fields(), ""
-		case '\r', '\n':
-			if !ValidName(f.Name) {
-				f.Field, hint = 0, "name: a letter first, then letters, digits, - or _"
-				continue
-			}
-			d := f.Dir
-			if d == "" {
-				d = defaultDir(providerName, f.Name)
-			}
-			settings, err := resolveSettings(providerName, d, f.Settings)
-			if err != nil {
-				hint = err.Error() // e.g. an existing target — nothing was overwritten
-				continue
-			}
-			return AddResult{Name: f.Name, Dir: d, Settings: settings, OK: true}, nil
-		case 0x7f, 0x08: // Backspace / Delete
-			*focused, hint = trimLastByte(*focused), ""
-		default:
-			if (f.Field == 0 && nameByte(b)) || (f.Field > 0 && printableByte(b)) {
-				*focused += string(b)
-			}
-			hint = ""
-		}
-	}
+			return false
+		})
+	return result, err
 }
-
 func trimLastByte(s string) string {
 	if s == "" {
 		return s
@@ -937,39 +919,36 @@ func launchName(buf string) string {
 // or "" when cancelled (including an unchanged name — the caller no-ops either).
 func driveRename(oldName string, taken map[string]bool, g *geom, in io.Reader, out io.Writer) (string, error) {
 	buf, hint := oldName, ""
-	r := bufio.NewReader(in)
-	for {
-		fmt.Fprint(out, repaint(g)+RenderRename(oldName, buf, hint, g.get()))
-		b, err := r.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				return "", nil
-			}
-			return "", err
-		}
-		switch b {
-		case 0x1b, 3: // Esc / Ctrl-C
-			return "", nil
-		case '\r', '\n':
-			switch {
-			case buf == oldName:
-				return "", nil // unchanged — nothing to do
-			case !ValidName(buf):
-				hint = "name: a letter first, then letters, digits, - or _"
-			case taken[buf]:
-				hint = "a profile named " + buf + " already exists"
+	var chosen string
+	err := screenLoop(g, in, out, (*bufio.Reader).ReadByte,
+		func(sz Size) string { return RenderRename(oldName, buf, hint, sz) },
+		func(b byte) bool {
+			switch b {
+			case 0x1b, 3: // Esc / Ctrl-C
+				return true
+			case '\r', '\n':
+				switch {
+				case buf == oldName:
+					return true // unchanged — nothing to do
+				case !ValidName(buf):
+					hint = "name: a letter first, then letters, digits, - or _"
+				case taken[buf]:
+					hint = "a profile named " + buf + " already exists"
+				default:
+					chosen = buf
+					return true
+				}
+			case 0x7f, 0x08:
+				buf, hint = trimLastByte(buf), ""
 			default:
-				return buf, nil
+				if nameByte(b) {
+					buf += string(b)
+				}
+				hint = ""
 			}
-		case 0x7f, 0x08:
-			buf, hint = trimLastByte(buf), ""
-		default:
-			if nameByte(b) {
-				buf += string(b)
-			}
-			hint = ""
-		}
-	}
+			return false
+		})
+	return chosen, err
 }
 
 // --- Generic list + message screens ------------------------------------------
@@ -1020,47 +999,37 @@ func RenderList(title string, items []ListItem, cursor int, sz Size) string {
 // driveList is the selection loop, decoupled from /dev/tty for tests. Returns the
 // chosen index, or -1 if cancelled.
 func driveList(title string, items []ListItem, g *geom, in io.Reader, out io.Writer) (int, error) {
-	cursor := 0
+	cursor, chosen := 0, -1
 	if len(items) == 0 {
 		cursor = -1
 	}
-	r := bufio.NewReader(in)
-	for {
-		fmt.Fprint(out, repaint(g)+RenderList(title, items, cursor, g.get()))
-		k, err := readKey(r)
-		if err != nil {
-			if err == io.EOF {
-				return -1, nil
+	err := screenLoop(g, in, out, readKey, func(sz Size) string { return RenderList(title, items, cursor, sz) },
+		func(k key) bool {
+			switch k {
+			case keyUp:
+				if cursor > 0 {
+					cursor--
+				}
+			case keyDown:
+				if cursor >= 0 && cursor < len(items)-1 {
+					cursor++
+				}
+			case keyEnter:
+				if cursor >= 0 {
+					chosen = cursor
+					return true
+				}
+			case keyQuit, keyCopy:
+				return true
 			}
-			return -1, err
-		}
-		switch k {
-		case keyUp:
-			if cursor > 0 {
-				cursor--
-			}
-		case keyDown:
-			if cursor >= 0 && cursor < len(items)-1 {
-				cursor++
-			}
-		case keyEnter:
-			if cursor >= 0 {
-				return cursor, nil
-			}
-		case keyQuit, keyCopy:
-			return -1, nil
-		}
-	}
+			return false
+		})
+	return chosen, err
 }
 
 // RunList shows a selection list on /dev/tty and returns the chosen index or -1.
 func RunList(title string, items []ListItem) (int, error) {
-	tty, g, restore, err := openRawTTY()
-	if err != nil {
-		return -1, err
-	}
-	defer restore()
-	return driveList(title, items, g, tty, tty)
+	return onTTY(-1, func(tty *os.File, g *geom) (int, error) { return driveList(title, items, g, tty, tty) })
 }
 
 // Line is one body line of a framed message. Color is an exported palette name
@@ -1131,66 +1100,61 @@ func renderCheckMessage(title string, body []Line, note Line, box *Checkbox, che
 
 // RunMessage shows a framed message on /dev/tty until an exit key.
 func RunMessage(title string, body []Line) error {
-	tty, g, restore, err := openRawTTY()
-	if err != nil {
-		return err
-	}
-	defer restore()
-	return driveMessage(title, func(bool) []Line { return body }, nil, g, tty, tty, clipCopy)
+	return runMessage(title, func(bool) []Line { return body }, nil)
 }
 
 // RunMessageCheck is RunMessage with a checkbox (default unchecked). body is
 // rebuilt for the box's state on every repaint, so the lines shown and the lines
 // ^C copies always agree.
 func RunMessageCheck(title string, box Checkbox, body func(checked bool) []Line) error {
-	tty, g, restore, err := openRawTTY()
-	if err != nil {
-		return err
-	}
-	defer restore()
-	return driveMessage(title, body, &box, g, tty, tty, clipCopy)
+	return runMessage(title, body, &box)
+}
+
+// runMessage is the one message path: both entry points open the terminal and
+// run driveMessage on it.
+func runMessage(title string, body func(checked bool) []Line, box *Checkbox) error {
+	return onTTYErr(func(tty *os.File, g *geom) error {
+		return driveMessage(title, body, box, g, tty, tty, clipCopy)
+	})
 }
 
 // driveMessage runs a message screen until an exit key, decoupled from /dev/tty
 // for tests. box nil means no checkbox, and space and b do nothing. clip is the
 // clipboard writer, reporting whether it succeeded.
 func driveMessage(title string, body func(checked bool) []Line, box *Checkbox, g *geom, in io.Reader, out io.Writer, clip func(string) bool) error {
-	r := bufio.NewReader(in)
 	var note Line
 	checked := false
-	for {
-		lines := body(checked)
-		fmt.Fprint(out, repaint(g)+renderCheckMessage(title, lines, note, box, checked, g.get()))
-		k, err := readKey(r)
-		if err != nil {
-			if err == io.EOF {
-				return nil
+	var lines []Line // the body as last drawn, so ^C copies what is on screen
+	return screenLoop(g, in, out, readKey,
+		func(sz Size) string {
+			lines = body(checked)
+			return renderCheckMessage(title, lines, note, box, checked, sz)
+		},
+		func(k key) bool {
+			switch k {
+			case keyQuit, keyEnter:
+				return true
+			case keyToggle:
+				if box != nil {
+					checked = !checked
+					note = Line{}
+				}
+			case keyCopy:
+				// Ctrl-C on a screen whose whole point is a command you're about to
+				// run: copy it rather than close, which is what the key means
+				// everywhere else text is on screen. `q` still closes.
+				text := copyText(lines)
+				switch {
+				case text == "":
+					return true // nothing to copy — fall back to closing
+				case clip(text):
+					note = Line{Text: "✓ copied to clipboard", Color: Green}
+				default:
+					note = Line{Text: "no clipboard tool (pbcopy/wl-copy/xclip/xsel)", Color: Red}
+				}
 			}
-			return err
-		}
-		switch k {
-		case keyQuit, keyEnter:
-			return nil
-		case keyToggle:
-			if box != nil {
-				checked = !checked
-				note = Line{}
-			}
-		case keyCopy:
-			// Ctrl-C on a screen whose whole point is a command you're about to
-			// run: copy it rather than close, which is what the key means
-			// everywhere else text is on screen. `q` still closes.
-			text := copyText(lines)
-			switch {
-			case text == "":
-				return nil // nothing to copy — fall back to closing
-			case clip(text):
-				note = Line{Text: "✓ copied to clipboard", Color: Green}
-			default:
-				note = Line{Text: "no clipboard tool (pbcopy/wl-copy/xclip/xsel)", Color: Red}
-			}
-		}
-	}
+			return false
+		})
 }
 
 // --- Terminal driving ---------------------------------------------------------
@@ -1314,15 +1278,56 @@ func repaint(g *geom) string {
 	return ""
 }
 
+// openTerminal is openRawTTY behind a seam, so a test can watch the restore.
+var openTerminal = openRawTTY
+
+// onTTY runs fn on /dev/tty in raw mode and restores the terminal on every
+// return path: normal exit, a key-driven exit, or an error. zero is what the
+// caller gets back when the terminal cannot be opened.
+func onTTY[T any](zero T, fn func(tty *os.File, g *geom) (T, error)) (T, error) {
+	tty, g, restore, err := openTerminal()
+	if err != nil {
+		return zero, err
+	}
+	defer restore()
+	return fn(tty, g)
+}
+
+// onTTYErr is onTTY for a screen with no result.
+func onTTYErr(fn func(tty *os.File, g *geom) error) error {
+	_, err := onTTY(struct{}{}, func(tty *os.File, g *geom) (struct{}, error) {
+		return struct{}{}, fn(tty, g)
+	})
+	return err
+}
+
+// screenLoop is the loop every framed screen shares: repaint, read one input
+// (a key, or a raw byte for the text forms), hand it to handle. frame renders the
+// screen at the live geometry, and handle reports true once the screen is done.
+// End of input ends the loop quietly; any other read error is returned.
+func screenLoop[K any](g *geom, in io.Reader, out io.Writer, read func(*bufio.Reader) (K, error), frame func(Size) string, handle func(K) bool) error {
+	r := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, repaint(g)+frame(g.get()))
+		k, err := read(r)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if handle(k) {
+			return nil
+		}
+	}
+}
+
 // Run shows the profile launcher on /dev/tty and returns the user's Result.
 // setupNeeded surfaces the "install the shortcut commands" nudge.
 func Run(rows []Row, setupNeeded bool) (Result, error) {
-	tty, g, restore, err := openRawTTY()
-	if err != nil {
-		return Result{Kind: Cancelled}, err
-	}
-	defer restore()
-	return animate(rows, setupNeeded, g, tty)
+	return onTTY(Result{Kind: Cancelled}, func(tty *os.File, g *geom) (Result, error) {
+		return animate(rows, setupNeeded, g, tty)
+	})
 }
 
 // animate is the live picker loop: it reads keys in a goroutine and repaints on a
@@ -1353,11 +1358,7 @@ func animate(rows []Row, setupNeeded bool, g *geom, tty *os.File) (Result, error
 	for {
 		sz := g.get()
 		fmt.Fprint(tty, repaint(g))
-		if st.confirm >= 0 {
-			fmt.Fprint(tty, RenderRemove(rows[st.confirm], sz))
-		} else {
-			fmt.Fprint(tty, renderFrame(rows, st.cursor, setupNeeded, phase, sz))
-		}
+		fmt.Fprint(tty, st.frame(rows, setupNeeded, phase, sz))
 		select {
 		case k := <-keys:
 			if res, done := st.handle(rows, k); done {
@@ -1373,12 +1374,9 @@ func animate(rows []Row, setupNeeded bool, g *geom, tty *os.File) (Result, error
 // currentLogin (may be "") is shown for context; withSettings adds the optional
 // settings-file field.
 func RunAdd(currentLogin, provider string, withSettings bool) (AddResult, error) {
-	tty, g, restore, err := openRawTTY()
-	if err != nil {
-		return AddResult{}, err
-	}
-	defer restore()
-	return driveAdd(currentLogin, provider, withSettings, g, tty, tty)
+	return onTTY(AddResult{}, func(tty *os.File, g *geom) (AddResult, error) {
+		return driveAdd(currentLogin, provider, withSettings, g, tty, tty)
+	})
 }
 
 // RunRename shows the rename screen on /dev/tty. taken is the set of other
@@ -1389,12 +1387,9 @@ func RunRename(oldName string, taken []string) (string, error) {
 	for _, n := range taken {
 		set[n] = true
 	}
-	tty, g, restore, err := openRawTTY()
-	if err != nil {
-		return "", err
-	}
-	defer restore()
-	return driveRename(oldName, set, g, tty, tty)
+	return onTTY("", func(tty *os.File, g *geom) (string, error) {
+		return driveRename(oldName, set, g, tty, tty)
+	})
 }
 
 // pickerState is the cursor + remove-confirm state shared by the testable drive
@@ -1453,29 +1448,28 @@ func (s *pickerState) handle(rows []Row, k key) (Result, bool) {
 	return Result{}, false
 }
 
+// frame draws the picker as it stands: the remove confirm while one is pending,
+// the list otherwise. Both loops draw through it.
+func (s *pickerState) frame(rows []Row, setupNeeded bool, phase int, sz Size) string {
+	if s.confirm >= 0 {
+		return RenderRemove(rows[s.confirm], sz)
+	}
+	return renderFrame(rows, s.cursor, setupNeeded, phase, sz)
+}
+
 // drive is the non-animated launcher loop, decoupled from /dev/tty for tests.
 func drive(rows []Row, setupNeeded bool, g *geom, in io.Reader, out io.Writer) (Result, error) {
 	st := pickerState{cursor: initialCursor(rows), confirm: -1}
-	r := bufio.NewReader(in)
-	for {
-		sz := g.get()
-		fmt.Fprint(out, repaint(g))
-		if st.confirm >= 0 {
-			fmt.Fprint(out, RenderRemove(rows[st.confirm], sz))
-		} else {
-			fmt.Fprint(out, Render(rows, st.cursor, setupNeeded, sz))
-		}
-		k, err := readKey(r)
-		if err != nil {
-			if err == io.EOF {
-				return Result{Kind: Cancelled}, nil
+	res := Result{Kind: Cancelled}
+	err := screenLoop(g, in, out, readKey, func(sz Size) string { return st.frame(rows, setupNeeded, 0, sz) },
+		func(k key) bool {
+			r, done := st.handle(rows, k)
+			if done {
+				res = r
 			}
-			return Result{Kind: Cancelled}, err
-		}
-		if res, done := st.handle(rows, k); done {
-			return res, nil
-		}
-	}
+			return done
+		})
+	return res, err
 }
 
 // initialCursor lands on the first launchable profile, else the first row (so an
