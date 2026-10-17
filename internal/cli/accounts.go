@@ -194,6 +194,9 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 		if !tui.ValidName(account) {
 			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", account)
 		}
+		if owner, taken := ownerOf(c, account); taken {
+			return nameTakenError(account, owner)
+		}
 		env := envOverride
 		if env == "" {
 			env, _ = provider.EnvVar(c, providerName) // preset, else ""
@@ -216,6 +219,23 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 		c.Providers[providerName] = p
 		return nil
 	})
+}
+
+// ownerOf reports the provider that already registers account, if any. The
+// launcher is named by the bare account, so a name belongs to one provider across
+// the whole config: a second provider's account of that name would overwrite the
+// first one's command.
+func ownerOf(c *config.Config, account string) (string, bool) {
+	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
+		if _, ok := c.Providers[pn].Accounts[account]; ok {
+			return pn, true
+		}
+	}
+	return "", false
+}
+
+func nameTakenError(account, owner string) error {
+	return fmt.Errorf("account %q already exists under %s: launchers are named by account, so one name cannot serve two providers", account, owner)
 }
 
 func newRemoveCmd() *cobra.Command {
@@ -291,8 +311,8 @@ func renameAccount(path, providerName, oldName, newName string) error {
 		if !ok {
 			return fmt.Errorf("unknown account %q", oldName)
 		}
-		if _, exists := p.Accounts[newName]; exists {
-			return fmt.Errorf("account %q already exists", newName)
+		if owner, taken := ownerOf(c, newName); taken {
+			return nameTakenError(newName, owner)
 		}
 		p.Accounts[newName] = acct
 		delete(p.Accounts, oldName)

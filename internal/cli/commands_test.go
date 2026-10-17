@@ -605,3 +605,43 @@ func TestSaveAccountSettings(t *testing.T) {
 		t.Fatal("want an error for --settings on a provider without a settings flag")
 	}
 }
+
+// A launcher is named by the bare account, so an account name may belong to one
+// provider only: codex "work" after claude "work" would silently take the command.
+func TestSaveAccountRefusesNameTakenByAnotherProvider(t *testing.T) {
+	path := withTempConfig(t)
+	seedConfig(t, path, t.TempDir(), 0) // claude "work"
+
+	err := saveAccount(path, "codex", "work", t.TempDir(), 0, "", "", "")
+	if err == nil {
+		t.Fatal("expected codex work to be refused while claude work exists")
+	}
+	if !strings.Contains(err.Error(), "claude") {
+		t.Errorf("the refusal should name the provider that owns the name: %v", err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Providers["codex"].Accounts["work"]; ok {
+		t.Fatal("refused add still wrote codex work")
+	}
+}
+
+func TestRenameAccountRefusesNameTakenByAnotherProvider(t *testing.T) {
+	path := withTempConfig(t)
+	c := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]config.Account{
+			"work": {Dir: t.TempDir()},
+		}},
+		"codex": {EnvVar: "CODEX_HOME", Accounts: map[string]config.Account{
+			"personal": {Dir: t.TempDir()},
+		}},
+	}}
+	if err := config.Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameAccount(path, "codex", "personal", "work"); err == nil {
+		t.Fatal("expected rename onto a name claude already uses to be refused")
+	}
+}
