@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/BurntSushi/toml"
+	"github.com/CarlosDanielDev/aiacc/internal/fsutil"
 )
 
 type Account struct {
@@ -89,23 +91,12 @@ func Save(path string, c *Config) error {
 	if info, err := os.Stat(target); err == nil {
 		mode = info.Mode().Perm()
 	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(target)+".tmp")
-	if err != nil {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename has moved it away
-	if err := toml.NewEncoder(tmp).Encode(c); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, mode); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, target)
+	return fsutil.WriteFileAtomic(target, buf.Bytes(), mode,
+		fsutil.Options{Pattern: filepath.Base(target) + ".tmp*"})
 }
 
 // Update runs mutate on the loaded config under an exclusive file lock that

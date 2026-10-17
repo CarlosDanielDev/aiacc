@@ -3,11 +3,12 @@ package provider
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/CarlosDanielDev/aiacc/internal/fsutil"
 )
 
 // This file is the one place aiacc reads and rewrites an account's settings
@@ -105,7 +106,7 @@ func EditSettings(path string, e SettingsEdit) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(real, mode, append(out, '\n'))
+	return writeSettings(real, mode, append(out, '\n'))
 }
 
 // loadSettings reads and validates the settings file at path. It returns the
@@ -183,6 +184,10 @@ func ResetSettingsWritesForTest() {
 // renaming it, the window a signal must not leave a token behind in.
 var SettingsWriteWindow = func() {}
 
+// SettingsCreateWindow is a test seam: it runs between creating the temp file
+// and registering it, under the registry lock. No abort can run in that window.
+var SettingsCreateWindow = func(tmp string) {}
+
 // AbortSettingsWrites removes the temp file of every write in flight and refuses
 // any write after it. The signal path calls it before the process exits.
 func AbortSettingsWrites() {
@@ -195,51 +200,38 @@ func AbortSettingsWrites() {
 	}
 }
 
-// writeFileAtomic replaces the file at path with data: a temp file in the same
-// directory gets the new contents and the target mode, then renames over it.
-func writeFileAtomic(path string, mode fs.FileMode, data []byte) error {
+// writeSettings replaces the settings file at path with data through the shared
+// atomic writer. The registry lock is held from the temp file's creation until
+// it is registered, so AbortSettingsWrites either sees the temp or runs before
+// the write starts; it never runs in the gap between the two.
+func writeSettings(path string, mode fs.FileMode, data []byte) error {
+	return fsutil.WriteFileAtomic(path, data, mode, fsutil.Options{
+		Pattern:      ".settings-*.tmp",
+		Guard:        guardWrites,
+		AfterCreate:  SettingsCreateWindow,
+		Track:        trackWrite,
+		BeforeRename: SettingsWriteWindow,
+	})
+}
+
+// guardWrites takes the registry lock for a write's create-and-register step.
+func guardWrites() func() {
 	writes.Lock()
+	return writes.Unlock
+}
+
+// trackWrite registers a write's temp file so an abort can remove it, or
+// refuses the write if the registry is already aborted. It runs under the
+// guard, so it does not lock. The returned func forgets the temp once it is
+// gone, so an abort never touches a name that is no longer ours.
+func trackWrite(tmp string) (func(), error) {
 	if writes.aborted {
-		writes.Unlock()
-		return errWritesAborted
+		return nil, errWritesAborted
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".settings-*.tmp")
-	if err != nil {
-		writes.Unlock()
-		return err
-	}
-	tmpName := tmp.Name()
-	writes.temps[tmpName] = true
-	writes.Unlock()
-	// Forget the temp once it is gone (renamed or removed), so an abort never
-	// touches a name that is no longer ours.
-	defer func() {
+	writes.temps[tmp] = true
+	return func() {
 		writes.Lock()
-		delete(writes.temps, tmpName)
+		delete(writes.temps, tmp)
 		writes.Unlock()
-	}()
-	fail := func(err error) error {
-		tmp.Close()
-		os.Remove(tmpName) // leave no half-written file behind
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	SettingsWriteWindow()
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("replace %s: %w", filepath.Base(path), err)
-	}
-	return nil
+	}, nil
 }
