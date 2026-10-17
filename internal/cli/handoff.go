@@ -28,7 +28,12 @@ func newHandoffCmd() *cobra.Command {
 			"continue the same conversation under a different account — e.g. when one " +
 			"hits its usage limit. Only the transcript is copied; credentials are never " +
 			"touched.\n\nRun with no arguments in a terminal for an interactive picker, " +
-			"or give <provider> <from> <to> to hand off the most recent session directly.",
+			"or give <provider> <from> <to> to hand off the most recent session directly." +
+			"\n\nSubagents: a hand-off copies the main session transcript only, not the " +
+			"subagents/ run files. A subagent that had already finished has its final report " +
+			"in that transcript. A subagent still running or paused when you hand off does not " +
+			"resume in the new account, and you should not expect a notification from it after " +
+			"--resume; re-run it there if you still need its result.",
 		Args: cobra.MaximumNArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := configPath()
