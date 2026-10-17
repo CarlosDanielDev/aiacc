@@ -136,25 +136,32 @@ func writeLauncher(binDir, name, command, envVar, dir string, args ...string) er
 	return os.WriteFile(filepath.Join(binDir, name), []byte(content), 0o755)
 }
 
-// syncLauncher (re)writes one account's launcher if setup has been run (the bin
-// dir exists), so `add` keeps the commands current without a manual re-setup.
-// Best-effort: a failure here never fails the add.
-func syncLauncher(cfgPath, providerName, account string) {
+// syncLauncher (re)writes one account's launcher so `add` keeps the commands
+// current without a manual re-setup. A config that was never set up has no
+// launcher dir and is skipped silently: `aiacc setup` creates it. A recorded dir
+// that has since disappeared is an error, not a skip, and nothing is written
+// elsewhere: the launcher would land in a dir setup did not choose. Callers
+// report the error; it never fails the add itself.
+func syncLauncher(cfgPath, providerName, account string) error {
 	c, err := config.Load(cfgPath)
 	if err != nil {
-		return
+		return nil
 	}
 	binDir := setupBinDir(c)
 	if info, err := os.Stat(binDir); err != nil || !info.IsDir() {
-		return // not set up yet; `aiacc setup` will create it
+		if c.BinDir != "" {
+			return fmt.Errorf("%s is gone, so %s has no launcher; run `aiacc setup` to reinstall the commands", tildeize(binDir), account)
+		}
+		return nil // never set up; `aiacc setup` will create the dir
 	}
 	cmd := launchCommand(c, providerName)
 	env, _ := provider.EnvVar(c, providerName)
 	dir, err := provider.AccountDir(c, providerName, account)
 	if err != nil || cmd == "" || env == "" {
-		return
+		return nil
 	}
 	_ = writeLauncher(binDir, account, cmd, env, dir, provider.LaunchArgs(c, providerName, account)...)
+	return nil
 }
 
 // removeLauncher deletes an account's launcher script if present. Best-effort.

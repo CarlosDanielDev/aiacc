@@ -80,8 +80,10 @@ func newAddCmd() *cobra.Command {
 			if err := saveAccount(path, providerName, account, dir, quota, envVar, command, settings); err != nil {
 				return err
 			}
-			syncLauncher(path, providerName, account) // keep the command in sync
-			linkProfile(providerName, realDir)        // same skills/agents as the bare CLI
+			if err := syncLauncher(path, providerName, account); err != nil { // keep the command in sync
+				fmt.Fprintln(cmd.ErrOrStderr(), "aiacc:", err)
+			}
+			linkProfile(providerName, realDir) // same skills/agents as the bare CLI
 			return nil
 		},
 	}
@@ -255,7 +257,7 @@ func newRenameCmd() *cobra.Command {
 		Use:   "rename <provider> <old> <new>",
 		Short: "Rename an account (and its launcher command)",
 		Args:  cobra.ExactArgs(3),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := configPath()
 			if err != nil {
 				return err
@@ -263,8 +265,10 @@ func newRenameCmd() *cobra.Command {
 			if err := renameAccount(path, args[0], args[1], args[2]); err != nil {
 				return err
 			}
-			removeLauncher(path, args[1])        // drop the old command
-			syncLauncher(path, args[0], args[2]) // install the new one
+			removeLauncher(path, args[1])                                // drop the old command
+			if err := syncLauncher(path, args[0], args[2]); err != nil { // install the new one
+				fmt.Fprintln(cmd.ErrOrStderr(), "aiacc:", err)
+			}
 			return nil
 		},
 	}

@@ -59,8 +59,8 @@ func runPicker(filter string) error {
 				if err := renameAccount(path, row.Provider, row.Account, newName); err != nil {
 					return err
 				}
-				removeLauncher(path, row.Account)         // drop old command
-				syncLauncher(path, row.Provider, newName) // install new one
+				removeLauncher(path, row.Account)             // drop old command
+				_ = syncLauncher(path, row.Provider, newName) // a gone dir shows as the picker's setup nudge
 			}
 			continue
 		case tui.Handoff:
@@ -151,8 +151,8 @@ func runAddTUI(cfgPath string) error {
 	if err := saveAccount(cfgPath, prov, res.Name, res.Dir, 0, "", "", res.Settings); err != nil {
 		return err
 	}
-	syncLauncher(cfgPath, prov, res.Name) // keep the command in sync (best-effort)
-	linkProfile(prov, dir)                // same skills/agents as the bare CLI
+	_ = syncLauncher(cfgPath, prov, res.Name) // a gone dir shows as the picker's setup nudge
+	linkProfile(prov, dir)                    // same skills/agents as the bare CLI
 	return nil
 }
 
