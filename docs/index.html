@@ -495,7 +495,7 @@
           </div>
           <div class="frame-status"><span class="t-green">◆ 3 profiles</span><span class="t-green">✓ ready</span></div>
         </div>
-        <div class="legend mono"><span class="t-dim">↑↓ move</span>  <span class="t-cyan">⏎</span> launch  <span class="t-cyan">a</span> add  <span class="t-cyan">d</span> remove  <span class="t-cyan">q</span> quit</div>
+        <div class="legend mono"><span class="t-dim">↑↓ move</span>  <span class="t-cyan">⏎</span> launch  <span class="t-cyan">a</span> add  <span class="t-cyan">e</span> edit  <span class="t-cyan">d</span> remove  <span class="t-cyan">q</span> quit</div>
       <div class="launch-line mono"><span class="prompt">$ </span><span class="typed" id="typed"></span><span class="cursor">▌</span></div>
       <div class="launch-out mono" id="launch-out" hidden><span class="ok">✓</span> Claude Code opened — signed in as carlos@work.io</div>
     </div></div>
@@ -516,7 +516,7 @@
       </div>
       <div class="card">
         <h3>interactive picker</h3>
-        <p>A bare <code>aiacc</code> lists every profile with its login. Arrow keys to launch, <code>a</code> to add, <code>r</code> to rename, <code>d</code> to remove — all in the frame.</p>
+        <p>A bare <code>aiacc</code> lists every profile with its login. Arrow keys to launch, <code>a</code> to add, <code>r</code> to rename, <code>e</code> to edit a settings account&rsquo;s endpoint or key, <code>d</code> to remove — all in the frame.</p>
       </div>
       <div class="card">
         <h3>same skills everywhere</h3>
@@ -582,7 +582,7 @@ claude-personal    <span class="c"># a different account entirely</span></pre>
           <div class="step">
             <div>
               <h3>Paste your key. That's it.</h3>
-              <p>Open the generated file, replace the placeholder with your key. aiacc stores the path and never reads the file — your key never enters aiacc.</p>
+              <p>Open the generated file, replace the placeholder with your key. aiacc stores the path and never reads the file on its own — your key never enters aiacc unless you edit it there with <code>e</code>, which rewrites only the endpoint keys and never shows the token.</p>
               <pre>claude-glm         <span class="c"># Claude Code on GLM, from any directory</span></pre>
             </div>
           </div>
@@ -617,6 +617,7 @@ claude-personal    <span class="c"># a different account entirely</span></pre>
         <tr><th>key</th><th>action</th><th>key</th><th>action</th></tr>
         <tr><td><kbd>↑↓</kbd><kbd>j k</kbd></td><td>move</td><td><kbd>a</kbd></td><td>add a profile</td></tr>
         <tr><td><kbd>⏎</kbd></td><td>launch it</td><td><kbd>r</kbd></td><td>rename (command follows)</td></tr>
+        <tr><td><kbd>e</kbd></td><td>edit endpoint, model or key</td><td><kbd>h</kbd></td><td>hand a session off</td></tr>
         <tr><td><kbd>h</kbd></td><td>hand a session off</td><td><kbd>d</kbd></td><td>remove — asks first</td></tr>
         <tr><td><kbd>s</kbd></td><td>install launchers</td><td><kbd>q</kbd></td><td>quit</td></tr>
       </table>
