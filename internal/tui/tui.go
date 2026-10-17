@@ -80,6 +80,7 @@ const (
 	Handoff                     // pressed `h`; the caller runs the handoff flow from Index
 	Remove                      // confirmed removing Index
 	Setup                       // pressed `s`; the caller runs shell setup
+	Edit                        // pressed `e`; the caller runs the edit screen on Index
 )
 
 // Result is what Run/drive returns. Index is meaningful for Launch and Remove.
@@ -512,7 +513,7 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) s
 			name += " (" + r.Provider + ")"
 		}
 		// Settings tag: the file's basename only — the path is data aiacc already
-		// owns and the file itself is never read (it may hold a key).
+		// owns. Only the edit action reads the file, and never shows its key.
 		tag := ""
 		if r.Settings != "" {
 			tag = " ⚙ " + filepath.Base(r.Settings)
@@ -572,7 +573,7 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) s
 	}
 	lines = append(lines, boxRow(status, w), boxBottom(w))
 
-	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"h", "hand off"}, {"d", "remove"}}
+	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"e", "edit"}, {"h", "hand off"}, {"d", "remove"}}
 	if setupNeeded {
 		pairs = append(pairs, [2]string{"s", "setup"})
 	}
@@ -1140,6 +1141,7 @@ const (
 	keyEnter
 	keyAdd
 	keyRename
+	keyEdit
 	keyHandoff
 	keyRemove
 	keySetup
@@ -1375,6 +1377,10 @@ func (s *pickerState) handle(rows []Row, k key) (Result, bool) {
 		if s.cursor >= 0 {
 			return Result{Kind: Rename, Index: s.cursor}, true
 		}
+	case keyEdit:
+		if s.cursor >= 0 {
+			return Result{Kind: Edit, Index: s.cursor}, true
+		}
 	case keyHandoff:
 		if s.cursor >= 0 {
 			return Result{Kind: Handoff, Index: s.cursor}, true
@@ -1458,6 +1464,8 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyAdd, nil
 	case 'r', 'R':
 		return keyRename, nil
+	case 'e', 'E':
+		return keyEdit, nil
 	case 'h', 'H':
 		return keyHandoff, nil
 	case 'd', 'D':

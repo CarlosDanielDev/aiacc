@@ -63,6 +63,11 @@ func runPicker(filter string) error {
 				syncLauncher(path, row.Provider, newName) // install new one
 			}
 			continue
+		case tui.Edit:
+			if err := runEditTUI(rows[res.Index]); err != nil {
+				return err
+			}
+			continue
 		case tui.Handoff:
 			row := rows[res.Index]
 			if err := runHandoffTUI(path, row.Provider, row.Account); err != nil {

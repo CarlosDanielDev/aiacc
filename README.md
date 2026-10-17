@@ -36,14 +36,14 @@ Bare `aiacc` opens an interactive launcher:
 ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
 ┃  ◆ 3 profiles   ✓ ready                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-  ↑↓ move  ⏎ launch  a add  r rename  h hand off  d remove  q quit
+  ↑↓ move  ⏎ launch  a add  r rename  e edit  h hand off  d remove  q quit
 ```
 
 > Hacker / matrix-terminal skin — **phosphor green on black**, a `>` prompt with
 > a blinking cursor and cyan hotkeys, a `» N profiles :: ✓ READY` status readout,
 > and a **live** `AIACC` logo (dark-green → bright-green → cyan sweep) that
 > **glitches** in short data-tear bursts, plus a reverse-video glow on the
-> selected row. Add / rename / remove / hand off / setup all happen in-screen.
+> selected row. Add / rename / edit / remove / hand off / setup all happen in-screen.
 > Honors `NO_COLOR`.
 >
 > **Responsive** — the frame follows the terminal: it grows and narrows with
@@ -222,9 +222,14 @@ Either way, the launcher runs `claude --settings ~/.claude-glm/glm.json`,
 which layers that file over the shared settings, so `claude-glm` keeps your
 skills, hooks and statusline and talks to its own endpoint from any directory.
 
-aiacc stores only the path and never reads the file — your key never passes
-through aiacc. Keep it private (`chmod 600`); `aiacc doctor` warns when it
-isn't and fails when it's missing.
+aiacc stores only the path and never reads the file on add, launch or doctor —
+your key never passes through aiacc unless you ask. `e` in the picker (edit)
+reads the file and rewrites only `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and
+`ANTHROPIC_MODEL`, keeping every other key. The token is never shown: an empty
+token field keeps the key already there, and a file that isn't valid JSON is
+refused with nothing written. The file stays `0600` (never wider). Keep it
+private (`chmod 600`); `aiacc doctor` warns when it isn't and fails when it's
+missing.
 
 ## 🎛️ Commands
 
@@ -351,8 +356,9 @@ up in the picker next time you run `aiacc`.
 |:--:|---|:--:|---|
 | `↑ ↓` / `j k` | move | `a` | add a profile |
 | `⏎` | launch the selected profile | `r` | rename |
-| `h` | hand off a session | `d` | remove (asks first) |
-| `s` | run setup | `q` / `esc` | quit |
+| `e` | edit endpoint, model or key | `h` | hand off a session |
+| `d` | remove (asks first) | `s` | run setup |
+| `q` / `esc` | quit | | |
 
 On any screen that ends in a command to run — the hand-off result, for one —
 **`ctrl-c` copies it** to your clipboard instead of closing (`q` still closes).
