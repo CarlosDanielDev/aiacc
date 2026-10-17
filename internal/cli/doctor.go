@@ -297,12 +297,14 @@ func checkLaunchers(c *config.Config) []finding {
 		}
 	}
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		cmd := launchCommand(c, pn)
-		env, _ := provider.EnvVar(c, pn)
+		cmd, env, ok := launchable(c, pn)
+		if cmd != "" && env == "" && len(c.Providers[pn].Accounts) > 0 {
+			out = append(out, noEnvFinding(pn, cmd))
+		}
 		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
 			registered[an] = true
 			dir, err := provider.AccountDir(c, pn, an)
-			if err != nil || cmd == "" || env == "" {
+			if err != nil || !ok {
 				continue // setup writes no launcher for these, so there is none to check
 			}
 			if len(owners[an]) == 1 {
@@ -314,6 +316,18 @@ func checkLaunchers(c *config.Config) []finding {
 		}
 	}
 	return append(out, orphanLaunchers(setupBinDir(c), registered)...)
+}
+
+// noEnvFinding reports a provider that has a command but no env var. Setup writes
+// no launcher for its accounts, so they can never run; reporting it here, once
+// for the provider, is the only place that tells the user why.
+func noEnvFinding(pn, cmd string) finding {
+	return finding{sevFail,
+		fmt.Sprintf("%s: no env var configured", pn),
+		[]string{
+			"Its accounts get no launcher until one is set, so none of them can run " + cmd + ".",
+			"  aiacc add " + pn + " <account> --dir <dir> --env <ENV_VAR> --command " + cmd,
+		}}
 }
 
 // checkLauncher compares the script actually on PATH against the one setup would

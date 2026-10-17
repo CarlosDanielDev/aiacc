@@ -44,7 +44,7 @@ func newHandoffCmd() *cobra.Command {
 			return fmt.Errorf("usage: aiacc handoff <provider> <from-account> <to-account>")
 		},
 	}
-	cmd.Flags().StringVar(&sessionID, "session", "", "session id to hand off (default: the most recent)")
+	cmd.Flags().StringVar(&sessionID, "session", "", "session id, or a unique prefix of it as the picker shows (default: the most recent)")
 	cmd.Flags().BoolVar(&launch, "launch", false, "launch Claude Code resuming the session immediately")
 	return cmd
 }

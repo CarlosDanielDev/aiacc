@@ -74,18 +74,35 @@ func List(configDir string) ([]Info, error) {
 	return out, nil
 }
 
-// Find returns the session with the given id under configDir.
+// Find returns the session with the given id under configDir. An id that is not
+// exact may be a prefix — the short form the pickers display — as long as it
+// matches exactly one session; an ambiguous prefix names its candidates.
 func Find(configDir, id string) (Info, error) {
 	list, err := List(configDir)
 	if err != nil {
 		return Info{}, err
 	}
+	var hits []Info
 	for _, s := range list {
 		if s.ID == id {
 			return s, nil
 		}
+		if id != "" && strings.HasPrefix(s.ID, id) {
+			hits = append(hits, s)
+		}
 	}
-	return Info{}, fmt.Errorf("session %q not found", id)
+	switch len(hits) {
+	case 0:
+		return Info{}, fmt.Errorf("session %q not found", id)
+	case 1:
+		return hits[0], nil
+	}
+	ids := make([]string, len(hits))
+	for i, h := range hits {
+		ids[i] = h.ID
+	}
+	return Info{}, fmt.Errorf("session prefix %q is ambiguous, matches %s — use a longer prefix",
+		id, strings.Join(ids, ", "))
 }
 
 // ReadMeta scans a transcript for its cwd, title, branch, and a rough message

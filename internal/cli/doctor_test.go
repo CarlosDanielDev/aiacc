@@ -302,6 +302,36 @@ func TestCheckSettingsFileDirectory(t *testing.T) {
 	}
 }
 
+// A provider with a command but no env var is unlaunchable forever, and setup
+// skips it silently, so doctor is the one place that can say so. It must fail
+// once per provider (not once per account) and name the command that fixes it.
+func TestCheckLaunchersReportsProviderWithoutEnvOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setPath(t, t.TempDir())
+	c := &config.Config{Providers: map[string]config.Provider{
+		"custom": {Command: "mytool", Accounts: map[string]config.Account{
+			"play":  {Dir: filepath.Join(home, "a")},
+			"other": {Dir: filepath.Join(home, "b")},
+		}},
+	}}
+	var hits []finding
+	for _, f := range checkLaunchers(c) {
+		if strings.HasPrefix(f.text, "custom:") {
+			hits = append(hits, f)
+		}
+	}
+	if len(hits) != 1 {
+		t.Fatalf("want exactly one finding for the no-env provider, got %d: %+v", len(hits), hits)
+	}
+	if hits[0].sev != sevFail || !strings.Contains(hits[0].text, "no env var configured") {
+		t.Fatalf("want a failing 'no env var configured' finding, got %+v", hits[0])
+	}
+	if !strings.Contains(strings.Join(hits[0].detail, "\n"), "aiacc add custom <account>") {
+		t.Fatalf("finding does not name the fix command: %v", hits[0].detail)
+	}
+}
+
 // doctor is a CI gate: a broken config must surface as errUnhealthy (non-zero
 // exit), and a clean one must not. Tally alone is not enough; the RunE wiring
 // is what turns a finding into an exit code.
