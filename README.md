@@ -36,7 +36,7 @@ Bare `aiacc` opens an interactive launcher:
 ┃    claude-personal      not logged in        ┃
 ┃    ⚠ old                dir missing          ┃
 ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
-┃  ◆ 3 profiles   ✓ ready                      ┃
+┃  ◆ 3 profiles   ✓ ready              v0.21.0 ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
   ↑↓ move  ⏎ launch  a add  r rename  e edit  h hand off  d remove  q quit
 ```

@@ -7,12 +7,12 @@ import (
 )
 
 // statusLine returns the visible status-bar row of a picker frame: the box row
-// that carries the READY/SETUP readout, with colour escapes stripped.
+// that carries the » readout, with colour escapes stripped.
 func statusLine(t *testing.T, out string) string {
 	t.Helper()
 	for _, ln := range strings.Split(out, "\r\n") {
 		plain := ansi.ReplaceAllString(ln, "")
-		if strings.Contains(plain, "READY") || strings.Contains(plain, "SETUP") {
+		if strings.Contains(plain, "» ") { // the readout's marker; only the status row has it
 			return plain
 		}
 	}
@@ -113,20 +113,39 @@ func TestPickerVersionInBothLayouts(t *testing.T) {
 	}
 }
 
-// The setup readout is a longer status text; the version must still fit beside
-// it or drop, never push it.
+// The setup readout is a longer status text. When the version is shown, the
+// readout must be fully intact and the status row must equal the version-less
+// row plus only the version cell; when the version drops, the row is unchanged.
 func TestPickerVersionWithSetupReadout(t *testing.T) {
-	for _, cols := range []int{34, 40, 60, 80} {
+	for _, cols := range []int{34, 38, 40, 60, 80} {
 		sz := Size{Cols: cols, Rows: 24}
 		with := statusLine(t, renderPicker(sample(), 0, true, 0, "0.21.0", sz))
 		without := statusLine(t, renderPicker(sample(), 0, true, 0, "", sz))
-		if !strings.Contains(with, "SETUP") {
-			t.Errorf("cols=%d: setup readout lost: %q", cols, with)
+		if !strings.Contains(with, "⚡ SETUP") {
+			t.Errorf("cols=%d: setup readout not intact: %q", cols, with)
 		}
-		if !strings.Contains(with, "v0.21.0") && with != without {
-			t.Errorf("cols=%d: readout changed without the version: %q vs %q", cols, with, without)
+		if !strings.Contains(with, "v0.21.0") {
+			if with != without {
+				t.Errorf("cols=%d: readout changed although the version dropped: %q vs %q", cols, with, without)
+			}
+			continue
+		}
+		if got := withoutField(strings.Fields(with), "v0.21.0"); strings.Join(got, " ") != strings.Join(strings.Fields(without), " ") {
+			t.Errorf("cols=%d: version-shown row is not the version-less row plus the version cell:\n%q\n%q", cols, with, without)
 		}
 	}
+}
+
+// withoutField drops every field equal to f, so a row can be compared with and
+// without a cell without caring how the padding around it fell.
+func withoutField(fields []string, f string) []string {
+	var out []string
+	for _, x := range fields {
+		if x != f {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // Size matrix with a version set: the version must never tear the frame, in
