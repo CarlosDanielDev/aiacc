@@ -21,3 +21,28 @@ jobs:
         run: go test ./...
       - name: build
         run: go build ./...
+
+  install-sh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: sh -n
+        run: sh -n install.sh
+      - name: shellcheck
+        run: shellcheck install.sh
+      - name: asset name matches .goreleaser.yaml
+        run: |
+          set -eu
+          project="$(sed -n 's/^project_name: //p' .goreleaser.yaml)"
+          template="$(sed -n 's/^    name_template: "\(.*\)"$/\1/p' .goreleaser.yaml)"
+          binary="$(sed -n 's/^BINARY="\(.*\)"$/\1/p' install.sh)"
+          asset="$(sed -n 's/^asset="\(.*\)\.tar\.gz"$/\1/p' install.sh)"
+          [ -n "$project" ] && [ -n "$template" ] && [ -n "$binary" ] && [ -n "$asset" ] \
+            || { echo "could not read project_name, archive name_template, BINARY or asset from the files"; exit 1; }
+          [ "$project" = "$binary" ] \
+            || { echo "install.sh BINARY=$binary does not match .goreleaser.yaml project_name=$project"; exit 1; }
+          want="$(printf '%s' "$template" | sed -e 's/{{ \.ProjectName }}/PROJECT/' -e 's/{{ \.Os }}/OS/' -e 's/{{ \.Arch }}/ARCH/')"
+          got="$(printf '%s' "$asset" | sed -e 's/\${BINARY}/PROJECT/' -e 's/\${os}/OS/' -e 's/\${arch}/ARCH/')"
+          [ "$want" = "$got" ] \
+            || { echo "install.sh builds '$got' but .goreleaser.yaml name_template gives '$want'"; exit 1; }
+          echo "asset name template matches: $want"
