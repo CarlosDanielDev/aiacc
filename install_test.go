@@ -136,7 +136,7 @@ func toolsDir(t *testing.T, withSha bool) string {
 	t.Helper()
 	dir := t.TempDir()
 	names := []string{
-		"tar", "grep", "head", "sed", "awk", "cut", "mktemp", "mkdir",
+		"tar", "gzip", "grep", "head", "sed", "awk", "cut", "mktemp", "mkdir",
 		"mv", "cp", "chmod", "rm", "cat", "dirname", "basename",
 	}
 	if withSha {
