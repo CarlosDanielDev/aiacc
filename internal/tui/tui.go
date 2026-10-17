@@ -615,6 +615,8 @@ type SetupResult struct {
 	WorksNow  bool     // BinDir is on PATH → usable immediately, no reload
 	Shared    int      // profiles that now share your skills/agents/commands
 	Conflicts int      // entries left alone because a profile owns them
+	Skipped   []string // launcher paths left alone: a file aiacc did not write sits there
+	Backups   []string // originals moved aside by --replace before the takeover
 }
 
 // RenderSetupResult returns the framed outcome of a one-step setup: what was
@@ -643,7 +645,14 @@ func RenderSetupResult(r SetupResult, sz Size) string {
 		lines = append(lines, boxRow([]seg{pad(4),
 			{strconv.Itoa(r.Conflicts) + " left alone — aiacc link --replace", inkYellow}}, w))
 	}
-	if r.Shared > 0 || r.Conflicts > 0 {
+	for _, p := range r.Skipped {
+		lines = append(lines, boxRow([]seg{pad(4),
+			{p + " is not an aiacc launcher — left alone (setup --replace)", inkYellow}}, w))
+	}
+	for _, b := range r.Backups {
+		lines = append(lines, boxRow([]seg{pad(4), {"original kept as " + b, inkDim}}, w))
+	}
+	if r.Shared > 0 || r.Conflicts > 0 || len(r.Skipped) > 0 || len(r.Backups) > 0 {
 		lines = append(lines, boxBlank(w))
 	}
 	if r.WorksNow {

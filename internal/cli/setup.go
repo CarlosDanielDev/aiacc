@@ -1,22 +1,28 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
+	"github.com/CarlosDanielDev/aiacc/internal/share"
 	"github.com/CarlosDanielDev/aiacc/internal/shell"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
 	"github.com/spf13/cobra"
 )
 
 func newSetupCmd() *cobra.Command {
-	return &cobra.Command{
+	var replace bool
+	cmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Install the launcher commands (one step — no shell reload needed)",
 		Args:  cobra.NoArgs,
@@ -25,7 +31,7 @@ func newSetupCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := doSetup(path)
+			res, err := doSetup(path, replace)
 			if err != nil {
 				return err
 			}
@@ -34,23 +40,36 @@ func newSetupCmd() *cobra.Command {
 			if isTerminal(os.Stdout) {
 				return tui.RunSetupResult(res)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Installed %d command(s) to %s:\n", len(res.Names), res.BinDir)
-			for _, n := range res.Names {
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", n)
-			}
-			if res.Shared > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "Shared your skills, sub-agents, commands and hooks with %d profile(s).\n", res.Shared)
-			}
-			if res.Conflicts > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "%d entry(s) left alone (a profile owns them) — `aiacc link --replace` takes them over.\n", res.Conflicts)
-			}
-			if res.WorksNow {
-				fmt.Fprintf(cmd.OutOrStdout(), "They work now — try: %s\n", res.Example)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Added %s to your PATH — open a new terminal, then: %s\n", res.BinDir, res.Example)
-			}
+			writeSetupReport(cmd.OutOrStdout(), res)
 			return nil
 		},
+	}
+	cmd.Flags().BoolVar(&replace, "replace", false, "take over a launcher path a file aiacc did not write (the original kept as <name>.aiacc-bak, or .aiacc-bak2, … when one already exists)")
+	return cmd
+}
+
+// writeSetupReport is the plain-text outcome of setup for pipes and scripts.
+func writeSetupReport(w io.Writer, res tui.SetupResult) {
+	fmt.Fprintf(w, "Installed %d command(s) to %s:\n", len(res.Names), res.BinDir)
+	for _, n := range res.Names {
+		fmt.Fprintf(w, "  %s\n", n)
+	}
+	if res.Shared > 0 {
+		fmt.Fprintf(w, "Shared your skills, sub-agents, commands and hooks with %d profile(s).\n", res.Shared)
+	}
+	if res.Conflicts > 0 {
+		fmt.Fprintf(w, "%d entry(s) left alone (a profile owns them) — `aiacc link --replace` takes them over.\n", res.Conflicts)
+	}
+	for _, p := range res.Skipped {
+		fmt.Fprintf(w, "warning: %s\n", foreignLauncher(p).Error())
+	}
+	for _, b := range res.Backups {
+		fmt.Fprintf(w, "Original file kept as %s\n", tildeize(b))
+	}
+	if res.WorksNow {
+		fmt.Fprintf(w, "They work now — try: %s\n", res.Example)
+	} else {
+		fmt.Fprintf(w, "Added %s to your PATH — open a new terminal, then: %s\n", res.BinDir, res.Example)
 	}
 }
 
@@ -58,7 +77,7 @@ func newSetupCmd() *cobra.Command {
 // account into a directory on PATH, so the commands work immediately with no
 // sourcing or shell reload. It only touches your shell config in the rare case
 // that no writable directory is already on PATH.
-func doSetup(cfgPath string) (tui.SetupResult, error) {
+func doSetup(cfgPath string, replace bool) (tui.SetupResult, error) {
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return tui.SetupResult{}, err
@@ -67,8 +86,8 @@ func doSetup(cfgPath string) (tui.SetupResult, error) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return tui.SetupResult{}, err
 	}
-	names, err := writeAllLaunchers(c, binDir)
-	if err != nil {
+	var res tui.SetupResult
+	if err := writeAllLaunchers(c, binDir, replace, &res); err != nil {
 		return tui.SetupResult{}, err
 	}
 	// Record where the launchers went, so a later PATH change cannot make
@@ -83,30 +102,25 @@ func doSetup(cfgPath string) (tui.SetupResult, error) {
 	// slash commands is only half installed — share them into every profile as
 	// part of the same one step. Never destructive: an entry a profile owns is
 	// reported, not replaced (`aiacc link --replace` opts into that).
-	sharedProfiles, sharedConflicts := sharedSummary(c)
+	res.Shared, res.Conflicts = sharedSummary(c)
 	if !onPath {
 		// Fallback: make binDir reachable next shell. Best-effort — the scripts
 		// are already written, so a manual PATH add still works if this can't.
 		ensureOnPath(binDir)
 	}
-	example := "aiacc"
-	if len(names) > 0 {
-		example = names[0]
+	res.BinDir = tildeize(binDir)
+	res.WorksNow = onPath
+	res.Example = "aiacc"
+	if len(res.Names) > 0 {
+		res.Example = res.Names[0]
 	}
-	return tui.SetupResult{
-		BinDir:    tildeize(binDir),
-		Names:     names,
-		Example:   example,
-		WorksNow:  onPath,
-		Shared:    sharedProfiles,
-		Conflicts: sharedConflicts,
-	}, nil
+	return res, nil
 }
 
-// writeAllLaunchers writes one executable per launchable account into binDir and
-// returns the command names, sorted.
-func writeAllLaunchers(c *config.Config, binDir string) ([]string, error) {
-	var names []string
+// writeAllLaunchers writes one executable per launchable account into binDir,
+// recording the installed names, the launcher paths it left alone and any
+// backups in res. A foreign file at a launcher path is skipped, not an error.
+func writeAllLaunchers(c *config.Config, binDir string, replace bool, res *tui.SetupResult) error {
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		cmd, env, ok := launchable(c, pn)
 		if !ok {
@@ -117,13 +131,22 @@ func writeAllLaunchers(c *config.Config, binDir string) ([]string, error) {
 			if err != nil {
 				continue
 			}
-			if err := writeLauncher(binDir, an, cmd, env, dir, provider.LaunchArgs(c, pn, an)...); err != nil {
-				return names, err
+			backup, err := writeLauncher(binDir, an, replace, cmd, env, dir, provider.LaunchArgs(c, pn, an)...)
+			if backup != "" {
+				res.Backups = append(res.Backups, backup) // kept even when the install then failed
 			}
-			names = append(names, an)
+			var foreign foreignLauncher
+			switch {
+			case errors.As(err, &foreign):
+				res.Skipped = append(res.Skipped, string(foreign))
+				continue
+			case err != nil:
+				return err
+			}
+			res.Names = append(res.Names, an)
 		}
 	}
-	return names, nil
+	return nil
 }
 
 // launchable reports whether setup can write launchers for provider pn: it needs
@@ -135,13 +158,141 @@ func launchable(c *config.Config, pn string) (cmd, env string, ok bool) {
 	return cmd, env, cmd != "" && env != ""
 }
 
-// writeLauncher writes a single executable launcher script.
-func writeLauncher(binDir, name, command, envVar, dir string, args ...string) error {
+// foreignLauncher is the refusal to write over a file at a launcher path that
+// aiacc did not write. The string is the path.
+type foreignLauncher string
+
+func (f foreignLauncher) Error() string {
+	return fmt.Sprintf("%s is not an aiacc launcher, so no launcher was written there; move it aside, or run `aiacc setup --replace` to take it over", tildeize(string(f)))
+}
+
+// installLauncher replaces aiacc's own launcher with a finished one. It is a
+// variable so a failing install can be simulated.
+var installLauncher = os.Rename
+
+// linkLauncher is the hard-link install, a variable so tests can plant a file in
+// the gap before it runs, or simulate a filesystem without hard links.
+var linkLauncher = os.Link
+
+// writeLauncher writes a single executable launcher script. Something at the
+// path that aiacc did not write is never overwritten: it returns a
+// foreignLauncher, unless replace moves it aside first, to <name>.aiacc-bak (or
+// .aiacc-bak2, …), and returns that backup's path. The script is staged in a
+// temp file beside the target and then linked (or, failing that, exclusively
+// created) at the path, so nothing is written through a symlink there and
+// nothing that appears in the gap is overwritten.
+func writeLauncher(binDir, name string, replace bool, command, envVar, dir string, args ...string) (backup string, err error) {
 	content, err := shell.LauncherScript(command, envVar, dir, args...)
+	if err != nil {
+		return "", err
+	}
+	staged, err := stageLauncher(binDir, name, content)
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(staged) // a no-op once the rename has moved it
+	path := filepath.Join(binDir, name)
+	if isForeign(path) {
+		if !replace {
+			return "", foreignLauncher(path)
+		}
+		backup = share.BackupName(path)
+		if err := os.Rename(path, backup); err != nil {
+			return "", err
+		}
+	}
+	if err := installAt(staged, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			// Something appeared in the gap since the check, and it is not ours:
+			// leave it where it is and report it.
+			return backup, foreignLauncher(path)
+		}
+		if backup != "" {
+			return backup, fmt.Errorf("%s was moved to %s, but its launcher was not installed: %w", tildeize(path), tildeize(backup), err)
+		}
+		return "", err
+	}
+	return backup, nil
+}
+
+// installAt puts the staged launcher at path. A launcher aiacc already has there
+// is replaced by rename. Anything else must be absent, and placeNew refuses to
+// replace whatever is there.
+func installAt(staged, path string) error {
+	if isAiaccLauncher(path) {
+		// Only aiacc's own file, checked just now. The few microseconds between
+		// this check and the rename can only ever touch a file aiacc wrote.
+		return installLauncher(staged, path)
+	}
+	return placeNew(staged, path)
+}
+
+// placeNew makes staged the file at path, failing with fs.ErrExist when anything
+// is there. A hard link does that atomically. Where the filesystem has no hard
+// links (FAT, some network mounts), it falls back to an exclusive create, which
+// copies the script.
+func placeNew(staged, path string) error {
+	err := linkLauncher(staged, path)
+	if !errors.Is(err, syscall.EPERM) && !errors.Is(err, syscall.ENOTSUP) &&
+		!errors.Is(err, syscall.EOPNOTSUPP) && !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	return createExclusive(staged, path)
+}
+
+// createExclusive writes the staged script to a path that must not exist.
+func createExclusive(staged, path string) error {
+	body, err := os.ReadFile(staged)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(binDir, name), []byte(content), 0o755)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(body)
+	if err := errors.Join(werr, f.Close()); err != nil {
+		os.Remove(path) // our own file: the exclusive create just made it
+		return err
+	}
+	return nil
+}
+
+// stageLauncher writes content to a new, uniquely named executable file in
+// binDir and returns its path.
+func stageLauncher(binDir, name, content string) (string, error) {
+	f, err := os.CreateTemp(binDir, "."+name+".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	_, werr := f.WriteString(content)
+	if werr == nil {
+		werr = f.Chmod(0o755)
+	}
+	if err := errors.Join(werr, f.Close()); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+// isAiaccLauncher reports whether path is a launcher aiacc wrote: a small
+// regular file that shell.IsLauncher accepts. Lstat, so a symlink never counts.
+func isAiaccLauncher(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxLauncherSize {
+		return false
+	}
+	body, err := os.ReadFile(path)
+	return err == nil && shell.IsLauncher(string(body))
+}
+
+// isForeign reports whether something sits at path that aiacc did not write.
+func isForeign(path string) bool {
+	if _, err := os.Lstat(path); err != nil {
+		return false // nothing there
+	}
+	return !isAiaccLauncher(path)
 }
 
 // syncLauncher (re)writes one account's launcher so `add` keeps the commands
@@ -168,17 +319,20 @@ func syncLauncher(cfgPath, providerName, account string) error {
 	if err != nil || cmd == "" || env == "" {
 		return nil
 	}
-	_ = writeLauncher(binDir, account, cmd, env, dir, provider.LaunchArgs(c, providerName, account)...)
-	return nil
+	_, err = writeLauncher(binDir, account, false, cmd, env, dir, provider.LaunchArgs(c, providerName, account)...)
+	return err
 }
 
-// removeLauncher deletes an account's launcher script if present. Best-effort.
+// removeLauncher deletes an account's launcher script if present. Best-effort. A
+// file aiacc did not write stays: removing an account never deletes your script.
 func removeLauncher(cfgPath, account string) {
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return
 	}
-	_ = os.Remove(filepath.Join(setupBinDir(c), account))
+	if path := filepath.Join(setupBinDir(c), account); isAiaccLauncher(path) {
+		_ = os.Remove(path)
+	}
 }
 
 // setupBinDir is the directory setup installed the launchers into, as recorded

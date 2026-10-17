@@ -161,7 +161,7 @@ func TestDoSetupWritesLaunchersAndRecordsBinDir(t *testing.T) {
 	if err := saveAccount(cfgPath, "claude", "work", filepath.Join(home, ".claude-work"), 0, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	res, err := doSetup(cfgPath)
+	res, err := doSetup(cfgPath, false)
 	if err != nil {
 		t.Fatal(err)
 	}

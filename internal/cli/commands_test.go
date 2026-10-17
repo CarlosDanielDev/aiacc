@@ -771,10 +771,11 @@ func TestWriteAllLaunchersIsDeterministic(t *testing.T) {
 
 	run := func() ([]string, map[string]string) {
 		bin := t.TempDir()
-		names, err := writeAllLaunchers(c, bin)
-		if err != nil {
+		var res tui.SetupResult
+		if err := writeAllLaunchers(c, bin, false, &res); err != nil {
 			t.Fatal(err)
 		}
+		names := res.Names
 		files := map[string]string{}
 		ents, err := os.ReadDir(bin)
 		if err != nil {

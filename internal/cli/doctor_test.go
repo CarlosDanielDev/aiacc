@@ -379,10 +379,15 @@ func TestOrphanLaunchersFlagsOnlyAiaccLeftovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("old", shell.LauncherMark+"\nexec claude\n")
+	// Real launcher output: aiacc's header is the shebang plus the mark on line 2.
+	launcher, err := shell.LauncherScript("claude", "CLAUDE_CONFIG_DIR", "/a/old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("old", launcher)
 	write("mine", "#!/bin/sh\necho my own script\n")
-	write("kept", shell.LauncherMark+"\nexec claude\n")
-	write("huge", shell.LauncherMark+strings.Repeat("x", maxLauncherSize))
+	write("kept", launcher)
+	write("huge", launcher+strings.Repeat("x", maxLauncherSize))
 
 	f := orphanLaunchers(binDir, map[string]bool{"kept": true})
 	if len(f) != 1 {

@@ -353,7 +353,7 @@ func checkLauncher(account, cmd, env, dir string, args []string) finding {
 			[]string{err.Error()}}
 	}
 	switch {
-	case !strings.Contains(string(body), shell.LauncherMark):
+	case !shell.IsLauncher(string(body)):
 		return finding{sevWarn,
 			fmt.Sprintf("%s: %s is not an aiacc launcher", account, tildeize(path)),
 			[]string{"Something else on PATH owns this name and shadows the profile."}}
@@ -417,15 +417,13 @@ func orphanLaunchers(binDir string, registered map[string]bool) []finding {
 	}
 	var stale []string
 	for _, e := range ents {
-		// aiacc writes small regular files, so a symlink or anything sizeable
-		// (an installed binary) is skipped unread.
-		if !e.Type().IsRegular() || registered[e.Name()] {
+		// A dot name is setup's temp file from an interrupted install; account
+		// names never start with a dot, so it is not a launcher to report.
+		if registered[e.Name()] || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		if info, err := e.Info(); err != nil || info.Size() > maxLauncherSize {
-			continue
-		}
-		if fileContains(filepath.Join(binDir, e.Name()), shell.LauncherMark) {
+		// isAiaccLauncher skips symlinks and anything sizeable unread.
+		if isAiaccLauncher(filepath.Join(binDir, e.Name())) {
 			stale = append(stale, e.Name())
 		}
 	}

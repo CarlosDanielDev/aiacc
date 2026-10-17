@@ -207,6 +207,15 @@ func TestRenderSetupResultWorksNow(t *testing.T) {
 	}
 }
 
+func TestRenderSetupResultNamesSkippedLauncher(t *testing.T) {
+	r := setupResult()
+	r.Skipped = []string{"~/.local/bin/work"}
+	out := RenderSetupResult(r, Size{Cols: 80, Rows: 24})
+	if !strings.Contains(out, "~/.local/bin/work is not an aiacc launcher") {
+		t.Errorf("skipped launcher not named in the result:\n%s", out)
+	}
+}
+
 func TestRenderSetupResultNeedsNewTerminal(t *testing.T) {
 	r := setupResult()
 	r.WorksNow = false
