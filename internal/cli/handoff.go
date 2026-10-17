@@ -195,7 +195,7 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 	if _, err := session.Copy(sess, target.dir); err != nil {
 		return err
 	}
-	return showDone(provider.Presets[target.provider].BypassFlag, target.account, meta, sess.ID)
+	return showDone(provider.BypassFlag(c, target.provider), target.account, meta, sess.ID)
 }
 
 // showDone shows the "hand off · done" screen for the account to. A target with

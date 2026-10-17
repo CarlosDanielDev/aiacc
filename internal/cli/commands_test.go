@@ -800,3 +800,26 @@ func TestWriteAllLaunchersIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestHandoffDoneUncheckedCopyIsOldText: with the box unchecked, the text ^C
+// copies (the Blue lines, newline-joined) is exactly what the done screen copied
+// before the checkbox existed. The literals are that old output.
+func TestHandoffDoneUncheckedCopyIsOldText(t *testing.T) {
+	const flag = "--dangerously-skip-permissions"
+	copied := func(body func(bool) []tui.Line) string {
+		return strings.Join(resumeLines(body(false)), "\n")
+	}
+	_, body := captureHandoffDone(t)
+	if err := showDone(flag, "personal", session.Meta{Cwd: "/Users/x/proj"}, "abc123"); err != nil {
+		t.Fatalf("showDone: %v", err)
+	}
+	if got, want := copied(*body), "cd '/Users/x/proj'\npersonal --resume abc123"; got != want {
+		t.Fatalf("unchecked copy = %q, want %q", got, want)
+	}
+	if err := showDone(flag, "personal", session.Meta{}, "abc123"); err != nil {
+		t.Fatalf("showDone: %v", err)
+	}
+	if got, want := copied(*body), "personal --resume abc123"; got != want {
+		t.Fatalf("unchecked copy without cwd = %q, want %q", got, want)
+	}
+}

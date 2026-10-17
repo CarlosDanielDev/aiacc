@@ -181,6 +181,21 @@ func RefuseSettingsDir(value string) error {
 	return nil
 }
 
+// BypassFlag is the permission-bypass flag to offer for a provider, or "" for
+// none. The flag belongs to the CLI its preset names, so it is offered only when
+// the command that actually launches the provider is that preset's command: a
+// user provider keyed "codex" but configured to run claude gets no codex flag.
+func BypassFlag(c *config.Config, provider string) string {
+	pr, ok := Presets[provider]
+	if !ok || pr.BypassFlag == "" {
+		return ""
+	}
+	if cmd, _ := Command(c, provider); cmd != pr.Command {
+		return ""
+	}
+	return pr.BypassFlag
+}
+
 // LaunchArgs are the arguments every launcher passes the CLI ahead of the
 // user's own: the settings flag and file when the account has one, else none.
 func LaunchArgs(c *config.Config, provider, account string) []string {
