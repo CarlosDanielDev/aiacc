@@ -283,3 +283,44 @@ func TestCopyReturnsDestinationCloseError(t *testing.T) {
 		t.Fatalf("destination must be left in place after a close error: %v", statErr)
 	}
 }
+
+// The picker and handoff screens show the 8-char short id, so --session must
+// take a prefix of it. An exact id still wins over a prefix that happens to
+// match it, and a prefix that matches two sessions is refused by name.
+func TestFindAcceptsUniquePrefix(t *testing.T) {
+	cfg := t.TempDir()
+	seed(t, cfg, "-proj-a", "abc123de-0000-4000-8000-000000000001", []string{`{"type":"user"}`})
+	seed(t, cfg, "-proj-a", "fff999aa-0000-4000-8000-000000000002", []string{`{"type":"user"}`})
+	s, err := Find(cfg, "abc123de")
+	if err != nil || s.ID != "abc123de-0000-4000-8000-000000000001" {
+		t.Fatalf("Find on unique prefix: %+v %v", s, err)
+	}
+}
+
+func TestFindPrefersExactIDOverPrefix(t *testing.T) {
+	cfg := t.TempDir()
+	seed(t, cfg, "-proj-a", "abc", []string{`{"type":"user"}`})
+	seed(t, cfg, "-proj-a", "abcd", []string{`{"type":"user"}`})
+	if s, err := Find(cfg, "abc"); err != nil || s.ID != "abc" {
+		t.Fatalf("exact id should win: %+v %v", s, err)
+	}
+}
+
+func TestFindRefusesAmbiguousPrefix(t *testing.T) {
+	cfg := t.TempDir()
+	seed(t, cfg, "-proj-a", "abc123de-one", []string{`{"type":"user"}`})
+	seed(t, cfg, "-proj-b", "abc123de-two", []string{`{"type":"user"}`})
+	_, err := Find(cfg, "abc123de")
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") ||
+		!strings.Contains(err.Error(), "abc123de-one") || !strings.Contains(err.Error(), "abc123de-two") {
+		t.Fatalf("want an ambiguity error naming both ids, got %v", err)
+	}
+}
+
+func TestFindNoPrefixMatchIsNotFound(t *testing.T) {
+	cfg := t.TempDir()
+	seed(t, cfg, "-proj-a", "abc123de", []string{`{"type":"user"}`})
+	if _, err := Find(cfg, "zzz"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("want not-found for a prefix nothing starts with, got %v", err)
+	}
+}
