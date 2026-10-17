@@ -149,8 +149,10 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 	if err := saveAccount(cfgPath, providerName, name, dir, pre.Quota, pre.Env, pre.Command, settingsPath); err != nil {
 		return err
 	}
-	syncLauncher(cfgPath, providerName, name) // keep the command in sync (best-effort)
-	linkProfile(providerName, realDir)        // same skills/agents as the bare CLI
+	if err := syncLauncher(cfgPath, providerName, name); err != nil { // keep the command in sync
+		fmt.Fprintln(out, "aiacc:", err)
+	}
+	linkProfile(providerName, realDir) // same skills/agents as the bare CLI
 
 	// Read the command after the save: saving may have registered a custom
 	// provider (--env/--command), which the config loaded above does not know.

@@ -71,6 +71,14 @@ func doSetup(cfgPath string) (tui.SetupResult, error) {
 	if err != nil {
 		return tui.SetupResult{}, err
 	}
+	// Record where the launchers went, so a later PATH change cannot make
+	// remove, sync or doctor look in the wrong directory.
+	if err := config.Update(cfgPath, func(c *config.Config) error {
+		c.BinDir = binDir
+		return nil
+	}); err != nil {
+		return tui.SetupResult{}, err
+	}
 	// A launcher that starts the CLI with none of your skills, sub-agents or
 	// slash commands is only half installed — share them into every profile as
 	// part of the same one step. Never destructive: an entry a profile owns is
@@ -128,31 +136,52 @@ func writeLauncher(binDir, name, command, envVar, dir string, args ...string) er
 	return os.WriteFile(filepath.Join(binDir, name), []byte(content), 0o755)
 }
 
-// syncLauncher (re)writes one account's launcher if setup has been run (the bin
-// dir exists), so `add` keeps the commands current without a manual re-setup.
-// Best-effort: a failure here never fails the add.
-func syncLauncher(cfgPath, providerName, account string) {
-	binDir, _ := launcherBinDir()
-	if info, err := os.Stat(binDir); err != nil || !info.IsDir() {
-		return // not set up yet; `aiacc setup` will create it
-	}
+// syncLauncher (re)writes one account's launcher so `add` keeps the commands
+// current without a manual re-setup. A config that was never set up has no
+// launcher dir and is skipped silently: `aiacc setup` creates it. A recorded dir
+// that has since disappeared is an error, not a skip, and nothing is written
+// elsewhere: the launcher would land in a dir setup did not choose. Callers
+// report the error; it never fails the add itself.
+func syncLauncher(cfgPath, providerName, account string) error {
 	c, err := config.Load(cfgPath)
 	if err != nil {
-		return
+		return nil
+	}
+	binDir := setupBinDir(c)
+	if info, err := os.Stat(binDir); err != nil || !info.IsDir() {
+		if c.BinDir != "" {
+			return fmt.Errorf("%s is gone, so %s has no launcher; run `aiacc setup` to reinstall the commands", tildeize(binDir), account)
+		}
+		return nil // never set up; `aiacc setup` will create the dir
 	}
 	cmd := launchCommand(c, providerName)
 	env, _ := provider.EnvVar(c, providerName)
 	dir, err := provider.AccountDir(c, providerName, account)
 	if err != nil || cmd == "" || env == "" {
-		return
+		return nil
 	}
 	_ = writeLauncher(binDir, account, cmd, env, dir, provider.LaunchArgs(c, providerName, account)...)
+	return nil
 }
 
 // removeLauncher deletes an account's launcher script if present. Best-effort.
-func removeLauncher(account string) {
+func removeLauncher(cfgPath, account string) {
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(filepath.Join(setupBinDir(c), account))
+}
+
+// setupBinDir is the directory setup installed the launchers into, as recorded
+// in the config. A config that predates the record falls back to the directory
+// PATH points at today, which is how it was found before the record existed.
+func setupBinDir(c *config.Config) string {
+	if c.BinDir != "" {
+		return c.BinDir
+	}
 	binDir, _ := launcherBinDir()
-	_ = os.Remove(filepath.Join(binDir, account))
+	return binDir
 }
 
 // launcherBinDir picks where to install the launchers and whether it is already
@@ -230,7 +259,7 @@ func setupNeeded() bool {
 	if err != nil {
 		return false
 	}
-	binDir, _ := launcherBinDir()
+	binDir := setupBinDir(c)
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		if launchCommand(c, pn) == "" {
 			continue

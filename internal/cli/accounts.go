@@ -71,6 +71,14 @@ func newAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Every settings refusal is decided before the dir is created, so a
+			// refused add leaves nothing on disk.
+			if _, _, err := settingsEndpoint(providerName, settings); err != nil {
+				return err
+			}
+			if err := settingsFlagRefusal(providerName, settings); err != nil {
+				return err
+			}
 			if err := os.MkdirAll(realDir, 0o755); err != nil {
 				return err
 			}
@@ -80,8 +88,10 @@ func newAddCmd() *cobra.Command {
 			if err := saveAccount(path, providerName, account, dir, quota, envVar, command, settings); err != nil {
 				return err
 			}
-			syncLauncher(path, providerName, account) // keep the command in sync
-			linkProfile(providerName, realDir)        // same skills/agents as the bare CLI
+			if err := syncLauncher(path, providerName, account); err != nil { // keep the command in sync
+				fmt.Fprintln(cmd.ErrOrStderr(), "aiacc:", err)
+			}
+			linkProfile(providerName, realDir) // same skills/agents as the bare CLI
 			return nil
 		},
 	}
@@ -130,7 +140,12 @@ func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, erro
 		return provider.Endpoint{}, false, settingsRefusal{value: kr.Value, keywords: kr.Keywords, cause: err}
 	}
 	if !keyword {
-		return provider.Endpoint{}, false, nil // not a keyword — today's path behavior, unchanged
+		// Today's path behavior, unchanged, except a directory is refused here,
+		// before any caller creates the account dir.
+		if err := provider.RefuseSettingsDir(value); err != nil {
+			return provider.Endpoint{}, false, err
+		}
+		return provider.Endpoint{}, false, nil
 	}
 	if ep.BaseURL == "" {
 		return provider.Endpoint{}, false, fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
@@ -158,7 +173,7 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 		return "", err
 	}
 	if !keyword {
-		return value, nil
+		return value, nil // settingsEndpoint has already refused a directory
 	}
 	// The screen and the CLI register through the same sequence, so the
 	// skeleton lands in the real profile while the registered path keeps the
@@ -246,7 +261,7 @@ func removeAccount(path, providerName, account string) error {
 	}); err != nil {
 		return err
 	}
-	removeLauncher(account) // drop the command too (best-effort)
+	removeLauncher(path, account) // drop the command too (best-effort)
 	return nil
 }
 
@@ -255,7 +270,7 @@ func newRenameCmd() *cobra.Command {
 		Use:   "rename <provider> <old> <new>",
 		Short: "Rename an account (and its launcher command)",
 		Args:  cobra.ExactArgs(3),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := configPath()
 			if err != nil {
 				return err
@@ -263,8 +278,10 @@ func newRenameCmd() *cobra.Command {
 			if err := renameAccount(path, args[0], args[1], args[2]); err != nil {
 				return err
 			}
-			removeLauncher(args[1])              // drop the old command
-			syncLauncher(path, args[0], args[2]) // install the new one
+			removeLauncher(path, args[1])                                // drop the old command
+			if err := syncLauncher(path, args[0], args[2]); err != nil { // install the new one
+				fmt.Fprintln(cmd.ErrOrStderr(), "aiacc:", err)
+			}
 			return nil
 		},
 	}
