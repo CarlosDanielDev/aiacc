@@ -11,7 +11,7 @@ that printed per-account shell functions. Startup files still contain
 `eval "$(aiacc shell-init <shell>)"`. Deleting the command would make every such shell
 print an error at startup. The pre-v0.7 `aiacc` wrapper function was removed in v0.7.0
 (commit 49519da; the v0.6.0 README documented it, v0.7.0 does not). The one-time erase of
-that wrapper was added in v0.10.0 (commit 5ec68d4) for shells that loaded it before upgrading.
+that wrapper was added in v0.7.1 (commit 5ec68d4) for shells that loaded it before upgrading.
 
 ## Decision
 
