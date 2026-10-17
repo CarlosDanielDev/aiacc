@@ -18,6 +18,9 @@ import (
 // configPath is indirected so tests can point it at a temp file.
 var configPath = config.DefaultPath
 
+// stdinIsTerminal is indirected so tests can drive both add surfaces.
+var stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
+
 func newAddCmd() *cobra.Command {
 	var dir, envVar, command, settings string
 	var quota int
@@ -34,12 +37,23 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			if len(args) == 0 {
-				// Interactive terminal → the framed add screen. Piped/scripted
-				// (and tests) → the line wizard, which reads stdin.
-				if isTerminal(os.Stdin) {
+				// Interactive terminal → the framed add screen — but only
+				// when no flag needs applying: the screen has no field for
+				// them, so they would be silently dropped. Piped/scripted
+				// (and tests) → the line wizard, which reads stdin and lets
+				// each given flag preempt its question.
+				if stdinIsTerminal() {
+					for _, flag := range []string{"dir", "settings", "env", "command", "quota"} {
+						if cmd.Flags().Changed(flag) {
+							return fmt.Errorf("--%s needs <provider> <account> arguments — "+
+								"run \"aiacc add <provider> <account> --dir …\" for the flag form, "+
+								"or \"aiacc add\" with no flags for the interactive screen", flag)
+						}
+					}
 					return runAddTUI(path)
 				}
-				return runAddWizard(cmd.InOrStdin(), cmd.OutOrStdout(), path)
+				return runAddWizard(cmd.InOrStdin(), cmd.OutOrStdout(), path,
+					addPrefill{Dir: dir, Settings: settings, Env: envVar, Command: command, Quota: quota})
 			}
 			if len(args) != 2 {
 				return fmt.Errorf("give both <provider> and <account>, or no arguments for the wizard")
@@ -96,6 +110,35 @@ func (e settingsRefusal) Error() string {
 
 func (e settingsRefusal) Unwrap() error { return e.cause }
 
+// settingsEndpoint classifies a settings value without writing anything. It
+// returns the endpoint and true when the value is a keyword whose skeleton
+// resolveSettings generates; (zero, false, nil) when the value is registered
+// verbatim; or the refusal resolveSettings would give. The keyword rule is the
+// shared provider.ClassifySettings.
+func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, error) {
+	if value == "" {
+		return provider.Endpoint{}, false, nil
+	}
+	ep, keyword, err := provider.ClassifySettings(providerName, value)
+	if err != nil {
+		// err is the shared keyword refusal, worded for the add screen's hint
+		// row. The CLI composes its own sentence from the refusal's parts.
+		var kr provider.KeywordRefusal
+		if !errors.As(err, &kr) {
+			return provider.Endpoint{}, false, err
+		}
+		return provider.Endpoint{}, false, settingsRefusal{value: kr.Value, keywords: kr.Keywords, cause: err}
+	}
+	if !keyword {
+		return provider.Endpoint{}, false, nil // not a keyword — today's path behavior, unchanged
+	}
+	if ep.BaseURL == "" {
+		return provider.Endpoint{}, false, fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
+			"run \"aiacc add\" with no arguments and pick it there (\"glm\" works right on the command line)", value)
+	}
+	return ep, true, nil
+}
+
 // resolveSettings turns the --settings value into the path the account
 // registers, the CLI spelling of the add screen's settings field. Through the
 // shared classification rule (provider.ClassifySettings) an endpoint keyword
@@ -107,32 +150,30 @@ func (e settingsRefusal) Unwrap() error { return e.cause }
 // with the valid ones listed — a typo must not silently register a bogus
 // settings path — while anything path-like keeps today's verbatim path
 // behavior. A file already at the target aborts the add with its path named;
-// nothing is overwritten (the aiacc link rule).
+// nothing is overwritten (the aiacc link rule). A refusal is decided by
+// settingsEndpoint before anything is written.
 func resolveSettings(providerName, dir, value string) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-	ep, keyword, err := provider.ClassifySettings(providerName, value)
+	ep, keyword, err := settingsEndpoint(providerName, value)
 	if err != nil {
-		// err is the shared keyword refusal, worded for the add screen's hint
-		// row. The CLI composes its own sentence from the refusal's parts.
-		var kr provider.KeywordRefusal
-		if !errors.As(err, &kr) {
-			return "", err
-		}
-		return "", settingsRefusal{value: kr.Value, keywords: kr.Keywords, cause: err}
+		return "", err
 	}
 	if !keyword {
-		return value, nil // not a keyword — today's path behavior, unchanged
-	}
-	if ep.BaseURL == "" {
-		return "", fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
-			"run \"aiacc add\" with no arguments and pick it there (\"glm\" works right on the command line)", value)
+		return value, nil
 	}
 	// The screen and the CLI register through the same sequence, so the
 	// skeleton lands in the real profile while the registered path keeps the
 	// as-typed form (stored paths re-expand at launch; see EnsureSkeleton).
 	return provider.EnsureSkeleton(dir, ep)
+}
+
+// settingsFlagRefusal refuses a settings value for a provider whose CLI has no
+// flag to load one. saveAccount applies it, and the wizard checks it before
+// anything is written.
+func settingsFlagRefusal(providerName, settings string) error {
+	if settings != "" && provider.Presets[providerName].SettingsFlag == "" {
+		return fmt.Errorf("%s has no settings flag, so --settings cannot apply to it", providerName)
+	}
+	return nil
 }
 
 // saveAccount registers (provider, account) at dir in the config file at path,
@@ -141,8 +182,8 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 // extra settings file, refused for a provider whose CLI has no flag to load one.
 // Used by `add` and the wizard.
 func saveAccount(path, providerName, account, dir string, quota int, envOverride, cmdOverride, settings string) error {
-	if settings != "" && provider.Presets[providerName].SettingsFlag == "" {
-		return fmt.Errorf("%s has no settings flag, so --settings cannot apply to it", providerName)
+	if err := settingsFlagRefusal(providerName, settings); err != nil {
+		return err
 	}
 	// Update holds the config file lock across load-modify-save, so a
 	// concurrent add/remove cannot turn this into a lost update.

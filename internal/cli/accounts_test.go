@@ -339,6 +339,64 @@ func TestAddSettingsKeywordExpandsTildeDir(t *testing.T) {
 	}
 }
 
+// TestAddFlagsWithNoArgsPrefillWizard: flags combined with no arguments reach
+// the piped wizard as prefills — each flag preempts its question instead of
+// being silently dropped, so the piped answers cover only what remains.
+func TestAddFlagsWithNoArgsPrefillWizard(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	oldTerm := stdinIsTerminal
+	stdinIsTerminal = func() bool { return false }
+	t.Cleanup(func() { stdinIsTerminal = oldTerm })
+
+	add := newAddCmd()
+	add.SetIn(bytes.NewBufferString("work\n")) // dir and settings come from the flags
+	add.SetArgs([]string{"--dir", dir, "--settings", "glm", "--quota", "7"})
+	if err := add.Execute(); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := c.Providers["claude"].Accounts["work"]
+	if acct.Dir != dir || acct.Quota != 7 {
+		t.Fatalf("flags not applied: %+v", acct)
+	}
+	if got := acct.Settings; got != filepath.Join(dir, "glm.json") {
+		t.Fatalf("settings = %q, want the generated path %q", got, filepath.Join(dir, "glm.json"))
+	}
+}
+
+// TestAddFlagsInteractiveNoArgsError: on a terminal the flags have no form
+// field to prefill, so they are refused with the two spellings named instead
+// of being silently ignored.
+func TestAddFlagsInteractiveNoArgsError(t *testing.T) {
+	path := withTempConfig(t)
+	oldTerm := stdinIsTerminal
+	stdinIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdinIsTerminal = oldTerm })
+
+	add := newAddCmd()
+	add.SetArgs([]string{"--dir", t.TempDir()})
+	err := add.Execute()
+	if err == nil {
+		t.Fatal("flags with no arguments were silently dropped on a terminal")
+	}
+	for _, want := range []string{"--dir", "provider", "account"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error does not mention %q: %v", want, err)
+		}
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Providers) != 0 {
+		t.Fatalf("something was registered despite the refusal: %+v", c.Providers)
+	}
+}
+
 // TestAddSettingsUnknown: a bare word that is no endpoint keyword is refused
 // with the valid ones listed (a typo must not silently register a bogus
 // settings path), and custom points at the interactive add screen — the CLI
