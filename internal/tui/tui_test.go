@@ -961,3 +961,24 @@ func TestMessageNoteRendersUnderTheBody(t *testing.T) {
 		t.Fatalf("note missing:\n%s", out)
 	}
 }
+
+// The add screen refuses a settings value that names a directory, keeps the
+// screen open, and says why in the hint row.
+func TestAddSettingsRefusesDirectory(t *testing.T) {
+	settingsDir := filepath.Join(t.TempDir(), "claude-glm")
+	if err := os.Mkdir(settingsDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	out := &bytes.Buffer{}
+	keys := "w\t" + t.TempDir() + "\t" + settingsDir + "\r\x1b"
+	res, err := driveAdd("", "claude", true, fixedGeom(80, 24), bytes.NewBufferString(keys), out)
+	if err != nil {
+		t.Fatalf("driveAdd: %v", err)
+	}
+	if res.OK {
+		t.Fatalf("got %+v, want a directory refused", res)
+	}
+	if !strings.Contains(ansi.ReplaceAllString(out.String(), ""), "settings path is a directory") {
+		t.Errorf("screen does not name the refusal:\n%s", out)
+	}
+}

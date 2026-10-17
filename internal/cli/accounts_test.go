@@ -436,3 +436,32 @@ func TestAddSettingsUnknown(t *testing.T) {
 		t.Fatalf("accounts registered despite the refusals: %+v", c.Providers["claude"].Accounts)
 	}
 }
+
+// A directory is never registered as a settings file: add refuses it and
+// writes no account, so the launcher the profile would get is never generated.
+func TestAddSettingsRefusesDirectory(t *testing.T) {
+	path := withTempConfig(t)
+	dir := filepath.Join(t.TempDir(), "acct") // does not exist yet: a refused add must not create it
+	settingsDir := filepath.Join(t.TempDir(), "claude-glm")
+	if err := os.Mkdir(settingsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	add := newAddCmd()
+	add.SetArgs([]string{"claude", "foo", "--dir", dir, "--settings", settingsDir})
+	err := add.Execute()
+	if err == nil || !strings.Contains(err.Error(), "settings path is a directory") {
+		t.Fatalf("add with a directory: got %v, want a refusal naming the directory", err)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatalf("a refused add created the account dir %s", dir)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("a refused add wrote the config file %s", path)
+	}
+	if c, err := config.Load(path); err != nil {
+		t.Fatalf("load: %v", err)
+	} else if _, ok := c.Providers["claude"].Accounts["foo"]; ok {
+		t.Fatalf("a refused add still registered the account")
+	}
+}

@@ -356,6 +356,10 @@ func checkSettingsFile(account, path string) (finding, bool) {
 		return finding{sevFail,
 			fmt.Sprintf("%s: settings file %s is missing", account, tildeize(path)),
 			[]string{"Every launch of this profile passes it to the CLI."}}, true
+	case info.IsDir():
+		return finding{sevFail,
+			fmt.Sprintf("%s: settings path is a directory: %s", account, tildeize(path)),
+			[]string{"Every launch of this profile passes it to the CLI as a settings file."}}, true
 	case info.Mode().Perm()&0o077 != 0:
 		return finding{sevWarn,
 			fmt.Sprintf("%s: settings file %s is readable by other users", account, tildeize(path)),

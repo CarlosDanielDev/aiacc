@@ -252,3 +252,22 @@ func TestCheckSettingsFile(t *testing.T) {
 		t.Error("a private settings file is fine")
 	}
 }
+
+// A settings path that names a directory is broken whatever its mode: the
+// launcher hands the directory to the CLI as a settings file. A 0700 directory
+// must not pass silently, and a 0755 one must fail rather than merely warn.
+func TestCheckSettingsFileDirectory(t *testing.T) {
+	for _, mode := range []os.FileMode{0o700, 0o755} {
+		dir := filepath.Join(t.TempDir(), "claude-glm")
+		if err := os.Mkdir(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, mode); err != nil { // Mkdir applies the umask
+			t.Fatal(err)
+		}
+		f, ok := checkSettingsFile("glm", dir)
+		if !ok || f.sev != sevFail || !strings.Contains(f.text, "settings path is a directory") {
+			t.Errorf("mode %o: want a failing finding naming the directory, got %+v", mode, f)
+		}
+	}
+}
