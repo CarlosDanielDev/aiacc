@@ -28,7 +28,11 @@ func newHandoffCmd() *cobra.Command {
 			"continue the same conversation under a different account — e.g. when one " +
 			"hits its usage limit. Only the transcript is copied; credentials are never " +
 			"touched.\n\nRun with no arguments in a terminal for an interactive picker, " +
-			"or give <provider> <from> <to> to hand off the most recent session directly.",
+			"or give <provider> <from> <to> to hand off the most recent session directly." +
+			"\n\nSubagents: a subagent that already finished is in the copied transcript, " +
+			"final report included. A subagent still running or paused lives in the old " +
+			"process: it does not resume in the target account, and no notification arrives " +
+			"after --resume. Only the main transcript is copied, not a subagent's own transcript.",
 		Args: cobra.MaximumNArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := configPath()

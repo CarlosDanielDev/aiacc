@@ -393,6 +393,10 @@ command — `--launch` runs it for you, or `ctrl-c` on the result screen copies 
 never touched, and each account's usage stays separate.** It defaults to the most
 recent session; `--session <id>` picks a specific one.
 
+A subagent that already finished is in the copied transcript, with its final report.
+A subagent still running or paused stays in the old process: it does not resume in
+the target account, and no notification arrives after `--resume`.
+
 ## 🔌 Providers — any AI CLI
 
 A provider is `{env_var, command}` plus its accounts: aiacc isolates each account
@@ -510,6 +514,19 @@ with one; any other CLI gets one when you give it `--command`. Re-running
 `aiacc add <provider> <account> --dir <path> --env <ENV_VAR> --command <cli>` sets
 it, and the profile is then launchable. Until then it stays registered, and
 `aiacc` shows why it is blocked.
+
+</details>
+
+<details>
+<summary>A background subagent never finished after a hand-off</summary>
+
+<br>
+
+A subagent that was still running or paused when you handed off lives in the old
+process, so it does not resume in the target account, and nothing reports on it
+after `--resume`. Its final report is in the copied transcript only if it had
+already finished. Check the old session for unfinished work and restart it in the
+new one.
 
 </details>
 

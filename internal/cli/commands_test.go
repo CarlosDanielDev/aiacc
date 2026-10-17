@@ -170,6 +170,30 @@ func TestHandoffCopiesSessionAndPrintsResume(t *testing.T) {
 	}
 }
 
+// TestHandoffHelpStatesSubagentLimit: the help is the only place a user learns
+// that a running or paused subagent does not survive a hand-off, so the rendered
+// --help must say so, not just the Long string in the source.
+func TestHandoffHelpStatesSubagentLimit(t *testing.T) {
+	cmd := newHandoffCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	s := out.String()
+	for _, want := range []string{
+		"subagent",
+		"final report",
+		"does not resume",
+		"no notification",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("help missing %q:\n%s", want, s)
+		}
+	}
+}
+
 // TestHandoffQuotesResumePath: the resume command is printed for the user to
 // paste into a shell, so a recorded cwd with spaces or a quote cannot break
 // out of the cd — it is single-quote escaped, POSIX-style.
