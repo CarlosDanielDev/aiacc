@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/CarlosDanielDev/aiacc/internal/provider"
 )
 
 // sentinelToken stands in for a real key. It must never appear in a frame, a
@@ -210,5 +212,47 @@ func TestEditFramesStaySquare(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// TestSignalExitCleansInFlightWrite sends a real shutdown signal through the
+// signal path while a save is in its write window. The exit seam records the
+// code, the save fails, and no temp file holding the token is left behind.
+func TestSignalExitCleansInFlightWrite(t *testing.T) {
+	path := editFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://glm.example/api"}}`)
+	dir := filepath.Dir(path)
+	sigc := make(chan os.Signal, 1)
+	exitCode := -1
+	exited := make(chan struct{})
+	restored := make(chan struct{}, 1)
+	old := provider.SettingsWriteWindow
+	t.Cleanup(func() { provider.SettingsWriteWindow = old })
+	provider.SettingsWriteWindow = func() {
+		sigc <- os.Interrupt
+		<-exited // the signal path has restored, cleaned up and "exited"
+	}
+	go exitOnSignal(sigc, func() { restored <- struct{}{} }, func(c int) {
+		exitCode = c
+		close(exited)
+	})
+
+	saved, screen := runEdit(t, path, glmForm(false), sentinelToken+"\r")
+	if saved {
+		t.Fatal("write reported saved after a signal")
+	}
+	if exitCode != 130 {
+		t.Fatalf("exit code = %d, want 130", exitCode)
+	}
+	if len(restored) != 1 {
+		t.Fatal("terminal was not restored before exit")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".settings-") {
+			t.Fatalf("temp file left after signal: %s", e.Name())
+		}
+	}
+	if strings.Contains(screen, sentinelToken) {
+		t.Fatal("token reached the screen")
 	}
 }

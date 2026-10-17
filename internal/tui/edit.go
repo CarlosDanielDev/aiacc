@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -154,4 +155,20 @@ func RunEdit(account, path string, f EditForm) (bool, error) {
 	}
 	defer restore()
 	return driveEdit(path, account, f, g, tty, tty)
+}
+
+// exitOnSignal waits for the first shutdown signal, restores the terminal, and
+// exits through exitAfterCleanup. openRawTTY runs it; exit is a seam.
+func exitOnSignal(sigc <-chan os.Signal, restore func(), exit func(int)) {
+	<-sigc
+	restore()
+	exitAfterCleanup(130, exit)
+}
+
+// exitAfterCleanup is the signal path's last step: it aborts any settings write
+// in flight, so its temp file (which holds a new token) is removed, and then
+// exits. exit is a seam so the path can be tested without ending the process.
+func exitAfterCleanup(code int, exit func(int)) {
+	provider.AbortSettingsWrites()
+	exit(code)
 }

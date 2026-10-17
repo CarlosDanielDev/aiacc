@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // This file is the one place aiacc reads and rewrites an account's settings
@@ -162,6 +163,35 @@ func envString(env map[string]json.RawMessage, key string) string {
 	return s
 }
 
+// writes tracks the temp files of writes in flight. A signal that ends the
+// process mid-write exits without running the write's own cleanup, and the
+// temp file holds the new token, so the signal path calls AbortSettingsWrites
+// first. Once aborted, no new write starts.
+var writes = struct {
+	sync.Mutex
+	temps   map[string]bool
+	aborted bool
+}{temps: map[string]bool{}}
+
+// errWritesAborted refuses a write that would start after a shutdown signal.
+var errWritesAborted = errors.New("settings write cancelled: aiacc is shutting down")
+
+// SettingsWriteWindow is a test seam: it runs between writing the temp file and
+// renaming it, the window a signal must not leave a token behind in.
+var SettingsWriteWindow = func() {}
+
+// AbortSettingsWrites removes the temp file of every write in flight and refuses
+// any write after it. The signal path calls it before the process exits.
+func AbortSettingsWrites() {
+	writes.Lock()
+	defer writes.Unlock()
+	writes.aborted = true
+	for name := range writes.temps {
+		os.Remove(name)
+		delete(writes.temps, name)
+	}
+}
+
 // writeFileAtomic replaces the file at path with data: a temp file in the same
 // directory gets the new contents and the target mode, then renames over it.
 func writeFileAtomic(path string, data []byte) error {
@@ -171,11 +201,26 @@ func writeFileAtomic(path string, data []byte) error {
 	}
 	// Owner read/write at most, and never more than the file already allowed.
 	mode := info.Mode().Perm() & 0o600
+	writes.Lock()
+	if writes.aborted {
+		writes.Unlock()
+		return errWritesAborted
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".settings-*.tmp")
 	if err != nil {
+		writes.Unlock()
 		return err
 	}
 	tmpName := tmp.Name()
+	writes.temps[tmpName] = true
+	writes.Unlock()
+	// Forget the temp once it is gone (renamed or removed), so an abort never
+	// touches a name that is no longer ours.
+	defer func() {
+		writes.Lock()
+		delete(writes.temps, tmpName)
+		writes.Unlock()
+	}()
 	fail := func(err error) error {
 		tmp.Close()
 		os.Remove(tmpName) // leave no half-written file behind
@@ -194,6 +239,7 @@ func writeFileAtomic(path string, data []byte) error {
 		os.Remove(tmpName)
 		return err
 	}
+	SettingsWriteWindow()
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("replace %s: %w", filepath.Base(path), err)

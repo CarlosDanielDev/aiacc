@@ -1227,11 +1227,7 @@ func openRawTTY() (*os.File, *geom, func(), error) {
 	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	// ponytail: this goroutine parks until a signal or process exit; a CLI runs a
 	// couple of these at most, so the parked goroutine is not worth a teardown.
-	go func() {
-		<-sigc
-		restore()
-		os.Exit(130)
-	}()
+	go exitOnSignal(sigc, restore, os.Exit)
 	if err := stty(tty, "-icanon", "-echo", "-isig", "min", "1", "time", "0"); err != nil {
 		restore()
 		return nil, nil, nil, err

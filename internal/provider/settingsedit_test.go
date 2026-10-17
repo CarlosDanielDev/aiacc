@@ -258,3 +258,61 @@ func TestEditSettingsFollowsSymlink(t *testing.T) {
 		t.Fatalf("target not updated: %q", got)
 	}
 }
+
+// TestAbortSettingsWritesCleansTempAndRefusesNewWrites: a signal that lands
+// between creating the temp file and renaming it must not leave the temp file
+// (it holds the new token) behind, and must stop the write from completing.
+// The hook fires in exactly that window.
+func TestAbortSettingsWritesCleansTempAndRefusesNewWrites(t *testing.T) {
+	const body = `{"env":{"ANTHROPIC_BASE_URL":"https://old"}}`
+	path := settingsFixture(t, body, 0o600)
+	dir := filepath.Dir(path)
+
+	old := SettingsWriteWindow
+	t.Cleanup(func() { SettingsWriteWindow = old; resetAbortedForTest() })
+	SettingsWriteWindow = func() {
+		if n := tempCount(t, dir); n != 1 {
+			t.Fatalf("in the write window there should be one temp file, found %d", n)
+		}
+		AbortSettingsWrites()
+	}
+
+	err := EditSettings(path, SettingsEdit{Token: sentinelToken})
+	if err == nil {
+		t.Fatal("write completed after an abort")
+	}
+	if strings.Contains(err.Error(), sentinelToken) {
+		t.Fatalf("error leaks the token: %q", err)
+	}
+	if n := tempCount(t, dir); n != 0 {
+		t.Fatalf("%d temp file(s) left behind after abort", n)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != body {
+		t.Fatal("aborted write changed the settings file")
+	}
+
+	SettingsWriteWindow = func() {}
+	if err := EditSettings(path, SettingsEdit{Token: sentinelToken}); err == nil {
+		t.Fatal("a write started after the abort was not refused")
+	}
+}
+
+// tempCount counts the settings temp files in dir.
+func tempCount(t *testing.T, dir string) int {
+	t.Helper()
+	n := 0
+	for _, name := range dirNames(t, dir) {
+		if strings.HasPrefix(name, ".settings-") && strings.HasSuffix(name, ".tmp") {
+			n++
+		}
+	}
+	return n
+}
+
+// resetAbortedForTest reopens the write registry after an abort, so later tests
+// in the package can write again.
+func resetAbortedForTest() {
+	writes.Lock()
+	defer writes.Unlock()
+	writes.aborted = false
+}
