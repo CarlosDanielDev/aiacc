@@ -226,7 +226,10 @@ func TestSignalExitCleansInFlightWrite(t *testing.T) {
 	exited := make(chan struct{})
 	restored := make(chan struct{}, 1)
 	old := provider.SettingsWriteWindow
-	t.Cleanup(func() { provider.SettingsWriteWindow = old })
+	t.Cleanup(func() {
+		provider.SettingsWriteWindow = old
+		provider.ResetSettingsWritesForTest() // the abort latched the process-wide write registry
+	})
 	provider.SettingsWriteWindow = func() {
 		sigc <- os.Interrupt
 		<-exited // the signal path has restored, cleaned up and "exited"

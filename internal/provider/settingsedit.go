@@ -170,6 +170,15 @@ var writes = struct {
 // errWritesAborted refuses a write that would start after a shutdown signal.
 var errWritesAborted = errors.New("settings write cancelled: aiacc is shutting down")
 
+// ResetSettingsWritesForTest reopens the write registry after an abort. Tests
+// that trigger AbortSettingsWrites register it with t.Cleanup, so the aborted
+// flag never leaks into a later test. Production code never calls it.
+func ResetSettingsWritesForTest() {
+	writes.Lock()
+	defer writes.Unlock()
+	writes.aborted = false
+}
+
 // SettingsWriteWindow is a test seam: it runs between writing the temp file and
 // renaming it, the window a signal must not leave a token behind in.
 var SettingsWriteWindow = func() {}

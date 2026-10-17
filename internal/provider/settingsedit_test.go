@@ -269,7 +269,7 @@ func TestAbortSettingsWritesCleansTempAndRefusesNewWrites(t *testing.T) {
 	dir := filepath.Dir(path)
 
 	old := SettingsWriteWindow
-	t.Cleanup(func() { SettingsWriteWindow = old; resetAbortedForTest() })
+	t.Cleanup(func() { SettingsWriteWindow = old; ResetSettingsWritesForTest() })
 	SettingsWriteWindow = func() {
 		if n := tempCount(t, dir); n != 1 {
 			t.Fatalf("in the write window there should be one temp file, found %d", n)
@@ -307,12 +307,4 @@ func tempCount(t *testing.T, dir string) int {
 		}
 	}
 	return n
-}
-
-// resetAbortedForTest reopens the write registry after an abort, so later tests
-// in the package can write again.
-func resetAbortedForTest() {
-	writes.Lock()
-	defer writes.Unlock()
-	writes.aborted = false
 }
