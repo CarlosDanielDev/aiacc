@@ -14,18 +14,16 @@ import (
 // --- Edit account settings ----------------------------------------------------
 
 // EditForm is the edit screen's state. Field indexes the focused input: 0 token,
-// 1 base URL, 2 model. Token is what the user has typed, never a value read from
-// the file: the file's token is only ever reported as HasToken. BaseURL and Model
-// are prefilled from the file.
+// 1 base URL, 2 model. SettingsEnv carries what the file holds (prefilled base URL
+// and model, and whether a token is set). Token is what the user has typed; the
+// file's token value is never read into the form.
 type EditForm struct {
-	Field    int
-	Token    string
-	BaseURL  string
-	Model    string
-	HasToken bool
+	provider.SettingsEnv
+	Field int
+	Token string
 }
 
-// fields is the number of inputs the screen cycles through.
+// editFields is the number of inputs the screen cycles through.
 const editFields = 3
 
 // editDotCap bounds the mask so a long token never widens the frame. The dots
@@ -44,34 +42,36 @@ func RenderEdit(account, file, hint string, f EditForm, sz Size) string {
 		boxBlank(w),
 	)
 
-	// input renders one field: label, value (or a dim placeholder), and the caret
-	// when focused. The value is cut to the frame, never wider than it.
-	input := func(i int, label, value string, placeholder seg) string {
-		labelInk, caret := inkGrey, ""
+	// row is one labelled input: the label and caret take the focus styling, and
+	// value is the field's content (or its dim placeholder). idle is the caret's
+	// style when unfocused; the token row has always carried none.
+	row := func(i int, label string, value seg, idle seg) string {
+		labelInk, caret := inkGrey, idle
 		if f.Field == i {
-			labelInk, caret = inkWhite, "▏"
+			labelInk, caret = inkWhite, seg{"▏", inkPink}
 		}
-		v := seg{trunc(value, w-16), inkWhite}
+		return boxRow([]seg{pad(2), {label, labelInk}, value, caret}, w)
+	}
+	text := func(value string, placeholder seg) seg {
 		if value == "" {
-			v = placeholder
+			return placeholder
 		}
-		return boxRow([]seg{pad(2), {label, labelInk}, v, {caret, inkPink}}, w)
+		return seg{trunc(value, w-16), inkWhite}
 	}
 
 	// The token is dots, one per byte typed, capped. An empty field says whether
 	// the file already holds a key; it never looks prefilled.
 	tokenView := seg{strings.Repeat("•", min(len(f.Token), editDotCap)), inkWhite}
-	tokenHolder := seg{"paste a new key", inkDim}
-	if f.HasToken {
-		tokenHolder = seg{"keep current key", inkDim}
-	}
 	if f.Token == "" {
-		tokenView = tokenHolder
+		tokenView = seg{"paste a new key", inkDim}
+		if f.HasToken {
+			tokenView = seg{"keep current key", inkDim}
+		}
 	}
 	lines = append(lines,
-		boxRow([]seg{pad(2), {"token     ", editLabelInk(f.Field, 0)}, tokenView, editCaret(f.Field, 0)}, w),
-		input(1, "base url ", f.BaseURL, seg{"not set", inkDim}),
-		input(2, "model    ", f.Model, seg{"not set", inkDim}),
+		row(0, "token     ", tokenView, seg{"", ""}),
+		row(1, "base url ", text(f.BaseURL, seg{"not set", inkDim}), seg{"", inkPink}),
+		row(2, "model    ", text(f.Model, seg{"not set", inkDim}), seg{"", inkPink}),
 		boxBlank(w),
 	)
 
@@ -83,21 +83,6 @@ func RenderEdit(account, file, hint string, f EditForm, sz Size) string {
 	lines = append(lines, boxBottom(w))
 	legend := legendLine([][2]string{{"", "edit settings"}, {"⇥", "field"}, {"⏎", "save"}, {"esc", "cancel"}})
 	return frame(lines, legend, sz, w)
-}
-
-// editLabelInk and editCaret give the token row the same focus styling as input().
-func editLabelInk(field, i int) string {
-	if field == i {
-		return inkWhite
-	}
-	return inkGrey
-}
-
-func editCaret(field, i int) seg {
-	if field == i {
-		return seg{"▏", inkPink}
-	}
-	return seg{"", ""}
 }
 
 // driveEdit is the edit-screen input loop, decoupled from /dev/tty for tests. It
@@ -157,18 +142,12 @@ func RunEdit(account, path string, f EditForm) (bool, error) {
 	return driveEdit(path, account, f, g, tty, tty)
 }
 
-// exitOnSignal waits for the first shutdown signal, restores the terminal, and
-// exits through exitAfterCleanup. openRawTTY runs it; exit is a seam.
+// exitOnSignal waits for the first shutdown signal, restores the terminal,
+// aborts any settings write in flight (its temp file holds a new token, so it
+// is removed), and exits. openRawTTY runs it; exit is a seam.
 func exitOnSignal(sigc <-chan os.Signal, restore func(), exit func(int)) {
 	<-sigc
 	restore()
-	exitAfterCleanup(130, exit)
-}
-
-// exitAfterCleanup is the signal path's last step: it aborts any settings write
-// in flight, so its temp file (which holds a new token) is removed, and then
-// exits. exit is a seam so the path can be tested without ending the process.
-func exitAfterCleanup(code int, exit func(int)) {
 	provider.AbortSettingsWrites()
-	exit(code)
+	exit(130)
 }

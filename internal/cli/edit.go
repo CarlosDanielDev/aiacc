@@ -25,10 +25,6 @@ func runEditTUI(row tui.Row) error {
 			Color: tui.Red,
 		}})
 	}
-	_, err = tui.RunEdit(row.Account, row.Settings, tui.EditForm{
-		BaseURL:  env.BaseURL,
-		Model:    env.Model,
-		HasToken: env.HasToken,
-	})
+	_, err = tui.RunEdit(row.Account, row.Settings, tui.EditForm{SettingsEnv: env})
 	return err
 }

@@ -62,7 +62,7 @@ type SettingsEdit struct {
 // ReadSettingsEnv reports the endpoint fields of the settings file at path.
 // It is the only read aiacc makes of that file, and it never returns the token.
 func ReadSettingsEnv(path string) (SettingsEnv, error) {
-	_, env, _, err := loadSettings(path)
+	_, env, _, _, err := loadSettings(path)
 	if err != nil {
 		return SettingsEnv{}, err
 	}
@@ -80,29 +80,21 @@ func ReadSettingsEnv(path string) (SettingsEnv, error) {
 // whole. The mode becomes 0600 or the file's stricter existing mode, never
 // wider. A symlink is followed, so the link itself survives the edit.
 func EditSettings(path string, e SettingsEdit) error {
-	doc, env, real, err := loadSettings(path)
+	doc, env, real, mode, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
-	set := func(key string, v string) error {
-		if v == "" {
-			return nil
+	for _, kv := range []struct{ key, val string }{
+		{envAuthToken, e.Token}, {envBaseURL, e.BaseURL}, {envModel, e.Model},
+	} {
+		if kv.val == "" { // an empty field keeps the file's value
+			continue
 		}
-		raw, err := json.Marshal(v)
+		raw, err := json.Marshal(kv.val)
 		if err != nil {
 			return err
 		}
-		env[key] = raw
-		return nil
-	}
-	if err := set(envAuthToken, e.Token); err != nil {
-		return err
-	}
-	if err := set(envBaseURL, e.BaseURL); err != nil {
-		return err
-	}
-	if err := set(envModel, e.Model); err != nil {
-		return err
+		env[kv.key] = raw
 	}
 	envRaw, err := json.Marshal(env)
 	if err != nil {
@@ -113,43 +105,45 @@ func EditSettings(path string, e SettingsEdit) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(real, append(out, '\n'))
+	return writeFileAtomic(real, mode, append(out, '\n'))
 }
 
 // loadSettings reads and validates the settings file at path. It returns the
 // top-level object, the env object (empty when absent), and the real path
 // after following any symlink. Errors name the file and the reason only.
-func loadSettings(path string) (doc, env map[string]json.RawMessage, real string, err error) {
+func loadSettings(path string) (doc, env map[string]json.RawMessage, real string, mode fs.FileMode, err error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, "", SettingsError{Path: path, Err: ErrSettingsMissing}
+			return nil, nil, "", 0, SettingsError{Path: path, Err: ErrSettingsMissing}
 		}
-		return nil, nil, "", err
+		return nil, nil, "", 0, err
 	}
-	if info.IsDir() {
-		return nil, nil, "", SettingsError{Path: path, Err: ErrSettingsDir}
+	if RefuseSettingsDir(path) != nil {
+		return nil, nil, "", 0, SettingsError{Path: path, Err: ErrSettingsDir}
 	}
+	// Owner read/write at most, and never more than the file already allowed.
+	mode = info.Mode().Perm() & 0o600
 	real, err = filepath.EvalSymlinks(path)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", 0, err
 	}
 	raw, err := os.ReadFile(real)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", 0, err
 	}
 	// The decoder's own error text can quote the bytes it tripped on, which
 	// may be the token, so it is replaced by a fixed reason.
 	if err := json.Unmarshal(raw, &doc); err != nil || doc == nil {
-		return nil, nil, "", SettingsError{Path: path, Err: ErrSettingsInvalid}
+		return nil, nil, "", 0, SettingsError{Path: path, Err: ErrSettingsInvalid}
 	}
 	env = map[string]json.RawMessage{}
 	if envRaw, ok := doc["env"]; ok && string(envRaw) != "null" {
 		if err := json.Unmarshal(envRaw, &env); err != nil || env == nil {
-			return nil, nil, "", SettingsError{Path: path, Err: ErrSettingsEnv}
+			return nil, nil, "", 0, SettingsError{Path: path, Err: ErrSettingsEnv}
 		}
 	}
-	return doc, env, real, nil
+	return doc, env, real, mode, nil
 }
 
 // envString is the string value of key in env, or "" when absent or not a string.
@@ -194,13 +188,7 @@ func AbortSettingsWrites() {
 
 // writeFileAtomic replaces the file at path with data: a temp file in the same
 // directory gets the new contents and the target mode, then renames over it.
-func writeFileAtomic(path string, data []byte) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	// Owner read/write at most, and never more than the file already allowed.
-	mode := info.Mode().Perm() & 0o600
+func writeFileAtomic(path string, mode fs.FileMode, data []byte) error {
 	writes.Lock()
 	if writes.aborted {
 		writes.Unlock()

@@ -56,7 +56,7 @@ func fileEnv(t *testing.T, path string) map[string]string {
 
 // glmForm is the prefill the picker passes for a settings-backed account.
 func glmForm(hasToken bool) EditForm {
-	return EditForm{BaseURL: "https://glm.example/api", Model: "glm-4.6", HasToken: hasToken}
+	return EditForm{SettingsEnv: provider.SettingsEnv{BaseURL: "https://glm.example/api", Model: "glm-4.6", HasToken: hasToken}}
 }
 
 func TestDriveEditKeyOpensEditForSelectedRow(t *testing.T) {
@@ -91,7 +91,7 @@ func TestEditEmptyTokenKeepsExistingKey(t *testing.T) {
 	path := editFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"`+sentinelToken+`","ANTHROPIC_BASE_URL":"https://old"}}`)
 	// Tab to base URL, clear it ("https://old" is 11 bytes), type the new one.
 	keys := "\t" + strings.Repeat("\x7f", len("https://old")) + "https://new\r"
-	saved, screen := runEdit(t, path, EditForm{BaseURL: "https://old", HasToken: true}, keys)
+	saved, screen := runEdit(t, path, EditForm{SettingsEnv: provider.SettingsEnv{BaseURL: "https://old", HasToken: true}}, keys)
 	if !saved {
 		t.Fatal("save not reported")
 	}
@@ -148,9 +148,9 @@ func TestEditEscCancelsWithoutWriting(t *testing.T) {
 // TestEditPrefillsEndpointButNeverToken: the base URL and model are shown; the
 // token is not, and a file that has one says so instead of showing dots.
 func TestEditPrefillsEndpointButNeverToken(t *testing.T) {
-	out := RenderEdit("glm", "settings.json", "", EditForm{
+	out := RenderEdit("glm", "settings.json", "", EditForm{SettingsEnv: provider.SettingsEnv{
 		BaseURL: "https://glm.example/api", Model: "glm-4.6", HasToken: true,
-	}, Size{Cols: 80, Rows: 24})
+	}}, Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"https://glm.example/api", "glm-4.6", "keep current key"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("frame misses %q:\n%s", want, out)
@@ -163,7 +163,7 @@ func TestEditPrefillsEndpointButNeverToken(t *testing.T) {
 
 // TestEditFrameNeverEchoesToken: even a token the screen holds renders as dots.
 func TestEditFrameNeverEchoesToken(t *testing.T) {
-	out := RenderEdit("glm", "settings.json", "", EditForm{Token: sentinelToken, HasToken: true}, Size{Cols: 80, Rows: 24})
+	out := RenderEdit("glm", "settings.json", "", EditForm{Token: sentinelToken, SettingsEnv: provider.SettingsEnv{HasToken: true}}, Size{Cols: 80, Rows: 24})
 	if strings.Contains(out, sentinelToken) {
 		t.Fatalf("token echoed in frame:\n%s", out)
 	}
@@ -178,9 +178,9 @@ func TestEditFramesFitTerminal(t *testing.T) {
 	long := "https://" + strings.Repeat("very-long-host-", 8) + "example.com/api/v1"
 	for _, sz := range []Size{{20, 10}, {24, 12}, {40, 14}, {60, 8}, {80, 24}, {200, 60}} {
 		frames := map[string]string{
-			"edit":      RenderEdit("claude-glm-account-with-a-long-name", "settings.json", "", EditForm{Token: strings.Repeat("x", 80), HasToken: true, BaseURL: long, Model: long}, sz),
+			"edit":      RenderEdit("claude-glm-account-with-a-long-name", "settings.json", "", EditForm{Token: strings.Repeat("x", 80), SettingsEnv: provider.SettingsEnv{HasToken: true, BaseURL: long, Model: long}}, sz),
 			"edit-hint": RenderEdit("glm", "settings.json", "settings.json is not valid JSON — nothing written", glmForm(true), sz),
-			"edit-tok":  RenderEdit("glm", "settings.json", "", EditForm{Field: 2, BaseURL: long}, sz),
+			"edit-tok":  RenderEdit("glm", "settings.json", "", EditForm{Field: 2, SettingsEnv: provider.SettingsEnv{BaseURL: long}}, sz),
 		}
 		for name, out := range frames {
 			if used := strings.Count(out, "\r\n"); used >= sz.Rows {
