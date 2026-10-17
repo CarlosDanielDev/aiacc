@@ -12,7 +12,7 @@ import (
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	in := &Config{Providers: map[string]Provider{
+	in := &Config{BinDir: "/home/u/bin", Providers: map[string]Provider{
 		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]Account{
 			"work":     {Dir: "~/.claude-work", Quota: 0},
 			"personal": {Dir: "~/.claude-personal", Quota: 100},
@@ -21,9 +21,19 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err := Save(path, in); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `bin_dir = "/home/u/bin"`) {
+		t.Fatalf("bin_dir not written as a top-level key:\n%s", raw)
+	}
 	out, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+	if out.BinDir != "/home/u/bin" {
+		t.Fatalf("bin_dir lost on round trip: %q", out.BinDir)
 	}
 	if out.Providers["claude"].EnvVar != "CLAUDE_CONFIG_DIR" {
 		t.Fatalf("env_var lost: %+v", out.Providers["claude"])

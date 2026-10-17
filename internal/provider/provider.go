@@ -4,6 +4,7 @@ package provider
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -154,6 +155,23 @@ func SettingsFile(c *config.Config, provider, account string) string {
 		return ""
 	}
 	return path
+}
+
+// RefuseSettingsDir refuses a settings path that names a directory: a launcher
+// would pass the directory to the CLI as its settings file, and every launch
+// breaks. It stats the path and never reads it (ADR-0006, ADR-0007). A path
+// that does not exist yet is not refused here; doctor reports it as missing.
+// A ~ path whose home directory cannot be resolved is refused, since it cannot
+// be checked.
+func RefuseSettingsDir(value string) error {
+	path, err := ExpandHome(value)
+	if err != nil {
+		return fmt.Errorf("settings path %s cannot be checked: %w", value, err)
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return fmt.Errorf("settings path is a directory, not a settings file: %s", value)
+	}
+	return nil
 }
 
 // LaunchArgs are the arguments every launcher passes the CLI ahead of the

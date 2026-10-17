@@ -17,6 +17,33 @@ fail() {
 	exit 1
 }
 
+# fetch URL [FILE]: download URL to FILE, or to stdout when FILE is omitted.
+# Prefers curl; falls back to wget on systems without it.
+fetch() {
+	if command -v curl >/dev/null 2>&1; then
+		if [ -n "${2:-}" ]; then
+			curl -fsSL "$1" -o "$2"
+		else
+			curl -fsSL "$1"
+		fi
+	else
+		if [ -n "${2:-}" ]; then
+			wget -qO "$2" "$1"
+		else
+			wget -qO- "$1"
+		fi
+	fi
+}
+
+# sha256_of FILE: print the sha256 hex digest of FILE.
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d ' ' -f 1
+	else
+		shasum -a 256 "$1" | cut -d ' ' -f 1
+	fi
+}
+
 # Detect operating system.
 os="$(uname -s)"
 case "$os" in
@@ -33,13 +60,16 @@ case "$arch" in
 	*) fail "unsupported architecture: $arch (only amd64 and arm64 are supported)" ;;
 esac
 
-command -v curl >/dev/null 2>&1 || fail "curl is required but not found"
+command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
+	|| fail "curl or wget is required but neither was found"
 command -v tar >/dev/null 2>&1 || fail "tar is required but not found"
+command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+	|| fail "sha256sum or shasum is required to verify the download"
 
 # Resolve the latest release tag via the GitHub API (no jq dependency).
 printf 'Resolving latest release of %s...\n' "$REPO"
 api_url="https://api.github.com/repos/${REPO}/releases/latest"
-tag="$(curl -fsSL "$api_url" \
+tag="$(fetch "$api_url" \
 	| grep '"tag_name"' \
 	| head -n 1 \
 	| sed -e 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//' -e 's/".*//')"
@@ -64,9 +94,20 @@ tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 
 printf 'Downloading %s (%s)...\n' "$asset" "$tag"
-if ! curl -fsSL "$download_url" -o "${tmp_dir}/${asset}"; then
+if ! fetch "$download_url" "${tmp_dir}/${asset}"; then
 	fail "failed to download $download_url"
 fi
+
+# Verify the archive against the checksums.txt published with the same tag
+# (.goreleaser.yaml checksum block) before anything is extracted.
+checksums_url="https://github.com/${REPO}/releases/download/${tag}/checksums.txt"
+if ! fetch "$checksums_url" "${tmp_dir}/checksums.txt"; then
+	fail "failed to download $checksums_url"
+fi
+expected="$(awk -v f="$asset" '$2 == f { n++; sum = $1 } END { if (n == 1) print sum }' "${tmp_dir}/checksums.txt")"
+[ -n "$expected" ] || fail "no checksum for $asset in checksums.txt"
+actual="$(sha256_of "${tmp_dir}/${asset}")"
+[ "$actual" = "$expected" ] || fail "checksum mismatch for $asset (expected $expected, got $actual)"
 
 printf 'Extracting %s...\n' "$BINARY"
 tar -xzf "${tmp_dir}/${asset}" -C "$tmp_dir" "$BINARY" \
@@ -90,6 +131,6 @@ case ":${PATH}:" in
 	*)
 		printf '\nNote: %s is not on your PATH.\n' "$bin_dir"
 		printf 'Add it, e.g.:\n'
-		printf '  export PATH="%s:$PATH"\n' "$bin_dir"
+		printf "  export PATH=\"%s:\$PATH\"\n" "$bin_dir"
 		;;
 esac

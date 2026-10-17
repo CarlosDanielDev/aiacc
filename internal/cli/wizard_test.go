@@ -617,3 +617,26 @@ func TestAddWizardRefusedNameCreatesNoDir(t *testing.T) {
 		t.Fatalf("refused wizard still created %s (stat err: %v)", dir, statErr)
 	}
 }
+
+// TestAddWizardDirectorySettingsWritesNothing: a settings answer that names a
+// directory is refused before the account dir is created or the config written.
+func TestAddWizardDirectorySettingsWritesNothing(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	dir := filepath.Join(home, "acct")
+	settingsDir := filepath.Join(home, "claude-glm")
+	if err := os.Mkdir(settingsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	input := "foo\n" + dir + "\nclaude\n" + settingsDir + "\n"
+	err := runAddWizard(bytes.NewBufferString(input), &bytes.Buffer{}, path, addPrefill{})
+	if err == nil || !strings.Contains(err.Error(), "settings path is a directory") {
+		t.Fatalf("want a directory refusal, got %v", err)
+	}
+	if _, statErr := os.Stat(dir); statErr == nil {
+		t.Fatalf("refused settings left the account dir behind: %s", dir)
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Fatalf("refused settings wrote the config: %s", path)
+	}
+}

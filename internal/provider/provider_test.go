@@ -130,3 +130,27 @@ func TestLaunchArgs(t *testing.T) {
 		t.Errorf("codex = %v, want none", got)
 	}
 }
+
+// RefuseSettingsDir refuses a directory, passes a file and a path that does not
+// exist yet, and refuses (rather than silently skipping) a ~ path whose home
+// directory cannot be resolved.
+func TestRefuseSettingsDir(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "glm.json")
+	if err := os.WriteFile(file, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RefuseSettingsDir(dir); err == nil {
+		t.Error("a directory was accepted as a settings path")
+	}
+	if err := RefuseSettingsDir(file); err != nil {
+		t.Errorf("a settings file was refused: %v", err)
+	}
+	if err := RefuseSettingsDir(filepath.Join(dir, "missing.json")); err != nil {
+		t.Errorf("a missing path was refused here, doctor's job: %v", err)
+	}
+	t.Setenv("HOME", "")
+	if err := RefuseSettingsDir("~/claude-glm"); err == nil {
+		t.Error("a ~ path with no resolvable home was skipped instead of refused")
+	}
+}
