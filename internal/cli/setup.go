@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
@@ -164,16 +166,21 @@ func (f foreignLauncher) Error() string {
 	return fmt.Sprintf("%s is not an aiacc launcher, so no launcher was written there; move it aside, or run `aiacc setup --replace` to take it over", tildeize(string(f)))
 }
 
-// installLauncher puts a finished launcher at its path. It is a variable so a
-// test can see the install step, and so a failing install can be simulated.
+// installLauncher replaces aiacc's own launcher with a finished one. It is a
+// variable so a failing install can be simulated.
 var installLauncher = os.Rename
+
+// linkLauncher is the hard-link install, a variable so tests can plant a file in
+// the gap before it runs, or simulate a filesystem without hard links.
+var linkLauncher = os.Link
 
 // writeLauncher writes a single executable launcher script. Something at the
 // path that aiacc did not write is never overwritten: it returns a
 // foreignLauncher, unless replace moves it aside first, to <name>.aiacc-bak (or
 // .aiacc-bak2, …), and returns that backup's path. The script is staged in a
-// temp file beside the target and renamed into place, so nothing is ever
-// written through a symlink at the path: rename replaces the link itself.
+// temp file beside the target and then linked (or, failing that, exclusively
+// created) at the path, so nothing is written through a symlink there and
+// nothing that appears in the gap is overwritten.
 func writeLauncher(binDir, name string, replace bool, command, envVar, dir string, args ...string) (backup string, err error) {
 	content, err := shell.LauncherScript(command, envVar, dir, args...)
 	if err != nil {
@@ -194,13 +201,61 @@ func writeLauncher(binDir, name string, replace bool, command, envVar, dir strin
 			return "", err
 		}
 	}
-	if err := installLauncher(staged, path); err != nil {
+	if err := installAt(staged, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			// Something appeared in the gap since the check, and it is not ours:
+			// leave it where it is and report it.
+			return backup, foreignLauncher(path)
+		}
 		if backup != "" {
 			return backup, fmt.Errorf("%s was moved to %s, but its launcher was not installed: %w", tildeize(path), tildeize(backup), err)
 		}
 		return "", err
 	}
 	return backup, nil
+}
+
+// installAt puts the staged launcher at path. A launcher aiacc already has there
+// is replaced by rename. Anything else must be absent, and placeNew refuses to
+// replace whatever is there.
+func installAt(staged, path string) error {
+	if isAiaccLauncher(path) {
+		// Only aiacc's own file, checked just now. The few microseconds between
+		// this check and the rename can only ever touch a file aiacc wrote.
+		return installLauncher(staged, path)
+	}
+	return placeNew(staged, path)
+}
+
+// placeNew makes staged the file at path, failing with fs.ErrExist when anything
+// is there. A hard link does that atomically. Where the filesystem has no hard
+// links (FAT, some network mounts), it falls back to an exclusive create, which
+// copies the script.
+func placeNew(staged, path string) error {
+	err := linkLauncher(staged, path)
+	if !errors.Is(err, syscall.EPERM) && !errors.Is(err, syscall.ENOTSUP) &&
+		!errors.Is(err, syscall.EOPNOTSUPP) && !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	return createExclusive(staged, path)
+}
+
+// createExclusive writes the staged script to a path that must not exist.
+func createExclusive(staged, path string) error {
+	body, err := os.ReadFile(staged)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(body)
+	if err := errors.Join(werr, f.Close()); err != nil {
+		os.Remove(path) // our own file: the exclusive create just made it
+		return err
+	}
+	return nil
 }
 
 // stageLauncher writes content to a new, uniquely named executable file in

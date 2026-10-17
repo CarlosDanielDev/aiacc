@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -174,13 +173,11 @@ func runAddTUI(cfgPath string) error {
 	return notice
 }
 
-// launcherNotice shows a refused launcher on the message screen after the add or
-// rename screen has closed. The picker cannot return it, since that would exit
-// the loop. Other sync failures stay quiet: a gone dir already shows as the
-// picker's setup nudge.
+// launcherNotice shows a failed launcher install on the message screen, after the
+// add or rename screen has closed. The picker cannot return it, since that would
+// exit the loop, and it must not be dropped either.
 func launcherNotice(err error) error {
-	var foreign foreignLauncher
-	if !errors.As(err, &foreign) {
+	if err == nil {
 		return nil
 	}
 	return showMessage("aiacc — launcher", []tui.Line{{Text: err.Error(), Color: tui.Red}})

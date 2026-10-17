@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
@@ -203,9 +204,9 @@ func TestSetupNeverWritesThroughSymlink(t *testing.T) {
 // back by hand.
 func TestReplaceInstallFailureNamesBackup(t *testing.T) {
 	cfgPath, foreign := foreignSetup(t)
-	old := installLauncher
-	installLauncher = func(string, string) error { return errors.New("disk full") }
-	t.Cleanup(func() { installLauncher = old })
+	old := linkLauncher
+	linkLauncher = func(string, string) error { return errors.New("disk full") }
+	t.Cleanup(func() { linkLauncher = old })
 
 	c, err := config.Load(cfgPath)
 	if err != nil {
@@ -312,5 +313,104 @@ func TestOrphanIgnoresStagedTempFile(t *testing.T) {
 	}
 	if got := orphanLaunchers(bin, map[string]bool{}); len(got) != 0 {
 		t.Fatalf("staged temp file reported as an orphan: %+v", got)
+	}
+}
+
+// Nothing at the path when setup checks it, but a regular file appears before
+// the install. The install must refuse it and leave it intact: no clobber.
+func TestPlantedFileInGapIsNotClobbered(t *testing.T) {
+	cfgPath, foreign := foreignSetup(t)
+	if err := os.Remove(foreign); err != nil {
+		t.Fatal(err)
+	}
+	old := linkLauncher
+	linkLauncher = func(src, dst string) error {
+		if err := os.WriteFile(dst, []byte("planted in the gap"), 0o644); err != nil {
+			return err
+		}
+		return old(src, dst)
+	}
+	t.Cleanup(func() { linkLauncher = old })
+
+	res, err := doSetup(cfgPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(foreign); string(got) != "planted in the gap" {
+		t.Fatalf("install clobbered a file that appeared in the gap: %q", got)
+	}
+	if !slices.Contains(res.Skipped, foreign) {
+		t.Fatalf("planted file not reported as skipped: %v", res.Skipped)
+	}
+}
+
+// Where the filesystem cannot hard-link (FAT, some network mounts), the install
+// falls back to an exclusive create: a fresh path is still written, and a file
+// planted in the gap is still refused.
+func TestLinkUnsupportedFallsBackToExclusiveCreate(t *testing.T) {
+	cfgPath, foreign := foreignSetup(t)
+	if err := os.Remove(foreign); err != nil {
+		t.Fatal(err)
+	}
+	old := linkLauncher
+	linkLauncher = func(string, string) error { return syscall.EPERM }
+	t.Cleanup(func() { linkLauncher = old })
+
+	res, err := doSetup(cfgPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isAiaccLauncher(foreign) || !slices.Contains(res.Names, "work") {
+		t.Fatalf("fallback did not write the launcher: names=%v", res.Names)
+	}
+
+	if err := os.Remove(foreign); err != nil {
+		t.Fatal(err)
+	}
+	plant := func(string, string) error { return syscall.EPERM }
+	linkLauncher = func(src, dst string) error {
+		if err := os.WriteFile(dst, []byte("planted in the gap"), 0o644); err != nil {
+			return err
+		}
+		return plant(src, dst)
+	}
+	res, err = doSetup(cfgPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(foreign); string(got) != "planted in the gap" {
+		t.Fatalf("exclusive-create fallback clobbered a planted file: %q", got)
+	}
+	if !slices.Contains(res.Skipped, foreign) {
+		t.Fatalf("planted file not reported as skipped: %v", res.Skipped)
+	}
+}
+
+// A sync failure that is not a foreign file (here: the bin dir is read-only) must
+// reach the user on the message screen too, not vanish.
+func TestLauncherNoticeShowsAnySyncError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	cfgPath, _ := foreignSetup(t)
+	bin := filepath.Dir(cfgPath)
+	bin = filepath.Join(filepath.Dir(bin), ".local", "bin")
+	if err := os.Remove(filepath.Join(bin, "work")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(bin, 0o755) })
+	captured := captureHandoffMessage(t)
+	err := syncLauncher(cfgPath, "claude", "work")
+	if err == nil {
+		t.Fatal("precondition: a read-only bin dir must fail the sync")
+	}
+	if err := launcherNotice(err); err != nil {
+		t.Fatal(err)
+	}
+	if len(*captured) == 0 || !strings.Contains((*captured)[0].Text, "permission denied") {
+		t.Fatalf("sync error not shown on the message screen: %+v", *captured)
 	}
 }
