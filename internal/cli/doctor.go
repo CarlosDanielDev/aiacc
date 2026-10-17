@@ -283,7 +283,7 @@ func checkLaunchers(c *config.Config) []finding {
 	owners := map[string][]string{}
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		for an := range c.Providers[pn].Accounts {
-			owners[an] = append(owners[an], pn)
+			owners[an] = accountOwners(c, an)
 		}
 	}
 	for _, an := range slices.Sorted(maps.Keys(owners)) {

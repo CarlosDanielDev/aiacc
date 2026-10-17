@@ -437,21 +437,32 @@ func TestAddSettingsUnknown(t *testing.T) {
 	}
 }
 
-// A refused name must leave nothing on disk: the dir the user typed would
-// otherwise be created before saveAccount said no, the issue's own scenario
-// (`aiacc add codex work --dir ~/.codex-work`).
+// A refused name must leave nothing on disk, whichever check refuses it: a name
+// another provider owns, or a name that is not a valid launcher filename. The
+// dir the user typed must never be created first (the issue's own scenario is
+// `aiacc add codex work --dir ~/.codex-work`).
 func TestAddRefusedNameCreatesNoDir(t *testing.T) {
-	path := withTempConfig(t)
-	seedConfig(t, path, t.TempDir(), 0) // claude "work"
-	dir := filepath.Join(t.TempDir(), "codex-work")
-
-	add := newAddCmd()
-	add.SetArgs([]string{"codex", "work", "--dir", dir})
-	if err := add.Execute(); err == nil {
-		t.Fatal("codex work was accepted while claude work exists")
+	cases := []struct {
+		name, provider, account string
+	}{
+		{"taken by another provider", "codex", "work"},
+		{"invalid launcher name", "claude", "../evil"},
 	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("refused add still created %s (stat err: %v)", dir, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := withTempConfig(t)
+			seedConfig(t, path, t.TempDir(), 0) // claude "work"
+			dir := filepath.Join(t.TempDir(), "acct")
+
+			add := newAddCmd()
+			add.SetArgs([]string{tc.provider, tc.account, "--dir", dir})
+			if err := add.Execute(); err == nil {
+				t.Fatalf("%s %s was accepted", tc.provider, tc.account)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatalf("refused add still created %s (stat err: %v)", dir, err)
+			}
+		})
 	}
 }
 
@@ -482,22 +493,6 @@ func TestAddTakenNameMessageNamesTheCase(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("cross-provider message lacks %q: %v", want, err)
 		}
-	}
-}
-
-// An invalid name is refused before the dir is created: the name is a launcher
-// filename, so a traversal name must not get as far as a directory on disk.
-func TestAddInvalidNameCreatesNoDir(t *testing.T) {
-	withTempConfig(t)
-	dir := filepath.Join(t.TempDir(), "evil")
-
-	add := newAddCmd()
-	add.SetArgs([]string{"claude", "../evil", "--dir", dir})
-	if err := add.Execute(); err == nil {
-		t.Fatal("traversal name was accepted")
-	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("refused name still created %s (stat err: %v)", dir, err)
 	}
 }
 

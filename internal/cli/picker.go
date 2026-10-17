@@ -150,7 +150,7 @@ func runAddTUI(cfgPath string) error {
 		return nil
 	}
 	// Before the dir is created: a refused name must leave nothing behind.
-	if err := checkNewName(cfgPath, prov, res.Name); err != nil {
+	if err := checkNewName(c, prov, res.Name); err != nil {
 		return err
 	}
 	dir := expandTilde(res.Dir)

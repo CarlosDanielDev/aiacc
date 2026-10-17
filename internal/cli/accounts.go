@@ -62,7 +62,11 @@ func newAddCmd() *cobra.Command {
 			if dir == "" {
 				return fmt.Errorf("--dir is required")
 			}
-			if err := checkNewName(path, providerName, account); err != nil {
+			cfg, err := config.Load(path)
+			if err != nil {
+				return err
+			}
+			if err := checkNewName(cfg, providerName, account); err != nil {
 				return err
 			}
 			// Expand once, here: the dir the user typed (~/.claude-foo) must
@@ -239,17 +243,25 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 	})
 }
 
-// ownerOf reports the provider that already registers account, if any. The
-// launcher is named by the bare account, so a name belongs to one provider across
-// the whole config: a second provider's account of that name would overwrite the
-// first one's command.
-func ownerOf(c *config.Config, account string) (string, bool) {
+// accountOwners lists every provider that registers account, sorted. The
+// launcher is named by the bare account, so one name should have one owner.
+func accountOwners(c *config.Config, account string) []string {
+	var out []string
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		if _, ok := c.Providers[pn].Accounts[account]; ok {
-			return pn, true
+			out = append(out, pn)
 		}
 	}
-	return "", false
+	return out
+}
+
+// ownerOf reports the provider that already registers account, if any.
+func ownerOf(c *config.Config, account string) (string, bool) {
+	owners := accountOwners(c, account)
+	if len(owners) == 0 {
+		return "", false
+	}
+	return owners[0], true
 }
 
 // nameTakenError says why provider cannot register account: owner already has it.
@@ -272,13 +284,9 @@ func invalidNameError(name string) error {
 // they create a config dir or a settings skeleton: a refused add must leave no
 // trace on disk. saveAccount repeats the checks under the config lock, for a
 // concurrent writer.
-func checkNewName(cfgPath, providerName, account string) error {
+func checkNewName(c *config.Config, providerName, account string) error {
 	if !tui.ValidName(account) {
 		return invalidNameError(account)
-	}
-	c, err := config.Load(cfgPath)
-	if err != nil {
-		return err
 	}
 	if owner, taken := ownerOf(c, account); taken {
 		return nameTakenError(account, providerName, owner)

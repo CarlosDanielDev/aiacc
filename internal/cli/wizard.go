@@ -59,7 +59,7 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 	// Refused here, before the dir question and any write: the name becomes a
 	// directory suffix and a launcher filename.
 	if !tui.ValidName(name) {
-		return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", name)
+		return invalidNameError(name)
 	}
 
 	home, _ := os.UserHomeDir()
@@ -103,7 +103,7 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 
 	// A name another provider owns is refused now, before the settings questions
 	// and before any write (the dir is created further down).
-	if err := checkNewName(cfgPath, providerName, name); err != nil {
+	if err := checkNewName(cfg, providerName, name); err != nil {
 		return err
 	}
 
