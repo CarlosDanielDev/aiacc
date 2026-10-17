@@ -30,7 +30,11 @@ func runPicker(filter string) error {
 		}
 		rows := collectRows(c, filter)
 
-		res, err := tui.Run(rows, setupNeeded())
+		ver := version
+		if strings.TrimSpace(ver) == "" {
+			ver = "dev"
+		}
+		res, err := tui.Run(rows, setupNeeded(), ver)
 		if err != nil {
 			return err
 		}

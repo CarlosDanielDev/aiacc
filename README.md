@@ -42,7 +42,7 @@ Bare `aiacc` opens an interactive launcher:
 ```
 
 > Hacker / matrix-terminal skin — **phosphor green on black**, a `>` prompt with
-> a blinking cursor and cyan hotkeys, a `» N profiles :: ✓ READY` status readout,
+> a blinking cursor and cyan hotkeys, a `» N profiles :: ✓ READY` status readout with the build version dim at its right edge,
 > and a **live** `AIACC` logo (dark-green → bright-green → cyan sweep) that
 > **glitches** in short data-tear bursts, plus a reverse-video glow on the
 > selected row. Add / rename / edit / remove / hand off / setup all happen in-screen.
