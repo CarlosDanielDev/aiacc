@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -64,8 +65,10 @@ func runPicker(filter string) error {
 				if err := renameAccount(path, row.Provider, row.Account, newName); err != nil {
 					return err
 				}
-				removeLauncher(path, row.Account)             // drop old command
-				_ = syncLauncher(path, row.Provider, newName) // a gone dir shows as the picker's setup nudge
+				removeLauncher(path, row.Account) // drop old command
+				if err := launcherNotice(syncLauncher(path, row.Provider, newName)); err != nil {
+					return err
+				}
 			}
 			continue
 		case tui.Edit:
@@ -166,9 +169,21 @@ func runAddTUI(cfgPath string) error {
 	if err := saveAccount(cfgPath, prov, res.Name, res.Dir, 0, "", "", res.Settings); err != nil {
 		return err
 	}
-	_ = syncLauncher(cfgPath, prov, res.Name) // a gone dir shows as the picker's setup nudge
-	linkProfile(prov, dir)                    // same skills/agents as the bare CLI
-	return nil
+	notice := launcherNotice(syncLauncher(cfgPath, prov, res.Name))
+	linkProfile(prov, dir) // same skills/agents as the bare CLI
+	return notice
+}
+
+// launcherNotice shows a refused launcher on the message screen after the add or
+// rename screen has closed. The picker cannot return it, since that would exit
+// the loop. Other sync failures stay quiet: a gone dir already shows as the
+// picker's setup nudge.
+func launcherNotice(err error) error {
+	var foreign foreignLauncher
+	if !errors.As(err, &foreign) {
+		return nil
+	}
+	return showMessage("aiacc — launcher", []tui.Line{{Text: err.Error(), Color: tui.Red}})
 }
 
 // pickProviderTUI chooses which provider a new account belongs to: the built-in

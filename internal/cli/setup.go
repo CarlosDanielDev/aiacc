@@ -131,6 +131,9 @@ func writeAllLaunchers(c *config.Config, binDir string, replace bool, res *tui.S
 				continue
 			}
 			backup, err := writeLauncher(binDir, an, replace, cmd, env, dir, provider.LaunchArgs(c, pn, an)...)
+			if backup != "" {
+				res.Backups = append(res.Backups, backup) // kept even when the install then failed
+			}
 			var foreign foreignLauncher
 			switch {
 			case errors.As(err, &foreign):
@@ -138,9 +141,6 @@ func writeAllLaunchers(c *config.Config, binDir string, replace bool, res *tui.S
 				continue
 			case err != nil:
 				return err
-			}
-			if backup != "" {
-				res.Backups = append(res.Backups, backup)
 			}
 			res.Names = append(res.Names, an)
 		}
@@ -156,15 +156,26 @@ func (f foreignLauncher) Error() string {
 	return fmt.Sprintf("%s is not an aiacc launcher, so no launcher was written there; move it aside, or run `aiacc setup --replace` to take it over", tildeize(string(f)))
 }
 
+// installLauncher puts a finished launcher at its path. It is a variable so a
+// test can see the install step, and so a failing install can be simulated.
+var installLauncher = os.Rename
+
 // writeLauncher writes a single executable launcher script. Something at the
 // path that aiacc did not write is never overwritten: it returns a
 // foreignLauncher, unless replace moves it aside first, to <name>.aiacc-bak (or
-// .aiacc-bak2, …), and returns that backup's path.
+// .aiacc-bak2, …), and returns that backup's path. The script is staged in a
+// temp file beside the target and renamed into place, so nothing is ever
+// written through a symlink at the path: rename replaces the link itself.
 func writeLauncher(binDir, name string, replace bool, command, envVar, dir string, args ...string) (backup string, err error) {
 	content, err := shell.LauncherScript(command, envVar, dir, args...)
 	if err != nil {
 		return "", err
 	}
+	staged, err := stageLauncher(binDir, name, content)
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(staged) // a no-op once the rename has moved it
 	path := filepath.Join(binDir, name)
 	if isForeign(path) {
 		if !replace {
@@ -175,18 +186,50 @@ func writeLauncher(binDir, name string, replace bool, command, envVar, dir strin
 			return "", err
 		}
 	}
-	return backup, os.WriteFile(path, []byte(content), 0o755)
+	if err := installLauncher(staged, path); err != nil {
+		if backup != "" {
+			return backup, fmt.Errorf("%s was moved to %s, but its launcher was not installed: %w", tildeize(path), tildeize(backup), err)
+		}
+		return "", err
+	}
+	return backup, nil
 }
 
-// isForeign reports whether something sits at path that aiacc did not write:
-// anything that is not a regular file carrying the launcher mark. Lstat, not
-// Stat, so a symlink is never followed and never written through.
-func isForeign(path string) bool {
-	info, err := os.Lstat(path)
+// stageLauncher writes content to a new, uniquely named executable file in
+// binDir and returns its path.
+func stageLauncher(binDir, name, content string) (string, error) {
+	f, err := os.CreateTemp(binDir, "."+name+".tmp-*")
 	if err != nil {
+		return "", err
+	}
+	_, werr := f.WriteString(content)
+	if werr == nil {
+		werr = f.Chmod(0o755)
+	}
+	if err := errors.Join(werr, f.Close()); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+// isAiaccLauncher reports whether path is a launcher aiacc wrote: a small
+// regular file that shell.IsLauncher accepts. Lstat, so a symlink never counts.
+func isAiaccLauncher(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxLauncherSize {
+		return false
+	}
+	body, err := os.ReadFile(path)
+	return err == nil && shell.IsLauncher(string(body))
+}
+
+// isForeign reports whether something sits at path that aiacc did not write.
+func isForeign(path string) bool {
+	if _, err := os.Lstat(path); err != nil {
 		return false // nothing there
 	}
-	return !info.Mode().IsRegular() || !fileContains(path, shell.LauncherMark)
+	return !isAiaccLauncher(path)
 }
 
 // syncLauncher (re)writes one account's launcher so `add` keeps the commands
@@ -224,8 +267,7 @@ func removeLauncher(cfgPath, account string) {
 	if err != nil {
 		return
 	}
-	path := filepath.Join(setupBinDir(c), account)
-	if !isForeign(path) {
+	if path := filepath.Join(setupBinDir(c), account); isAiaccLauncher(path) {
 		_ = os.Remove(path)
 	}
 }
