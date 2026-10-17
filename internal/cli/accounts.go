@@ -3,14 +3,17 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
+	"github.com/CarlosDanielDev/aiacc/internal/usage"
 	"github.com/spf13/cobra"
 )
 
@@ -390,35 +393,129 @@ func renameAccount(path, providerName, oldName, newName string) error {
 	})
 }
 
+// accountColumns picks the optional column groups of the account table. list
+// composes them from its flags; the hidden status and usage aliases each keep
+// one fixed set, so their output is what it was before they shared this code.
+type accountColumns struct {
+	login  bool // LOGIN and DIR
+	active bool // ACTIVE and LAST-USED
+	usage  bool // INPUT, OUTPUT, TOTAL and USED/QUOTA: walks session logs
+}
+
 func newListCmd() *cobra.Command {
-	return &cobra.Command{
+	var status, usage bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List providers and accounts",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			path, err := configPath()
-			if err != nil {
-				return err
-			}
-			c, err := config.Load(path)
-			if err != nil {
-				return err
-			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-			fmt.Fprintln(w, "PROVIDER\tACCOUNT\tLOGIN\tDIR")
-			for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-				p := c.Providers[pn]
-				for _, a := range slices.Sorted(maps.Keys(p.Accounts)) {
-					login := "-"
-					if exp, err := provider.AccountDir(c, pn, a); err == nil {
-						if email, _, ok := loginOf(exp); ok {
-							login = email
-						}
-					}
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", pn, a, login, p.Accounts[a].Dir)
-				}
-			}
-			return w.Flush()
+			return runAccountTable(cmd, "", accountColumns{login: true, active: status, usage: usage})
 		},
 	}
+	cmd.Flags().BoolVar(&status, "status", false, "add the active config dir and last-used time")
+	cmd.Flags().BoolVar(&usage, "usage", false, "add token totals and USED/QUOTA (reads session logs: slow on large histories)")
+	return cmd
+}
+
+// newStatusCmd and newUsageCmd are hidden aliases of `list --status` and
+// `list --usage`, kept so existing scripts keep working.
+func newStatusCmd() *cobra.Command {
+	return newAccountAlias("status", "Show active account per provider", cobra.NoArgs, accountColumns{active: true})
+}
+
+func newUsageCmd() *cobra.Command {
+	return newAccountAlias("usage [provider]", "Show token usage per account", cobra.MaximumNArgs(1), accountColumns{usage: true})
+}
+
+func newAccountAlias(use, short string, args cobra.PositionalArgs, cols accountColumns) *cobra.Command {
+	return &cobra.Command{
+		Use:    use,
+		Short:  short,
+		Hidden: true,
+		Args:   args,
+		RunE: func(cmd *cobra.Command, a []string) error {
+			filter := ""
+			if len(a) == 1 {
+				filter = a[0]
+			}
+			return runAccountTable(cmd, filter, cols)
+		},
+	}
+}
+
+// runAccountTable loads the config and prints the account table to cmd's output.
+func runAccountTable(cmd *cobra.Command, filter string, cols accountColumns) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	return printAccounts(cmd.OutOrStdout(), c, filter, cols)
+}
+
+// aggregateUsage is indirected so tests can count session-log walks.
+var aggregateUsage = usage.Aggregate
+
+// printAccounts writes one row per account of provider filter ("" = all). A row
+// whose dir cannot resolve is dropped only when a column needs the dir.
+func printAccounts(w io.Writer, c *config.Config, filter string, cols accountColumns) error {
+	header := []string{"PROVIDER", "ACCOUNT"}
+	if cols.login {
+		header = append(header, "LOGIN", "DIR")
+	}
+	if cols.active {
+		header = append(header, "ACTIVE", "LAST-USED")
+	}
+	if cols.usage {
+		header = append(header, "INPUT", "OUTPUT", "TOTAL", "USED/QUOTA")
+	}
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, strings.Join(header, "\t"))
+	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
+		if filter != "" && pn != filter {
+			continue
+		}
+		p := c.Providers[pn]
+		env, _ := provider.EnvVar(c, pn)
+		for _, a := range slices.Sorted(maps.Keys(p.Accounts)) {
+			dir, err := provider.AccountDir(c, pn, a)
+			if err != nil && (cols.active || cols.usage) {
+				continue
+			}
+			cells := []string{pn, a}
+			if cols.login {
+				login := "-"
+				if err == nil {
+					if email, _, ok := loginOf(dir); ok {
+						login = email
+					}
+				}
+				cells = append(cells, login, p.Accounts[a].Dir)
+			}
+			if cols.active {
+				active := ""
+				if env != "" && os.Getenv(env) == dir {
+					active = "*"
+				}
+				lastUsed := "-"
+				if fi, err := os.Stat(dir); err == nil {
+					lastUsed = fi.ModTime().Format("2006-01-02 15:04")
+				}
+				cells = append(cells, active, lastUsed)
+			}
+			if cols.usage {
+				t, _ := aggregateUsage(dir)
+				usedQuota := "-"
+				if quota := p.Accounts[a].Quota; quota > 0 {
+					usedQuota = fmt.Sprintf("%d/%d", t.Total(), quota)
+				}
+				cells = append(cells, fmt.Sprint(t.Input), fmt.Sprint(t.Output), fmt.Sprint(t.Total()), usedQuota)
+			}
+			fmt.Fprintln(tw, strings.Join(cells, "\t"))
+		}
+	}
+	return tw.Flush()
 }

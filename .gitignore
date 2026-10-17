@@ -24,3 +24,9 @@ maestro-state.json.lock
 # Code intelligence indexes (local; rebuilt on demand)
 .codegraph/
 graphify-out/
+
+# wave plan scratch (local; anchored so docs/**/plans/ stays visible)
+/plans/
+
+# Claude Code local settings (hooks reference machine-specific paths)
+.claude/
