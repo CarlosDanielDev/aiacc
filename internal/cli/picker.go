@@ -80,7 +80,7 @@ func runPicker(filter string) error {
 			}
 			continue
 		case tui.Setup:
-			res, err := doSetup(path)
+			res, err := doSetup(path, false)
 			if err != nil {
 				return err
 			}

@@ -134,7 +134,7 @@ func linkOne(baseDir, dir, name string, replace bool) Entry {
 		if !replace {
 			return Entry{Name: name, Status: st}
 		}
-		backup = backupName(dst)
+		backup = BackupName(dst)
 		if err := os.Rename(dst, backup); err != nil {
 			return Entry{Name: name, Status: Failed, Err: err}
 		}
@@ -153,14 +153,14 @@ func linkOne(baseDir, dir, name string, replace bool) Entry {
 // rename has already moved the original.
 var symlink = os.Symlink
 
-// backupName returns dst suffixed with ".aiacc-bak", or ".aiacc-bak2",
+// BackupName returns dst suffixed with ".aiacc-bak", or ".aiacc-bak2",
 // ".aiacc-bak3", ... — the first suffix nothing occupies. Renaming over an
 // existing backup would destroy the only copy of an earlier original. Lstat, not
 // Stat, so a backup that is itself a symlink still counts as taken.
 //
 // The probe and the caller's rename are not atomic: a backup created in this
 // window is replaced — accepted: single-user CLI, serial runs.
-func backupName(dst string) string {
+func BackupName(dst string) string {
 	name := dst + ".aiacc-bak"
 	for n := 2; ; n++ {
 		if _, err := os.Lstat(name); err != nil {

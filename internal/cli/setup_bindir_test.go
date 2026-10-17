@@ -29,7 +29,7 @@ func installedElsewhere(t *testing.T) (cfgPath, installDir, laterDir string) {
 	if err := saveAccount(cfgPath, "claude", "work", filepath.Join(home, ".claude-work"), 0, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := doSetup(cfgPath); err != nil {
+	if _, err := doSetup(cfgPath, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(installDir, "work")); err != nil {
