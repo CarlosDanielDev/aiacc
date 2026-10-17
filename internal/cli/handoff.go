@@ -88,9 +88,9 @@ func handoffDirect(cmd *cobra.Command, cfgPath, providerName, from, to, sessionI
 	if meta.Cwd != "" {
 		// The line is meant to be pasted into a shell, so the recorded cwd is
 		// quoted — it comes from the session transcript, not from aiacc.
-		fmt.Fprintf(out, "  cd %s && %s --resume %s\n", shell.PosixQuote(meta.Cwd), to, sess.ID)
+		fmt.Fprintf(out, "  cd %s && %s\n", shell.PosixQuote(meta.Cwd), resumeLine(to, "", sess.ID))
 	} else {
-		fmt.Fprintf(out, "  %s --resume %s\n", to, sess.ID)
+		fmt.Fprintf(out, "  %s\n", resumeLine(to, "", sess.ID))
 	}
 
 	if launch {
@@ -237,11 +237,17 @@ func handoffDoneLinesFlag(to string, meta session.Meta, id, bypass string) []tui
 	if meta.Cwd != "" {
 		body = append(body, tui.Line{Text: "cd " + shell.PosixQuote(meta.Cwd), Color: tui.Blue})
 	}
-	cmd := to
-	if bypass != "" {
-		cmd += " " + bypass
+	return append(body, tui.Line{Text: resumeLine(to, bypass, id), Color: tui.Blue})
+}
+
+// resumeLine is the command that resumes session id under the to account: the
+// launcher name, the bypass flag when there is one, then --resume. Callers add
+// any cd in front; this is the part both the printed and the copied line share.
+func resumeLine(to, bypass, id string) string {
+	if bypass == "" {
+		return to + " --resume " + id
 	}
-	return append(body, tui.Line{Text: cmd + " --resume " + id, Color: tui.Blue})
+	return to + " " + bypass + " --resume " + id
 }
 
 // acctRef is a launchable account (provider, account, expanded dir).

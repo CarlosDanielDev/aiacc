@@ -608,18 +608,26 @@ func TestSaveAccountSettings(t *testing.T) {
 	}
 }
 
-// captureHandoffDone swaps showHandoffDone for a recorder and restores it on
-// cleanup: the captured box and body are what the checkbox screen would show.
+// stubHandoffDone swaps showHandoffDone for onCall and restores it on cleanup,
+// so a test can drive a handoff entry point without a tty.
+func stubHandoffDone(t *testing.T, onCall func(tui.Checkbox, func(bool) []tui.Line) error) {
+	t.Helper()
+	old := showHandoffDone
+	showHandoffDone = func(_ string, box tui.Checkbox, body func(bool) []tui.Line) error {
+		return onCall(box, body)
+	}
+	t.Cleanup(func() { showHandoffDone = old })
+}
+
+// captureHandoffDone records the checkbox and body the done screen would show.
 func captureHandoffDone(t *testing.T) (*tui.Checkbox, *func(bool) []tui.Line) {
 	t.Helper()
 	var box tui.Checkbox
 	var body func(bool) []tui.Line
-	old := showHandoffDone
-	showHandoffDone = func(_ string, b tui.Checkbox, fn func(bool) []tui.Line) error {
+	stubHandoffDone(t, func(b tui.Checkbox, fn func(bool) []tui.Line) error {
 		box, body = b, fn
 		return nil
-	}
-	t.Cleanup(func() { showHandoffDone = old })
+	})
 	return &box, &body
 }
 
@@ -658,12 +666,10 @@ func TestHandoffDoneLinesFlagPlacement(t *testing.T) {
 // bypass flag gets the plain screen, with no checkbox to offer.
 func TestHandoffDoneNoCheckboxWithoutBypassFlag(t *testing.T) {
 	lines := captureHandoffMessage(t)
-	old := showHandoffDone
-	showHandoffDone = func(string, tui.Checkbox, func(bool) []tui.Line) error {
+	stubHandoffDone(t, func(tui.Checkbox, func(bool) []tui.Line) error {
 		t.Fatal("checkbox screen shown for a target with no bypass flag")
 		return nil
-	}
-	t.Cleanup(func() { showHandoffDone = old })
+	})
 	if err := showDone("", "personal", session.Meta{Cwd: "/x"}, "abc123"); err != nil {
 		t.Fatalf("showDone: %v", err)
 	}

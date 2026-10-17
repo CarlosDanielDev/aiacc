@@ -824,13 +824,15 @@ func TestFramesFitTerminal(t *testing.T) {
 
 	for _, sz := range []Size{{20, 10}, {24, 12}, {40, 14}, {60, 8}, {80, 24}, {200, 60}} {
 		frames := map[string]string{
-			"picker": Render(many, 20, true, sz),
-			"list":   RenderList("pick a session", items, 20, sz),
-			"remove": RenderRemove(many[0], sz),
-			"add":    RenderAdd("me@example.com", "claude", AddForm{Name: "work", WithSettings: true}, "bad name", sz),
-			"rename": RenderRename("work", "work-2", "", sz),
-			"setup":  RenderSetupResult(setupResult(), sz),
-			"msg":    RenderMessage("aiacc — shared assets", body, sz),
+			"picker":         Render(many, 20, true, sz),
+			"list":           RenderList("pick a session", items, 20, sz),
+			"remove":         RenderRemove(many[0], sz),
+			"add":            RenderAdd("me@example.com", "claude", AddForm{Name: "work", WithSettings: true}, "bad name", sz),
+			"rename":         RenderRename("work", "work-2", "", sz),
+			"setup":          RenderSetupResult(setupResult(), sz),
+			"msg":            RenderMessage("aiacc — shared assets", body, sz),
+			"done-unchecked": renderCheckMessage("hand off · done", checkBody(false), Line{}, &testBox, false, sz),
+			"done-checked":   renderCheckMessage("hand off · done", checkBody(true), Line{}, &testBox, true, sz),
 		}
 		for name, out := range frames {
 			// One newline per emitted row: the cursor must never be pushed past
@@ -1064,44 +1066,9 @@ func TestCheckboxLegendShowsKey(t *testing.T) {
 	}
 }
 
-// TestPlainMessageIgnoresToggleKeys: a message without a box is unchanged by
-// space and b, and draws no checkbox.
+// TestPlainMessageIgnoresToggleKeys: with no checkbox, space and b draw no box
+// and leave the body in its initial state, even when the body reads the flag.
 func TestPlainMessageIgnoresToggleKeys(t *testing.T) {
-	out := &bytes.Buffer{}
-	body := []Line{{Text: "work --resume x", Color: Blue}}
-	err := driveMessage("hand off · done", func(bool) []Line { return body }, nil, fixedGeom(80, 24),
-		bytes.NewBufferString(" b q"), out, func(string) bool { return true })
-	if err != nil {
-		t.Fatalf("driveMessage: %v", err)
-	}
-	frame := lastFrame(out.String())
-	if strings.Contains(frame, "[ ]") || strings.Contains(frame, "space/b") {
-		t.Fatalf("plain message grew a checkbox:\n%s", frame)
-	}
-}
-
-// TestCheckboxFramesFitTerminal: the checkbox, with and without its warning,
-// fits every size the other frames are held to.
-func TestCheckboxFramesFitTerminal(t *testing.T) {
-	for _, sz := range []Size{{20, 10}, {24, 12}, {40, 14}, {60, 8}, {80, 24}, {200, 60}} {
-		for _, checked := range []bool{false, true} {
-			out := renderCheckMessage("hand off · done", checkBody(checked), Line{}, &testBox, checked, sz)
-			if used := strings.Count(out, "\r\n"); used >= sz.Rows {
-				t.Errorf("checked=%t %dx%d: %d rows emitted into a %d-row terminal", checked, sz.Cols, sz.Rows, used, sz.Rows)
-			}
-			for _, ln := range strings.Split(out, "\r\n") {
-				if n := visibleLen(ln); n > sz.Cols {
-					t.Errorf("checked=%t %dx%d: line is %d wide:\n%q", checked, sz.Cols, sz.Rows, n, ln)
-					break
-				}
-			}
-		}
-	}
-}
-
-// TestPlainMessageStateNeverChanges: with no checkbox, space leaves the body in
-// its initial state even when the body reads the checked flag.
-func TestPlainMessageStateNeverChanges(t *testing.T) {
 	out := &bytes.Buffer{}
 	body := func(checked bool) []Line {
 		if checked {
@@ -1109,10 +1076,16 @@ func TestPlainMessageStateNeverChanges(t *testing.T) {
 		}
 		return []Line{{Text: "initial-state", Color: Blue}}
 	}
-	if err := driveMessage("t", body, nil, fixedGeom(80, 24), bytes.NewBufferString(" q"), out, func(string) bool { return true }); err != nil {
+	err := driveMessage("hand off · done", body, nil, fixedGeom(80, 24),
+		bytes.NewBufferString(" bq"), out, func(string) bool { return true })
+	if err != nil {
 		t.Fatalf("driveMessage: %v", err)
 	}
+	frame := lastFrame(out.String())
+	if strings.Contains(frame, "[ ]") || strings.Contains(frame, "space/b") {
+		t.Fatalf("plain message grew a checkbox:\n%s", frame)
+	}
 	if strings.Contains(out.String(), "CHECKED-STATE") {
-		t.Fatalf("space changed the state of a plain message:\n%s", out.String())
+		t.Fatalf("space or b changed the state of a plain message:\n%s", out.String())
 	}
 }
