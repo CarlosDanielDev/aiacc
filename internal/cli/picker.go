@@ -59,7 +59,7 @@ func runPicker(filter string) error {
 				if err := renameAccount(path, row.Provider, row.Account, newName); err != nil {
 					return err
 				}
-				removeLauncher(row.Account)               // drop old command
+				removeLauncher(path, row.Account)         // drop old command
 				syncLauncher(path, row.Provider, newName) // install new one
 			}
 			continue

@@ -29,6 +29,10 @@ type Provider struct {
 }
 
 type Config struct {
+	// BinDir is the directory `aiacc setup` last installed the launchers into.
+	// Remove, sync and doctor read it back, so they keep finding those files
+	// after PATH changes. Empty until setup has run.
+	BinDir    string              `toml:"bin_dir,omitempty"`
 	Providers map[string]Provider `toml:"providers"`
 }
 

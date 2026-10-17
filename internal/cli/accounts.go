@@ -246,7 +246,7 @@ func removeAccount(path, providerName, account string) error {
 	}); err != nil {
 		return err
 	}
-	removeLauncher(account) // drop the command too (best-effort)
+	removeLauncher(path, account) // drop the command too (best-effort)
 	return nil
 }
 
@@ -263,7 +263,7 @@ func newRenameCmd() *cobra.Command {
 			if err := renameAccount(path, args[0], args[1], args[2]); err != nil {
 				return err
 			}
-			removeLauncher(args[1])              // drop the old command
+			removeLauncher(path, args[1])        // drop the old command
 			syncLauncher(path, args[0], args[2]) // install the new one
 			return nil
 		},

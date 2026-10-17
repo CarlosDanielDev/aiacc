@@ -71,6 +71,14 @@ func doSetup(cfgPath string) (tui.SetupResult, error) {
 	if err != nil {
 		return tui.SetupResult{}, err
 	}
+	// Record where the launchers went, so a later PATH change cannot make
+	// remove, sync or doctor look in the wrong directory.
+	if err := config.Update(cfgPath, func(c *config.Config) error {
+		c.BinDir = binDir
+		return nil
+	}); err != nil {
+		return tui.SetupResult{}, err
+	}
 	// A launcher that starts the CLI with none of your skills, sub-agents or
 	// slash commands is only half installed — share them into every profile as
 	// part of the same one step. Never destructive: an entry a profile owns is
@@ -132,13 +140,13 @@ func writeLauncher(binDir, name, command, envVar, dir string, args ...string) er
 // dir exists), so `add` keeps the commands current without a manual re-setup.
 // Best-effort: a failure here never fails the add.
 func syncLauncher(cfgPath, providerName, account string) {
-	binDir, _ := launcherBinDir()
-	if info, err := os.Stat(binDir); err != nil || !info.IsDir() {
-		return // not set up yet; `aiacc setup` will create it
-	}
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return
+	}
+	binDir := setupBinDir(c)
+	if info, err := os.Stat(binDir); err != nil || !info.IsDir() {
+		return // not set up yet; `aiacc setup` will create it
 	}
 	cmd := launchCommand(c, providerName)
 	env, _ := provider.EnvVar(c, providerName)
@@ -150,9 +158,23 @@ func syncLauncher(cfgPath, providerName, account string) {
 }
 
 // removeLauncher deletes an account's launcher script if present. Best-effort.
-func removeLauncher(account string) {
+func removeLauncher(cfgPath, account string) {
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(filepath.Join(setupBinDir(c), account))
+}
+
+// setupBinDir is the directory setup installed the launchers into, as recorded
+// in the config. A config that predates the record falls back to the directory
+// PATH points at today, which is how it was found before the record existed.
+func setupBinDir(c *config.Config) string {
+	if c.BinDir != "" {
+		return c.BinDir
+	}
 	binDir, _ := launcherBinDir()
-	_ = os.Remove(filepath.Join(binDir, account))
+	return binDir
 }
 
 // launcherBinDir picks where to install the launchers and whether it is already
@@ -230,7 +252,7 @@ func setupNeeded() bool {
 	if err != nil {
 		return false
 	}
-	binDir, _ := launcherBinDir()
+	binDir := setupBinDir(c)
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		if launchCommand(c, pn) == "" {
 			continue
