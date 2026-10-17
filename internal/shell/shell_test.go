@@ -118,3 +118,47 @@ func TestLauncherScriptArgNoBreakout(t *testing.T) {
 		t.Fatalf("arg not passed intact: %q", out)
 	}
 }
+
+// pathLineBreakout runs the PathLine statement for dir in shellBin and reports
+// whether the injected command ran. The shell gets no startup files and a temp
+// HOME, so fish_add_path cannot touch the user's config.
+func pathLineBreakout(t *testing.T, shellBin, shellName, dir string, args ...string) bool {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), "INJECTED")
+	line, err := PathLine(shellName, strings.ReplaceAll(dir, "MARKER", marker))
+	if err != nil {
+		t.Fatalf("PathLine(%s): %v", shellName, err)
+	}
+	home := t.TempDir()
+	cmd := exec.Command(shellBin, append(args, "-c", line)...)
+	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home, "XDG_DATA_HOME="+home)
+	_, _ = cmd.CombinedOutput() // a failing PATH line is fine; only an injected command matters
+	_, statErr := os.Stat(marker)
+	return statErr == nil
+}
+
+// TestPathLineNoBreakoutBash: PosixQuote keeps a hostile directory inside its
+// single quotes when the PATH line is run by bash.
+func TestPathLineNoBreakoutBash(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	dir := `/tmp/a'; /usr/bin/touch MARKER; echo '`
+	if pathLineBreakout(t, bash, "bash", dir, "--norc", "--noprofile") {
+		t.Fatal("breakout: injected command ran while running the bash PATH line")
+	}
+}
+
+// TestPathLineNoBreakoutFish: fishSingleQuote doubles a trailing backslash before
+// a quote. Without that, the backslash escapes the closing quote in fish.
+func TestPathLineNoBreakoutFish(t *testing.T) {
+	fish, err := exec.LookPath("fish")
+	if err != nil {
+		t.Skip("fish not available")
+	}
+	dir := `/tmp/a\'; touch MARKER; echo \'`
+	if pathLineBreakout(t, fish, "fish", dir, "--no-config") {
+		t.Fatal("breakout: injected command ran while running the fish PATH line")
+	}
+}

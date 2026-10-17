@@ -36,7 +36,7 @@ func retiredShellInit(shellName string) string {
 func eraseOldHook(shellName string) string {
 	switch shellName {
 	case "fish":
-		return "functions -q aiacc; and functions -e aiacc\n"
+		return "if functions -q aiacc; functions -e aiacc; end\n"
 	case "bash", "zsh":
 		return "unset -f aiacc 2>/dev/null || true\n"
 	default:

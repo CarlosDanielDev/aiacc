@@ -51,7 +51,7 @@ func TestShellInitStubIsRetired(t *testing.T) {
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			if sh == "fish" && line == "functions -q aiacc; and functions -e aiacc" {
+			if sh == "fish" && line == "if functions -q aiacc; functions -e aiacc; end" {
 				continue
 			}
 			if sh != "fish" && line == "unset -f aiacc 2>/dev/null || true" {
@@ -110,9 +110,11 @@ func TestShellInitStubEvalIsNoop(t *testing.T) {
 				err := cmd.Run()
 				return out.String(), errb.String(), err
 			}
-			out, errs, err := run(`eval "$AIACC_STUB"; echo ok`)
-			if err != nil || strings.TrimSpace(out) != "ok" || errs != "" {
-				t.Fatalf("eval of stub: err=%v stdout=%q stderr=%q\nstub:\n%s", err, out, errs, stub)
+			// The shell's exit status is the status of the last command the stub ran,
+			// so a stub that ends in a failing command fails here.
+			out, errs, err := run(`eval "$AIACC_STUB"`)
+			if err != nil || out != "" || errs != "" {
+				t.Fatalf("eval of stub: exit=%v stdout=%q stderr=%q\nstub:\n%s", err, out, errs, stub)
 			}
 		})
 	}
