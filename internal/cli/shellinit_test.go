@@ -154,3 +154,54 @@ func TestShellInitStubErasesOldHook(t *testing.T) {
 		})
 	}
 }
+
+// The stub is run the way a startup file runs it: as command substitution in
+// eval, or piped into source. fish splits command output into one argument per
+// line and eval joins them with spaces, so a comment line must not swallow the
+// executable erase line. A fake aiacc prints the real stub output.
+func TestShellInitStubInvocationForms(t *testing.T) {
+	cases := []struct {
+		shell string
+		bin   string
+		args  []string
+		prog  string
+	}{
+		{"bash", "bash", []string{"--norc", "--noprofile"},
+			`aiacc() { echo old; }; eval "$("$AIACC_BIN" shell-init bash)"; if type aiacc >/dev/null 2>&1; then echo still; else echo gone; fi`},
+		{"zsh", "zsh", []string{"-f"},
+			`aiacc() { echo old; }; eval "$("$AIACC_BIN" shell-init zsh)"; if (( ${+functions[aiacc]} )); then echo still; else echo gone; fi`},
+		{"fish", "fish", []string{"--no-config"},
+			`function aiacc; echo old; end; eval ("$AIACC_BIN" shell-init fish); if functions -q aiacc; echo still; else; echo gone; end`},
+		{"fish-source", "fish", []string{"--no-config"},
+			`function aiacc; echo old; end; "$AIACC_BIN" shell-init fish | source; if functions -q aiacc; echo still; else; echo gone; end`},
+	}
+	for _, c := range cases {
+		t.Run(c.shell, func(t *testing.T) {
+			bin, ok := shellBinary(c.bin)
+			if !ok {
+				t.Skipf("%s not installed", c.bin)
+			}
+			stub, err := runShellInit(t, strings.TrimSuffix(c.shell, "-source"))
+			if err != nil {
+				t.Fatalf("shell-init: %v", err)
+			}
+			dir := t.TempDir()
+			stubFile := filepath.Join(dir, "stub.txt")
+			if err := os.WriteFile(stubFile, []byte(stub), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fake := filepath.Join(dir, "aiacc")
+			if err := os.WriteFile(fake, []byte("#!/bin/sh\ncat "+stubFile+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			home := t.TempDir()
+			args := append(append([]string{}, c.args...), "-c", c.prog)
+			cmd := exec.Command(bin, args...)
+			cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home, "AIACC_BIN="+fake)
+			out, err := cmd.CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != "gone" {
+				t.Fatalf("want old hook erased (gone) with rc 0, got err=%v out=%q\nstub:\n%s", err, out, stub)
+			}
+		})
+	}
+}

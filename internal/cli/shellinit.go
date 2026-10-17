@@ -22,12 +22,14 @@ func newShellInitCmd() *cobra.Command {
 	}
 }
 
-// retiredShellInit is what `eval "$(aiacc shell-init <shell>)"` runs in a startup
-// file. It must stay valid in bash, zsh and fish: a comment, then the one-time
-// erase of the pre-v0.7 `aiacc` hook function in a live shell (ADR 0010).
+// retiredShellInit is what a startup file runs for `aiacc shell-init <shell>`. It
+// must stay valid in bash, zsh and fish. The executable erase of the pre-v0.7
+// `aiacc` hook function comes first (ADR 0010), and the comment last: fish's
+// `eval (...)` joins output lines with spaces, so a leading comment would swallow
+// the erase.
 func retiredShellInit(shellName string) string {
-	return "# aiacc: shell-init is retired. Run `aiacc setup`, then delete this line from your startup file.\n" +
-		eraseOldHook(shellName)
+	return eraseOldHook(shellName) +
+		"# aiacc: shell-init is retired. Run `aiacc setup`, then delete this line from your startup file.\n"
 }
 
 // eraseOldHook removes the pre-v0.7 `aiacc` shell function if it is defined, so a
