@@ -8,7 +8,6 @@ import (
 	"slices"
 	"text/tabwriter"
 
-	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
@@ -412,8 +411,8 @@ func newListCmd() *cobra.Command {
 				for _, a := range slices.Sorted(maps.Keys(p.Accounts)) {
 					login := "-"
 					if exp, err := provider.AccountDir(c, pn, a); err == nil {
-						if info := claude.Detect(exp); info.LoggedIn {
-							login = info.Email
+						if email, _, ok := loginOf(exp); ok {
+							login = email
 						}
 					}
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", pn, a, login, p.Accounts[a].Dir)

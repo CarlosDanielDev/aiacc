@@ -10,7 +10,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
@@ -229,14 +228,14 @@ func currentClaudeLogin() string {
 	if cur == "" {
 		return ""
 	}
-	info := claude.Detect(cur)
-	if !info.LoggedIn {
+	email, org, ok := loginOf(cur)
+	if !ok {
 		return ""
 	}
-	if info.Organization != "" {
-		return info.Email + " (" + info.Organization + ")"
+	if org != "" {
+		return email + " (" + org + ")"
 	}
-	return info.Email
+	return email
 }
 
 func expandTilde(p string) string {
@@ -277,10 +276,11 @@ func collectRows(c *config.Config, filter string) []tui.Row {
 				continue
 			}
 			_, statErr := os.Stat(dir)
+			email, _, _ := loginOf(dir)
 			rows = append(rows, tui.Row{
 				Provider:  pn,
 				Account:   an,
-				Email:     claude.Detect(dir).Email,
+				Email:     email,
 				Dir:       dir,
 				DirExists: statErr == nil,
 				EnvVar:    env,

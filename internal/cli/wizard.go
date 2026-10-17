@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/CarlosDanielDev/aiacc/internal/claude"
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
@@ -43,10 +42,10 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 	r := bufio.NewReader(in)
 
 	if cur := currentClaudeDir(); cur != "" {
-		if info := claude.Detect(cur); info.LoggedIn {
-			fmt.Fprintf(out, "Current Claude login: %s", info.Email)
-			if info.Organization != "" {
-				fmt.Fprintf(out, " (%s)", info.Organization)
+		if email, org, ok := loginOf(cur); ok {
+			fmt.Fprintf(out, "Current Claude login: %s", email)
+			if org != "" {
+				fmt.Fprintf(out, " (%s)", org)
 			}
 			fmt.Fprintln(out)
 		}
