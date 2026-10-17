@@ -8,6 +8,8 @@ Keep your **personal**, **work**, and **client** accounts for **Claude Code**,
 **Codex**, and any other AI CLI side by side — each in its own isolated config —
 and launch any of them by name.
 
+Live page: [carlosdanieldev.github.io/aiacc](https://carlosdanieldev.github.io/aiacc/)
+
 [![Release](https://img.shields.io/github/v/release/CarlosDanielDev/aiacc?sort=semver&color=6c8ebf)](https://github.com/CarlosDanielDev/aiacc/releases)
 [![CI](https://github.com/CarlosDanielDev/aiacc/actions/workflows/ci.yml/badge.svg)](https://github.com/CarlosDanielDev/aiacc/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/github/go-mod/go-version/CarlosDanielDev/aiacc?color=00ADD8)](go.mod)
@@ -60,7 +62,7 @@ Bare `aiacc` opens an interactive launcher:
 - **🧭 Interactive picker** — a bare `aiacc` gives you an arrow-key list to launch, add, rename, or remove accounts.
 - **🧩 Same skills everywhere** — every profile shares your skills, sub-agents, slash commands and hooks, so `claude-work` is the same tool as `claude`, not an empty one.
 - **🔒 Never touches your credentials** — aiacc only points an environment variable at a config directory; each account's login stays in its own dir.
-- **🪶 Zero dependencies** — a single static Go binary. Nothing to install alongside it.
+- **🪶 Nothing to install at runtime** — a single static Go binary, with no runtime or helper to set up alongside it.
 - **🛟 Hard to misuse** — junk names can't be entered, broken profiles can't be launched, and destructive actions ask first.
 
 <details>
@@ -233,7 +235,7 @@ isn't and fails when it's missing.
 | `aiacc` | The interactive picker (front door). Piped/redirected, it prints help instead. |
 | **`<account>`** &nbsp;e.g. `claude-work` | Launch Claude Code in that account (installed by `aiacc setup`). |
 | `aiacc setup` | One-step install of the launcher commands onto your `PATH` — they work immediately. |
-| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you; an existing file is never overwritten (claude). |
+| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. `--quota N` sets an optional manual plan size. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you; an existing file is never overwritten (claude). |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there — Claude profiles only for now, the transcript format is Claude's. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
@@ -241,7 +243,7 @@ isn't and fails when it's missing.
 | `aiacc list` | Table of providers and their accounts. |
 | `aiacc status` | Which config dir each provider's env var currently points at. |
 | `aiacc doctor` | Check that your launchers still work: duplicate installs, alias-only installs, stale launchers, dead shared links. Read-only; exits non-zero when something is broken. |
-| `aiacc usage [provider]` | Token totals per account, from local session logs. |
+| `aiacc usage [provider]` | Token totals per account, from local session logs, plus a `USED/QUOTA` column (`-` until the account has a `--quota`). |
 | `aiacc shell-init <bash\|zsh\|fish>` | Print the per-account launcher **functions** (alternative to `setup`). |
 
 ## ⚙️ Configuration
@@ -352,7 +354,7 @@ up in the picker next time you run `aiacc`.
 | `↑ ↓` / `j k` | move | `a` | add a profile |
 | `⏎` | launch the selected profile | `r` | rename |
 | `h` | hand off a session | `d` | remove (asks first) |
-| `s` | run setup | `q` / `esc` | quit |
+| `s` | run setup | `q` | quit |
 
 On any screen that ends in a command to run — the hand-off result, for one —
 **`ctrl-c` copies it** to your clipboard instead of closing (`q` still closes).
@@ -490,9 +492,11 @@ a new terminal — the launcher commands replace the old hook.
 
 <br>
 
-That provider isn't Claude, and aiacc only knows how to launch the `claude` CLI so
-far. The profile is still registered; launch commands for other providers are a
-planned addition.
+The profile's provider has no launch command configured. `claude` and `codex` ship
+with one; any other CLI gets one when you give it `--command`. Re-running
+`aiacc add <provider> <account> --dir <path> --env <ENV_VAR> --command <cli>` sets
+it, and the profile is then launchable. Until then it stays registered, and
+`aiacc` shows why it is blocked.
 
 </details>
 
