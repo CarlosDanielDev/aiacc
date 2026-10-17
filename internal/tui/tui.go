@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -455,6 +456,11 @@ func Render(rows []Row, cursor int, setupNeeded bool, sz Size) string {
 // renderFrame is Render with an animation phase (colour sweep offset). Static
 // callers pass 0; the live loop advances it for the shimmering logo/border.
 func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) string {
+	return renderPicker(rows, cursor, setupNeeded, phase, "", sz)
+}
+
+// renderPicker is renderFrame with the aiacc version shown in the status bar.
+func renderPicker(rows []Row, cursor int, setupNeeded bool, phase int, version string, sz Size) string {
 	w := innerWidth(sz.cols())
 	nameCol := min(max(w/2, 10), 28) // the name column tracks the frame width
 
@@ -580,7 +586,7 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) s
 	} else {
 		status = append(status, seg{"✓ READY", inkGreen})
 	}
-	lines = append(lines, boxRow(status, w), boxBottom(w))
+	lines = append(lines, boxRow(withVersion(status, version, w), w), boxBottom(w))
 
 	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"e", "edit"}, {"h", "hand off"}, {"d", "remove"}}
 	if setupNeeded {
@@ -588,6 +594,40 @@ func renderFrame(rows []Row, cursor int, setupNeeded bool, phase int, sz Size) s
 	}
 	pairs = append(pairs, [2]string{"q", "quit"})
 	return frame(lines, legendLine(pairs), sz, w)
+}
+
+// semverLike accepts a release version with or without its leading v. The
+// build's -ldflags value is a bare "0.21.0"; the label always carries one v.
+var semverLike = regexp.MustCompile(`^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?)$`)
+
+// versionLabel is the status-bar form of the build version: "0.21.0" and
+// "v0.21.0" both read "v0.21.0"; "dev", an empty value, or anything that is not
+// a release version reads "dev", so a local build never shows a blank or a bare v.
+func versionLabel(v string) string {
+	m := semverLike.FindStringSubmatch(strings.TrimSpace(v))
+	if m == nil {
+		return "dev"
+	}
+	return "v" + m[1]
+}
+
+// withVersion right-aligns the dim version label after the status readout, one
+// cell in from the border. It is the first thing to go: when the readout leaves
+// no room for the label with a gap, the status is returned untouched, so a
+// narrow terminal loses the version and never a character of the readout.
+func withVersion(status []seg, version string, w int) []seg {
+	if strings.TrimSpace(version) == "" {
+		return status
+	}
+	label := versionLabel(version)
+	used := 0
+	for _, s := range status {
+		used += runeLen(s.text)
+	}
+	if used+1+runeLen(label)+1 > w {
+		return status
+	}
+	return append(status, pad(w-used-runeLen(label)-1), seg{label, inkDim})
 }
 
 func plural(n int, word string) string {
@@ -1323,17 +1363,18 @@ func screenLoop[K any](g *geom, in io.Reader, out io.Writer, read func(*bufio.Re
 }
 
 // Run shows the profile launcher on /dev/tty and returns the user's Result.
-// setupNeeded surfaces the "install the shortcut commands" nudge.
-func Run(rows []Row, setupNeeded bool) (Result, error) {
+// setupNeeded surfaces the "install the shortcut commands" nudge. version is the
+// build version shown in the status bar ("" shows nothing).
+func Run(rows []Row, setupNeeded bool, version string) (Result, error) {
 	return onTTY(Result{Kind: Cancelled}, func(tty *os.File, g *geom) (Result, error) {
-		return animate(rows, setupNeeded, g, tty)
+		return animate(rows, setupNeeded, version, g, tty)
 	})
 }
 
 // animate is the live picker loop: it reads keys in a goroutine and repaints on a
 // ticker so the logo shimmers. Shares the key-state machine with drive().
-func animate(rows []Row, setupNeeded bool, g *geom, tty *os.File) (Result, error) {
-	st := pickerState{cursor: initialCursor(rows), confirm: -1}
+func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File) (Result, error) {
+	st := pickerState{cursor: initialCursor(rows), confirm: -1, version: version}
 	keys := make(chan key)
 	done := make(chan struct{})
 	defer close(done)
@@ -1396,7 +1437,8 @@ func RunRename(oldName string, taken []string) (string, error) {
 // loop and the animated Run loop.
 type pickerState struct {
 	cursor  int
-	confirm int // >=0 while confirming removal of that row
+	confirm int    // >=0 while confirming removal of that row
+	version string // shown in the status bar; "" shows nothing
 }
 
 // handle applies one keypress. It returns (result, true) when the picker is done,
@@ -1454,7 +1496,7 @@ func (s *pickerState) frame(rows []Row, setupNeeded bool, phase int, sz Size) st
 	if s.confirm >= 0 {
 		return RenderRemove(rows[s.confirm], sz)
 	}
-	return renderFrame(rows, s.cursor, setupNeeded, phase, sz)
+	return renderPicker(rows, s.cursor, setupNeeded, phase, s.version, sz)
 }
 
 // drive is the non-animated launcher loop, decoupled from /dev/tty for tests.
