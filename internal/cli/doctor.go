@@ -292,7 +292,7 @@ func checkLaunchers(c *config.Config) []finding {
 			}
 		}
 	}
-	return append(out, orphanLaunchers(registered)...)
+	return append(out, orphanLaunchers(setupBinDir(c), registered)...)
 }
 
 // checkLauncher compares the script actually on PATH against the one setup would
@@ -375,8 +375,7 @@ const maxLauncherSize = 4 << 10
 // orphanLaunchers finds scripts aiacc wrote for accounts the config no longer
 // has — left behind when an account is renamed or removed outside aiacc. The
 // marker check keeps this from ever naming a file aiacc did not write.
-func orphanLaunchers(registered map[string]bool) []finding {
-	binDir, _ := launcherBinDir()
+func orphanLaunchers(binDir string, registered map[string]bool) []finding {
 	ents, err := os.ReadDir(binDir)
 	if err != nil {
 		return nil
