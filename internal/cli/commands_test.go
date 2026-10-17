@@ -282,6 +282,123 @@ func TestHandoffDirectRejectsClaudeCommandWithOtherEnv(t *testing.T) {
 	}
 }
 
+// TestHandoffRefusesSameAccount pins the self-handoff guard: `handoff claude
+// work work` is one argument short of a real handoff, and the copy would
+// truncate the transcript before reading it — silent, irreversible data loss.
+// The direct path must refuse up front and leave the transcript untouched.
+func TestHandoffRefusesSameAccount(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]config.Account{
+			"x": {Dir: dir},
+		}},
+	}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	sdir := filepath.Join(dir, "projects", "-Users-x-proj")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := "abc123de-0000-0000-0000-000000000000"
+	line := `{"type":"user","cwd":"/Users/x/proj","lastPrompt":"hello"}` + "\n"
+	tr := filepath.Join(sdir, sid+".jsonl")
+	if err := os.WriteFile(tr, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newHandoffCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"claude", "x", "x"})
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected handoff to the same account to be refused")
+	}
+	// The refusal must come from handoffDirect's own guard, not from
+	// session.Copy: Copy's message reads "refusing to copy", this one
+	// "refusing to hand off".
+	if !strings.Contains(err.Error(), "refusing to hand off") || !strings.Contains(err.Error(), "same account directory") {
+		t.Fatalf("error should come from the handoffDirect guard, got: %v", err)
+	}
+	after, err := os.ReadFile(tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("transcript clobbered: want %q, got %q", before, after)
+	}
+}
+
+// TestHandoffTwoNamesOneDir covers two account names reaching the same
+// transcript store. Identical Dir strings are caught by handoffDirect's own
+// guard. A second name whose Dir is a symlink to the first gets past that
+// string compare, so session.Copy must refuse it on the same-file check.
+// The interactive picker filters by name only and needs a tty, so it is not
+// driven here; it reaches the same Copy guard.
+func TestHandoffTwoNamesOneDir(t *testing.T) {
+	path := withTempConfig(t)
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skipf("OS refuses to create the symlink: %v", err)
+	}
+	sdir := filepath.Join(dir, "projects", "-Users-x-proj")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := "abc123de-0000-0000-0000-000000000000"
+	tr := filepath.Join(sdir, sid+".jsonl")
+	if err := os.WriteFile(tr, []byte(`{"type":"user","cwd":"/Users/x/proj"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]struct {
+		toDir   string
+		wantErr string
+	}{
+		"identical dir string": {dir, "refusing to hand off"},
+		"symlinked dir":        {link, "refusing to copy"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{Providers: map[string]config.Provider{
+				"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Accounts: map[string]config.Account{
+					"a": {Dir: dir},
+					"b": {Dir: tc.toDir},
+				}},
+			}}
+			if err := config.Save(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			cmd := newHandoffCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetArgs([]string{"claude", "a", "b"})
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want refusal containing %q, got: %v", tc.wantErr, err)
+			}
+			after, err := os.ReadFile(tr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatalf("transcript clobbered: want %q, got %q", before, after)
+			}
+		})
+	}
+}
+
 // TestHandoffTUIRefusesNonClaudeRow drives the picker's handoff action on a
 // codex row and pins the in-screen claude-only refusal — the gate must fire
 // before any session listing, so the flow never starts for a non-claude row.

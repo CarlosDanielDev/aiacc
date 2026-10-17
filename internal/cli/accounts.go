@@ -6,7 +6,6 @@ import (
 	"maps"
 	"os"
 	"slices"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/CarlosDanielDev/aiacc/internal/claude"
@@ -94,26 +93,44 @@ func newAddCmd() *cobra.Command {
 	return cmd
 }
 
+// settingsRefusal is the CLI's refusal of a --settings value that is neither a
+// file path nor a keyword. It states the value once, then the known keywords,
+// and unwraps to the shared refusal so errors.Is(err, provider.ErrUnknownEndpoint)
+// still holds.
+type settingsRefusal struct {
+	value, keywords string
+	cause           error
+}
+
+func (e settingsRefusal) Error() string {
+	return fmt.Sprintf("--settings %q is neither a file path nor a known endpoint keyword (known: %s). "+
+		"Give a settings file path instead; \"custom\" needs the interactive add screen (\"aiacc add\" with no arguments)",
+		e.value, e.keywords)
+}
+
+func (e settingsRefusal) Unwrap() error { return e.cause }
+
 // settingsEndpoint classifies a settings value without writing anything. It
 // returns the endpoint and true when the value is a keyword whose skeleton
 // resolveSettings generates; (zero, false, nil) when the value is registered
-// verbatim; or the refusal resolveSettings would give.
+// verbatim; or the refusal resolveSettings would give. The keyword rule is the
+// shared provider.ClassifySettings.
 func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, error) {
 	if value == "" {
 		return provider.Endpoint{}, false, nil
 	}
-	ep, err := provider.ResolveEndpoint(providerName, value)
+	ep, keyword, err := provider.ClassifySettings(providerName, value)
 	if err != nil {
-		// ResolveEndpoint only returns ErrUnknownEndpoint for a provider that
-		// has a settings flag, so reaching this branch means a bare word that
-		// names no keyword; anything else (unknown provider, no flag) falls
-		// through to saveAccount's refusal.
-		if !errors.Is(err, provider.ErrUnknownEndpoint) || looksLikePath(value) {
-			return provider.Endpoint{}, false, nil // not a keyword — today's path behavior, unchanged
+		// err is the shared keyword refusal, worded for the add screen's hint
+		// row. The CLI composes its own sentence from the refusal's parts.
+		var kr provider.KeywordRefusal
+		if !errors.As(err, &kr) {
+			return provider.Endpoint{}, false, err
 		}
-		// The error already names the typo and lists the valid keywords.
-		return provider.Endpoint{}, false, fmt.Errorf("%w — give a settings file path instead, "+
-			"or run the interactive add screen (\"aiacc add\" with no arguments) for \"custom\"", err)
+		return provider.Endpoint{}, false, settingsRefusal{value: kr.Value, keywords: kr.Keywords, cause: err}
+	}
+	if !keyword {
+		return provider.Endpoint{}, false, nil // not a keyword — today's path behavior, unchanged
 	}
 	if ep.BaseURL == "" {
 		return provider.Endpoint{}, false, fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
@@ -123,18 +140,25 @@ func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, erro
 }
 
 // resolveSettings turns the --settings value into the path the account
-// registers, the CLI spelling of the add screen's settings field. An endpoint
-// keyword (glm) generates the settings skeleton into the account dir and
-// yields the generated path. A refusal is returned by settingsEndpoint before
-// anything is written. A file already at the target aborts the add with its
-// path named; nothing is overwritten (the aiacc link rule).
+// registers, the CLI spelling of the add screen's settings field. Through the
+// shared classification rule (provider.ClassifySettings) an endpoint keyword
+// (glm) generates the settings skeleton into the account dir and yields the
+// generated path, exactly as if the user had written the file by hand and
+// passed its path. A keyword whose preset has no base URL (custom) is
+// refused: its base URL is the user's to type, and only the interactive
+// add screen can ask for it. A bare word that names no keyword is refused
+// with the valid ones listed — a typo must not silently register a bogus
+// settings path — while anything path-like keeps today's verbatim path
+// behavior. A file already at the target aborts the add with its path named;
+// nothing is overwritten (the aiacc link rule). A refusal is decided by
+// settingsEndpoint before anything is written.
 func resolveSettings(providerName, dir, value string) (string, error) {
 	ep, keyword, err := settingsEndpoint(providerName, value)
 	if err != nil {
 		return "", err
 	}
 	if !keyword {
-		return value, nil // a path, registered verbatim
+		return value, nil
 	}
 	// The screen and the CLI register through the same sequence, so the
 	// skeleton lands in the real profile while the registered path keeps the
@@ -150,13 +174,6 @@ func settingsFlagRefusal(providerName, settings string) error {
 		return fmt.Errorf("%s has no settings flag, so --settings cannot apply to it", providerName)
 	}
 	return nil
-}
-
-// looksLikePath reports whether a --settings value reads as a file path rather
-// than a keyword attempt: it holds a separator, a ~, or a dot (/abs, ./rel,
-// a/b, ~/x, file.json). A bare word (glm, kimi) is a keyword attempt.
-func looksLikePath(value string) bool {
-	return strings.ContainsAny(value, "/~.")
 }
 
 // saveAccount registers (provider, account) at dir in the config file at path,

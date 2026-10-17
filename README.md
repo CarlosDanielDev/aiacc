@@ -85,9 +85,6 @@ go install github.com/CarlosDanielDev/aiacc@latest
 
 # Install script (latest release binary → /usr/local/bin or ~/.local/bin)
 curl -fsSL https://raw.githubusercontent.com/CarlosDanielDev/aiacc/main/install.sh | sh
-
-# Homebrew
-brew install CarlosDanielDev/tap/aiacc
 ```
 
 ## 🚀 Quick start

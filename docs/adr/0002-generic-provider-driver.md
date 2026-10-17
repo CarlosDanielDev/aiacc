@@ -1,6 +1,8 @@
 # 0002 — Generic env-var provider driver
 
-Status: Accepted
+Status: Superseded by 0008
+
+Superseded by [0008](0008-launchers-replace-eval-hook.md): the env-var-to-account-directory model still holds there; presets gained per-provider capabilities, and claude is now special-cased.
 
 ## Context
 
