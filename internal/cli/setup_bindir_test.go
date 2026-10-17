@@ -134,3 +134,22 @@ func TestLegacyConfigWithoutBinDirUsesPathLookup(t *testing.T) {
 		t.Fatalf("legacy remove left the launcher behind (stat err=%v)", err)
 	}
 }
+
+// A provider with a command but no env var gets no launcher from setup, so it
+// can never be the reason to nag: setupNeededIn must not ask for one. The second
+// half is the control — the same provider with an env var does need a launcher.
+func TestSetupNeededIgnoresProviderWithoutEnv(t *testing.T) {
+	binDir := t.TempDir()
+	c := &config.Config{Providers: map[string]config.Provider{
+		"custom": {Command: "mytool", Accounts: map[string]config.Account{
+			"play": {Dir: t.TempDir()},
+		}},
+	}}
+	if setupNeededIn(c, binDir) {
+		t.Fatal("setup nags for a provider it can never write a launcher for")
+	}
+	c.Providers["custom"] = config.Provider{EnvVar: "MYTOOL_HOME", Command: "mytool", Accounts: c.Providers["custom"].Accounts}
+	if !setupNeededIn(c, binDir) {
+		t.Fatal("control: with an env var the account has no launcher, so setup is needed")
+	}
+}

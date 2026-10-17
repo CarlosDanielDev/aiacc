@@ -108,9 +108,8 @@ func doSetup(cfgPath string) (tui.SetupResult, error) {
 func writeAllLaunchers(c *config.Config, binDir string) ([]string, error) {
 	var names []string
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		env, _ := provider.EnvVar(c, pn)
-		cmd := launchCommand(c, pn)
-		if cmd == "" || env == "" {
+		cmd, env, ok := launchable(c, pn)
+		if !ok {
 			continue
 		}
 		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
@@ -125,6 +124,15 @@ func writeAllLaunchers(c *config.Config, binDir string) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// launchable reports whether setup can write launchers for provider pn: it needs
+// the CLI to run and the env var that points each account at its dir. A provider
+// missing either is skipped by setup, so doctor and the picker must skip it too.
+func launchable(c *config.Config, pn string) (cmd, env string, ok bool) {
+	env, _ = provider.EnvVar(c, pn)
+	cmd = launchCommand(c, pn)
+	return cmd, env, cmd != "" && env != ""
 }
 
 // writeLauncher writes a single executable launcher script.
@@ -259,9 +267,15 @@ func setupNeeded() bool {
 	if err != nil {
 		return false
 	}
-	binDir := setupBinDir(c)
+	return setupNeededIn(c, setupBinDir(c))
+}
+
+// setupNeededIn is setupNeeded for a loaded config and a bin dir. It asks the
+// same question writeAllLaunchers answers, so a provider setup skips is never a
+// reason to nag.
+func setupNeededIn(c *config.Config, binDir string) bool {
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
-		if launchCommand(c, pn) == "" {
+		if _, _, ok := launchable(c, pn); !ok {
 			continue
 		}
 		for _, an := range slices.Sorted(maps.Keys(c.Providers[pn].Accounts)) {
