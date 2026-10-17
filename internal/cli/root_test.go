@@ -33,7 +33,7 @@ func TestRootAbsorbsStaleShellFlag(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("stale --shell must not error, got %v", err)
 	}
-	if !strings.Contains(errb.String(), "shell-init") {
+	if !strings.Contains(errb.String(), "aiacc setup") {
 		t.Fatalf("missing migration guidance: %q", errb.String())
 	}
 }

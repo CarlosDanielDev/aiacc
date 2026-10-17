@@ -127,18 +127,13 @@ terminal. It's idempotent (safe to re-run), and `aiacc add` / `aiacc remove` /
 > where you'll open a new terminal to finish.
 
 <details>
-<summary>Prefer shell functions over executables?</summary>
+<summary>Migrating from <code>aiacc shell-init</code>?</summary>
 
 <br>
 
-`aiacc shell-init <shell>` prints them, if you'd rather add a line to your startup
-file yourself:
-
-```sh
-eval "$(aiacc shell-init bash)"        # ~/.bashrc
-eval "$(aiacc shell-init zsh)"         # ~/.zshrc
-aiacc shell-init fish | source         # ~/.config/fish/config.fish
-```
+`shell-init` is retired and prints only a comment. If your startup file still has
+an `eval "$(aiacc shell-init …)"` line, replace it with `aiacc setup` and delete the
+line. Open a new terminal to pick it up.
 
 </details>
 
@@ -249,7 +244,6 @@ missing.
 | `aiacc status` | Which config dir each provider's env var currently points at. |
 | `aiacc doctor` | Check that your launchers still work: duplicate installs, alias-only installs, stale launchers, dead shared links. Read-only; exits non-zero when something is broken. |
 | `aiacc usage [provider]` | Token totals per account, from local session logs, plus a `USED/QUOTA` column (`-` until the account has a `--quota`). |
-| `aiacc shell-init <bash\|zsh\|fish>` | Print the per-account launcher **functions** (alternative to `setup`). |
 
 ## ⚙️ Configuration
 

@@ -183,7 +183,7 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 		fmt.Fprintf(out, "Launch %s as this profile:\n", command)
 	}
 	fmt.Fprintf(out, "  aiacc            # pick it from the list, or\n")
-	fmt.Fprintf(out, "  %s               # after adding: aiacc shell-init <shell> to your startup file\n", name)
+	fmt.Fprintf(out, "  %s               # after adding: aiacc setup puts it on your PATH\n", name)
 	if providerName == "claude" {
 		fmt.Fprintf(out, "The first run opens Claude Code; log in there with /login.\n")
 	} else {
