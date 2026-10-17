@@ -393,9 +393,11 @@ command — `--launch` runs it for you, or `ctrl-c` on the result screen copies 
 never touched, and each account's usage stays separate.** It defaults to the most
 recent session; `--session <id>` picks a specific one.
 
-A subagent that already finished is in the copied transcript, with its final report.
-A subagent still running or paused stays in the old process: it does not resume in
-the target account, and no notification arrives after `--resume`.
+A hand-off copies the main session transcript only, not the `subagents/` run files.
+A subagent that had already finished has its final report in that transcript. A
+subagent still running or paused when you hand off does not resume in the new
+account, and you should not expect a notification from it after `--resume`; re-run
+it there if you still need its result.
 
 ## 🔌 Providers — any AI CLI
 
@@ -522,11 +524,11 @@ it, and the profile is then launchable. Until then it stays registered, and
 
 <br>
 
-A subagent that was still running or paused when you handed off lives in the old
-process, so it does not resume in the target account, and nothing reports on it
-after `--resume`. Its final report is in the copied transcript only if it had
-already finished. Check the old session for unfinished work and restart it in the
-new one.
+A hand-off copies the main session transcript only. A subagent that had already
+finished has its final report there. A subagent that was still running or paused
+when you handed off does not resume in the new account, and you should not expect a
+notification from it after `--resume`. Re-run it in the new account if you still
+need its result.
 
 </details>
 

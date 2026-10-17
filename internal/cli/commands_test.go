@@ -171,8 +171,8 @@ func TestHandoffCopiesSessionAndPrintsResume(t *testing.T) {
 }
 
 // TestHandoffHelpStatesSubagentLimit: the help is the only place a user learns
-// that a running or paused subagent does not survive a hand-off, so the rendered
-// --help must say so, not just the Long string in the source.
+// that a hand-off does not carry a running or paused subagent over, so the
+// rendered --help must say so, not just the Long string in the source.
 func TestHandoffHelpStatesSubagentLimit(t *testing.T) {
 	cmd := newHandoffCmd()
 	var out bytes.Buffer
@@ -183,10 +183,12 @@ func TestHandoffHelpStatesSubagentLimit(t *testing.T) {
 	}
 	s := out.String()
 	for _, want := range []string{
-		"subagent",
+		"main session transcript only",
+		"subagents/ run files",
 		"final report",
-		"does not resume",
-		"no notification",
+		"does not resume in the new account",
+		"not expect a notification",
+		"re-run it there",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("help missing %q:\n%s", want, s)
