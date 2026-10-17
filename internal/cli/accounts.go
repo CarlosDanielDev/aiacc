@@ -62,7 +62,7 @@ func newAddCmd() *cobra.Command {
 			if dir == "" {
 				return fmt.Errorf("--dir is required")
 			}
-			if err := refuseTakenName(path, providerName, account); err != nil {
+			if err := checkNewName(path, providerName, account); err != nil {
 				return err
 			}
 			// Expand once, here: the dir the user typed (~/.claude-foo) must
@@ -195,7 +195,7 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 		// in every generated script, so a traversal or junk name is refused
 		// here — the same rule the add screen enforces as you type.
 		if !tui.ValidName(account) {
-			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", account)
+			return invalidNameError(account)
 		}
 		if owner, taken := ownerOf(c, account); taken {
 			return nameTakenError(account, providerName, owner)
@@ -247,11 +247,20 @@ func nameTakenError(account, provider, owner string) error {
 	return fmt.Errorf("account %q already exists under %s, and launchers are named by account, so %s cannot use it too: pick another name, or remove it first with aiacc remove %s %s", account, owner, provider, owner, account)
 }
 
-// refuseTakenName refuses an account name any provider already registers. It
-// writes nothing, so the add entry points call it before they create a config
-// dir or a settings skeleton: a refused add must leave no trace on disk.
-// saveAccount repeats the check under the config lock, for a concurrent writer.
-func refuseTakenName(cfgPath, providerName, account string) error {
+// invalidNameError refuses a name that cannot be a launcher filename.
+func invalidNameError(name string) error {
+	return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", name)
+}
+
+// checkNewName refuses an account name that is invalid, or that any provider
+// already registers. It writes nothing, so the add entry points call it before
+// they create a config dir or a settings skeleton: a refused add must leave no
+// trace on disk. saveAccount repeats the checks under the config lock, for a
+// concurrent writer.
+func checkNewName(cfgPath, providerName, account string) error {
+	if !tui.ValidName(account) {
+		return invalidNameError(account)
+	}
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -325,7 +334,7 @@ func renameAccount(path, providerName, oldName, newName string) error {
 	return config.Update(path, func(c *config.Config) error {
 		// Same rule as saveAccount: the new name becomes the launcher filename.
 		if !tui.ValidName(newName) {
-			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", newName)
+			return invalidNameError(newName)
 		}
 		p, ok := c.Providers[providerName]
 		if !ok {

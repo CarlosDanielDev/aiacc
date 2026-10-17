@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -648,16 +649,29 @@ func TestRenameAccountRefusesNameTakenByAnotherProvider(t *testing.T) {
 }
 
 // Setup must be repeatable: the same config writes the same launchers, in the
-// same order, every time. Collisions included, since both writes land on one file.
+// same order, on every run. The config has 27 accounts across three providers,
+// and the names are shared across providers so the launchers collide. A missing
+// sort only shows on some map iterations, so the run repeats eight times.
 func TestWriteAllLaunchersIsDeterministic(t *testing.T) {
-	c := &config.Config{Providers: map[string]config.Provider{
-		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude", Accounts: map[string]config.Account{
-			"work": {Dir: "/a/claude-work"}, "personal": {Dir: "/a/claude-personal"},
-		}},
-		"codex": {EnvVar: "CODEX_HOME", Command: "codex", Accounts: map[string]config.Account{
-			"work": {Dir: "/a/codex-work"}, "alpha": {Dir: "/a/codex-alpha"},
-		}},
-	}}
+	envs := map[string]string{"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "glab": "GLAB_CONFIG_DIR"}
+	c := &config.Config{Providers: map[string]config.Provider{}}
+	total := 0
+	for _, pn := range []string{"claude", "codex", "glab"} {
+		p := config.Provider{EnvVar: envs[pn], Command: pn, Accounts: map[string]config.Account{}}
+		names := []string{"work", "personal"} // shared by every provider: collisions
+		for i := 0; i < 7; i++ {
+			names = append(names, fmt.Sprintf("%s-%02d", pn, i))
+		}
+		for _, an := range names {
+			p.Accounts[an] = config.Account{Dir: "/a/" + pn + "/" + an}
+			total++
+		}
+		c.Providers[pn] = p
+	}
+	if total < 20 {
+		t.Fatalf("fixture has %d accounts, want at least 20", total)
+	}
+
 	run := func() ([]string, map[string]string) {
 		bin := t.TempDir()
 		names, err := writeAllLaunchers(c, bin)
@@ -678,12 +692,14 @@ func TestWriteAllLaunchersIsDeterministic(t *testing.T) {
 		}
 		return names, files
 	}
-	n1, f1 := run()
-	n2, f2 := run()
-	if !slices.Equal(n1, n2) {
-		t.Fatalf("launcher order differs between runs: %v vs %v", n1, n2)
-	}
-	if !maps.Equal(f1, f2) {
-		t.Fatal("launcher contents differ between runs")
+	wantNames, wantFiles := run()
+	for i := 1; i < 8; i++ {
+		gotNames, gotFiles := run()
+		if !slices.Equal(wantNames, gotNames) {
+			t.Fatalf("run %d: launcher order differs from run 0", i)
+		}
+		if !maps.Equal(wantFiles, gotFiles) {
+			t.Fatalf("run %d: launcher contents differ from run 0", i)
+		}
 	}
 }

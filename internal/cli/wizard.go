@@ -103,7 +103,7 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 
 	// A name another provider owns is refused now, before the settings questions
 	// and before any write (the dir is created further down).
-	if err := refuseTakenName(cfgPath, providerName, name); err != nil {
+	if err := checkNewName(cfgPath, providerName, name); err != nil {
 		return err
 	}
 

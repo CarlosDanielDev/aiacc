@@ -484,3 +484,19 @@ func TestAddTakenNameMessageNamesTheCase(t *testing.T) {
 		}
 	}
 }
+
+// An invalid name is refused before the dir is created: the name is a launcher
+// filename, so a traversal name must not get as far as a directory on disk.
+func TestAddInvalidNameCreatesNoDir(t *testing.T) {
+	withTempConfig(t)
+	dir := filepath.Join(t.TempDir(), "evil")
+
+	add := newAddCmd()
+	add.SetArgs([]string{"claude", "../evil", "--dir", dir})
+	if err := add.Execute(); err == nil {
+		t.Fatal("traversal name was accepted")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("refused name still created %s (stat err: %v)", dir, err)
+	}
+}
