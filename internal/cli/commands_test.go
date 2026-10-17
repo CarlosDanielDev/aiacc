@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -643,5 +644,46 @@ func TestRenameAccountRefusesNameTakenByAnotherProvider(t *testing.T) {
 	}
 	if err := renameAccount(path, "codex", "personal", "work"); err == nil {
 		t.Fatal("expected rename onto a name claude already uses to be refused")
+	}
+}
+
+// Setup must be repeatable: the same config writes the same launchers, in the
+// same order, every time. Collisions included, since both writes land on one file.
+func TestWriteAllLaunchersIsDeterministic(t *testing.T) {
+	c := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude", Accounts: map[string]config.Account{
+			"work": {Dir: "/a/claude-work"}, "personal": {Dir: "/a/claude-personal"},
+		}},
+		"codex": {EnvVar: "CODEX_HOME", Command: "codex", Accounts: map[string]config.Account{
+			"work": {Dir: "/a/codex-work"}, "alpha": {Dir: "/a/codex-alpha"},
+		}},
+	}}
+	run := func() ([]string, map[string]string) {
+		bin := t.TempDir()
+		names, err := writeAllLaunchers(c, bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := map[string]string{}
+		ents, err := os.ReadDir(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range ents {
+			b, err := os.ReadFile(filepath.Join(bin, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[e.Name()] = string(b)
+		}
+		return names, files
+	}
+	n1, f1 := run()
+	n2, f2 := run()
+	if !slices.Equal(n1, n2) {
+		t.Fatalf("launcher order differs between runs: %v vs %v", n1, n2)
+	}
+	if !maps.Equal(f1, f2) {
+		t.Fatal("launcher contents differ between runs")
 	}
 }

@@ -149,6 +149,10 @@ func runAddTUI(cfgPath string) error {
 	if !res.OK {
 		return nil
 	}
+	// Before the dir is created: a refused name must leave nothing behind.
+	if err := refuseTakenName(cfgPath, prov, res.Name); err != nil {
+		return err
+	}
 	dir := expandTilde(res.Dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

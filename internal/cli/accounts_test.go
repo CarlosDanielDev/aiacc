@@ -436,3 +436,51 @@ func TestAddSettingsUnknown(t *testing.T) {
 		t.Fatalf("accounts registered despite the refusals: %+v", c.Providers["claude"].Accounts)
 	}
 }
+
+// A refused name must leave nothing on disk: the dir the user typed would
+// otherwise be created before saveAccount said no, the issue's own scenario
+// (`aiacc add codex work --dir ~/.codex-work`).
+func TestAddRefusedNameCreatesNoDir(t *testing.T) {
+	path := withTempConfig(t)
+	seedConfig(t, path, t.TempDir(), 0) // claude "work"
+	dir := filepath.Join(t.TempDir(), "codex-work")
+
+	add := newAddCmd()
+	add.SetArgs([]string{"codex", "work", "--dir", dir})
+	if err := add.Execute(); err == nil {
+		t.Fatal("codex work was accepted while claude work exists")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("refused add still created %s (stat err: %v)", dir, err)
+	}
+}
+
+// The message must match the case: a same-provider re-add is not a cross-provider
+// collision, and both need a next step the user can take.
+func TestAddTakenNameMessageNamesTheCase(t *testing.T) {
+	path := withTempConfig(t)
+	seedConfig(t, path, t.TempDir(), 0) // claude "work"
+
+	err := saveAccount(path, "claude", "work", t.TempDir(), 0, "", "", "")
+	if err == nil {
+		t.Fatal("same-provider re-add was accepted")
+	}
+	for _, want := range []string{"already exists under claude", "pick another name", "aiacc remove claude work"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("same-provider message lacks %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "cannot use it too") {
+		t.Errorf("same-provider re-add is not a cross-provider collision: %v", err)
+	}
+
+	err = saveAccount(path, "codex", "work", t.TempDir(), 0, "", "", "")
+	if err == nil {
+		t.Fatal("cross-provider add was accepted")
+	}
+	for _, want := range []string{"already exists under claude", "codex cannot use it too", "aiacc remove claude work"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("cross-provider message lacks %q: %v", want, err)
+		}
+	}
+}

@@ -101,6 +101,12 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 		}
 	}
 
+	// A name another provider owns is refused now, before the settings questions
+	// and before any write (the dir is created further down).
+	if err := refuseTakenName(cfgPath, providerName, name); err != nil {
+		return err
+	}
+
 	// A prefilled --env or --command reaches saveAccount, which fills the
 	// provider's env var and command only while it has none. Say so when a
 	// flag will be ignored, instead of dropping it silently.
@@ -123,10 +129,10 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 		}
 	}
 
-	// Every refusal is decided before the first filesystem write: the settings
-	// answer (a typo keyword, custom, a provider with no settings flag). Only
-	// then is the dir created; a generated skeleton creates it too, and the
-	// account name was already checked above.
+	// Every refusal is decided before the first filesystem write: the taken name,
+	// then the settings answer (a typo keyword, custom, a provider with no
+	// settings flag). Only then is the dir created; a generated skeleton creates
+	// it too.
 	if _, _, err := settingsEndpoint(providerName, settings); err != nil {
 		return err
 	}

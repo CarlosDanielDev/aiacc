@@ -62,6 +62,9 @@ func newAddCmd() *cobra.Command {
 			if dir == "" {
 				return fmt.Errorf("--dir is required")
 			}
+			if err := refuseTakenName(path, providerName, account); err != nil {
+				return err
+			}
 			// Expand once, here: the dir the user typed (~/.claude-foo) must
 			// not grow a literal "./~" tree in the working directory, and the
 			// shared assets belong in the real profile. Registration keeps the
@@ -195,7 +198,7 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", account)
 		}
 		if owner, taken := ownerOf(c, account); taken {
-			return nameTakenError(account, owner)
+			return nameTakenError(account, providerName, owner)
 		}
 		env := envOverride
 		if env == "" {
@@ -234,8 +237,29 @@ func ownerOf(c *config.Config, account string) (string, bool) {
 	return "", false
 }
 
-func nameTakenError(account, owner string) error {
-	return fmt.Errorf("account %q already exists under %s: launchers are named by account, so one name cannot serve two providers", account, owner)
+// nameTakenError says why provider cannot register account: owner already has it.
+// The name is one launcher file shared by every provider, so the way out is a
+// different name, or removing the current holder first.
+func nameTakenError(account, provider, owner string) error {
+	if owner == provider {
+		return fmt.Errorf("account %q already exists under %s: pick another name, or remove it first with aiacc remove %s %s", account, owner, owner, account)
+	}
+	return fmt.Errorf("account %q already exists under %s, and launchers are named by account, so %s cannot use it too: pick another name, or remove it first with aiacc remove %s %s", account, owner, provider, owner, account)
+}
+
+// refuseTakenName refuses an account name any provider already registers. It
+// writes nothing, so the add entry points call it before they create a config
+// dir or a settings skeleton: a refused add must leave no trace on disk.
+// saveAccount repeats the check under the config lock, for a concurrent writer.
+func refuseTakenName(cfgPath, providerName, account string) error {
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	if owner, taken := ownerOf(c, account); taken {
+		return nameTakenError(account, providerName, owner)
+	}
+	return nil
 }
 
 func newRemoveCmd() *cobra.Command {
@@ -312,7 +336,7 @@ func renameAccount(path, providerName, oldName, newName string) error {
 			return fmt.Errorf("unknown account %q", oldName)
 		}
 		if owner, taken := ownerOf(c, newName); taken {
-			return nameTakenError(newName, owner)
+			return nameTakenError(newName, providerName, owner)
 		}
 		p.Accounts[newName] = acct
 		delete(p.Accounts, oldName)

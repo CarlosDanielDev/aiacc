@@ -600,3 +600,20 @@ func TestAddWizardMatchesFlagPath(t *testing.T) {
 		t.Fatalf("wizard output differs from the flag path:\nflag: %+v\nwizard: %+v", flagSnap, wizSnap)
 	}
 }
+
+// The wizard refuses a name another provider owns before it asks the rest or
+// creates the dir: a refused answer must leave no config dir behind.
+func TestAddWizardRefusedNameCreatesNoDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	path := filepath.Join(t.TempDir(), "config.toml")
+	seedConfig(t, path, t.TempDir(), 0) // claude "work"
+	dir := filepath.Join(t.TempDir(), "codex-work")
+
+	err := runAddWizard(bytes.NewBufferString("work\n"+dir+"\ncodex\n"), &bytes.Buffer{}, path, addPrefill{})
+	if err == nil || !strings.Contains(err.Error(), "claude") {
+		t.Fatalf("want a refusal naming claude, got %v", err)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Fatalf("refused wizard still created %s (stat err: %v)", dir, statErr)
+	}
+}
