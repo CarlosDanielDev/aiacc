@@ -25,3 +25,4 @@ instead, a later record **supersedes** it and both link each other. Status value
 - [0006](0006-account-settings-path-not-secret.md) — An account can carry a settings file; aiacc stores its path, never its contents
 - [0007](0007-generate-never-read.md) — aiacc may generate a settings skeleton it never reads
 - [0008](0008-launchers-replace-eval-hook.md) — Launchers are the default switching mechanism; presets carry provider capabilities
+- [0009](0009-edit-settings-key.md) — The edit action may read and rewrite an account's endpoint keys (narrows 0007)

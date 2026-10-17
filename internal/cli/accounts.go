@@ -62,6 +62,13 @@ func newAddCmd() *cobra.Command {
 			if dir == "" {
 				return fmt.Errorf("--dir is required")
 			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				return err
+			}
+			if err := checkNewName(cfg, providerName, account); err != nil {
+				return err
+			}
 			// Expand once, here: the dir the user typed (~/.claude-foo) must
 			// not grow a literal "./~" tree in the working directory, and the
 			// shared assets belong in the real profile. Registration keeps the
@@ -207,7 +214,10 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 		// in every generated script, so a traversal or junk name is refused
 		// here — the same rule the add screen enforces as you type.
 		if !tui.ValidName(account) {
-			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", account)
+			return invalidNameError(account)
+		}
+		if owner, taken := ownerOf(c, account); taken {
+			return nameTakenError(account, providerName, owner)
 		}
 		env := envOverride
 		if env == "" {
@@ -231,6 +241,69 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 		c.Providers[providerName] = p
 		return nil
 	})
+}
+
+// accountOwners lists every provider that registers account, sorted. The
+// launcher is named by the bare account, so one name should have one owner.
+func accountOwners(c *config.Config, account string) []string {
+	var out []string
+	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
+		if _, ok := c.Providers[pn].Accounts[account]; ok {
+			out = append(out, pn)
+		}
+	}
+	return out
+}
+
+// ownerOf reports the provider that already registers account, if any.
+func ownerOf(c *config.Config, account string) (string, bool) {
+	owners := accountOwners(c, account)
+	if len(owners) == 0 {
+		return "", false
+	}
+	return owners[0], true
+}
+
+// nameTakenError says why provider cannot register account: owner already has it.
+// The name is one launcher file shared by every provider, so the way out is a
+// different name, or removing the current holder first.
+func nameTakenError(account, provider, owner string) error {
+	if owner == provider {
+		return fmt.Errorf("account %q already exists under %s: pick another name, or remove it first with aiacc remove %s %s", account, owner, owner, account)
+	}
+	return fmt.Errorf("account %q already exists under %s, and launchers are named by account, so %s cannot use it too: pick another name, or remove it first with aiacc remove %s %s", account, owner, provider, owner, account)
+}
+
+// invalidNameError refuses a name that cannot be a launcher filename.
+func invalidNameError(name string) error {
+	return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", name)
+}
+
+// checkNewName refuses an account name that is invalid, or that any provider
+// already registers. It writes nothing, so the add entry points call it before
+// they create a config dir or a settings skeleton: a refused add must leave no
+// trace on disk. saveAccount repeats the checks under the config lock, for a
+// concurrent writer.
+func checkNewName(c *config.Config, providerName, account string) error {
+	if !tui.ValidName(account) {
+		return invalidNameError(account)
+	}
+	if owner, taken := ownerOf(c, account); taken {
+		return nameTakenError(account, providerName, owner)
+	}
+	return nil
+}
+
+// checkNameOnDisk runs checkNewName against the config as it is on disk now. A
+// caller that was interactive after it loaded the config must use this: another
+// aiacc process may have registered the name in the meantime, and the dir must
+// not be created on the strength of a stale snapshot.
+func checkNameOnDisk(cfgPath, providerName, account string) error {
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	return checkNewName(c, providerName, account)
 }
 
 func newRemoveCmd() *cobra.Command {
@@ -298,7 +371,7 @@ func renameAccount(path, providerName, oldName, newName string) error {
 	return config.Update(path, func(c *config.Config) error {
 		// Same rule as saveAccount: the new name becomes the launcher filename.
 		if !tui.ValidName(newName) {
-			return fmt.Errorf("invalid account name %q: names are limited to letters, digits, \"-\" and \"_\", starting with a letter or \"_\"", newName)
+			return invalidNameError(newName)
 		}
 		p, ok := c.Providers[providerName]
 		if !ok {
@@ -308,8 +381,8 @@ func renameAccount(path, providerName, oldName, newName string) error {
 		if !ok {
 			return fmt.Errorf("unknown account %q", oldName)
 		}
-		if _, exists := p.Accounts[newName]; exists {
-			return fmt.Errorf("account %q already exists", newName)
+		if owner, taken := ownerOf(c, newName); taken {
+			return nameTakenError(newName, providerName, owner)
 		}
 		p.Accounts[newName] = acct
 		delete(p.Accounts, oldName)

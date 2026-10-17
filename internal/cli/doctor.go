@@ -277,6 +277,25 @@ func cmdVersion(bin string) string {
 func checkLaunchers(c *config.Config) []finding {
 	var out []finding
 	registered := map[string]bool{}
+	// owners maps each account name to the providers registering it, in provider
+	// order. A name under two providers has one launcher file, so no single one of
+	// them can be checked against it: that is a collision, not a stale launcher.
+	owners := map[string][]string{}
+	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
+		for an := range c.Providers[pn].Accounts {
+			owners[an] = accountOwners(c, an)
+		}
+	}
+	for _, an := range slices.Sorted(maps.Keys(owners)) {
+		if ps := owners[an]; len(ps) > 1 {
+			out = append(out, finding{sevFail,
+				fmt.Sprintf("%s: registered under %s", an, strings.Join(ps, " and ")),
+				[]string{
+					"Launchers are named by account, so one command serves all of them and the last one written wins.",
+					"aiacc remove <provider> " + an + "  for the one you do not use, then aiacc setup",
+				}})
+		}
+	}
 	for _, pn := range slices.Sorted(maps.Keys(c.Providers)) {
 		cmd := launchCommand(c, pn)
 		env, _ := provider.EnvVar(c, pn)
@@ -286,7 +305,9 @@ func checkLaunchers(c *config.Config) []finding {
 			if err != nil || cmd == "" || env == "" {
 				continue // setup writes no launcher for these, so there is none to check
 			}
-			out = append(out, checkLauncher(an, cmd, env, dir, provider.LaunchArgs(c, pn, an)))
+			if len(owners[an]) == 1 {
+				out = append(out, checkLauncher(an, cmd, env, dir, provider.LaunchArgs(c, pn, an)))
+			}
 			if f, ok := checkSettingsFile(an, provider.SettingsFile(c, pn, an)); ok {
 				out = append(out, f)
 			}

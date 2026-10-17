@@ -45,10 +45,15 @@ func runPicker(filter string) error {
 			continue
 		case tui.Rename:
 			row := rows[res.Index]
+			// Every account in the config, not just the filtered rows: a launcher
+			// name is shared across providers, so `aiacc <provider>` must still
+			// refuse a name another provider owns.
 			var taken []string
-			for j, r := range rows {
-				if j != res.Index {
-					taken = append(taken, r.Account)
+			for pn, p := range c.Providers {
+				for an := range p.Accounts {
+					if pn != row.Provider || an != row.Account {
+						taken = append(taken, an)
+					}
 				}
 			}
 			newName, err := tui.RunRename(row.Account, taken)
@@ -61,6 +66,11 @@ func runPicker(filter string) error {
 				}
 				removeLauncher(path, row.Account)             // drop old command
 				_ = syncLauncher(path, row.Provider, newName) // a gone dir shows as the picker's setup nudge
+			}
+			continue
+		case tui.Edit:
+			if err := runEditTUI(rows[res.Index]); err != nil {
+				return err
 			}
 			continue
 		case tui.Handoff:
@@ -143,6 +153,11 @@ func runAddTUI(cfgPath string) error {
 	}
 	if !res.OK {
 		return nil
+	}
+	// Before the dir is created: a refused name must leave nothing behind. The
+	// screens above were interactive, so check the config as it is now.
+	if err := checkNameOnDisk(cfgPath, prov, res.Name); err != nil {
+		return err
 	}
 	dir := expandTilde(res.Dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

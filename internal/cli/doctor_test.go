@@ -253,6 +253,34 @@ func TestCheckSettingsFile(t *testing.T) {
 	}
 }
 
+// Names are global to the launcher bin, so two providers sharing one account
+// name is a collision, not a stale launcher: doctor must say so, and must not
+// send the user to `aiacc setup`, which would rewrite the same shared file.
+func TestCheckLaunchersNamesCrossProviderCollision(t *testing.T) {
+	binDir := t.TempDir()
+	setPath(t, binDir)
+	c := &config.Config{Providers: map[string]config.Provider{
+		"claude": {EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude", Accounts: map[string]config.Account{
+			"work": {Dir: t.TempDir()},
+		}},
+		"codex": {EnvVar: "CODEX_HOME", Command: "codex", Accounts: map[string]config.Account{
+			"work": {Dir: t.TempDir()},
+		}},
+	}}
+
+	// One finding for the name, and it is the collision: no per-provider launcher
+	// verdict (stale, missing, ...) may be issued for a name that has one file.
+	var texts []string
+	for _, f := range checkLaunchers(c) {
+		if strings.HasPrefix(f.text, "work:") {
+			texts = append(texts, f.text)
+		}
+	}
+	if len(texts) != 1 || !strings.Contains(texts[0], "claude and codex") {
+		t.Fatalf("want exactly one finding naming claude and codex for work, got %q", texts)
+	}
+}
+
 // A settings path that names a directory is broken whatever its mode: the
 // launcher hands the directory to the CLI as a settings file. A 0700 directory
 // must not pass silently, and a 0755 one must fail rather than merely warn.
