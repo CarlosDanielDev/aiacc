@@ -6,8 +6,11 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
@@ -17,16 +20,66 @@ import (
 // aiMemoryURL is the ai-memory project, named when its binary is missing.
 const aiMemoryURL = "https://github.com/akitaonrails/ai-memory"
 
-// lookPath and runAIMemory are variables so tests stub the lookup and the
-// process run, and never exec a real ai-memory or launcher.
+// forwardedSignals are the signals aiacc relays to the child instead of dying
+// on. Ctrl-C reaches the child through the terminal's process group as well, so
+// the child can see a signal twice; a harness that handles SIGINT copes with that.
+var forwardedSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+
+// lookPath, runAIMemory and signalSource are variables so tests stub the lookup,
+// the process run and the signal source, and never exec a real ai-memory or
+// launcher. signalSource returns the channel signals arrive on and a stop func.
 var (
-	lookPath    = exec.LookPath
-	runAIMemory = func(bin string, args []string) error {
-		cmd := exec.Command(bin, args...)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-		return cmd.Run()
+	lookPath     = exec.LookPath
+	runAIMemory  = execAIMemory
+	signalSource = func() (<-chan os.Signal, func()) {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, forwardedSignals...)
+		return ch, func() { signal.Stop(ch) }
 	}
 )
+
+// execAIMemory runs bin attached to this terminal and returns when the child
+// exits. Signals aiacc receives are relayed to the child, so aiacc does not exit
+// and orphan it; aiacc keeps waiting for the child's own exit.
+func execAIMemory(bin string, args []string) error {
+	sigs, stop := signalSource() // before Start, so no early signal kills aiacc
+	defer stop()
+	cmd := exec.Command(bin, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go relaySignals(cmd.Process, sigs, done)
+	return cmd.Wait()
+}
+
+// relaySignals delivers each signal from sigs to the child until done closes.
+// A signal that arrives after the child has been reaped fails to deliver, which
+// is harmless.
+func relaySignals(child *os.Process, sigs <-chan os.Signal, done <-chan struct{}) {
+	for {
+		select {
+		case s := <-sigs:
+			_ = child.Signal(s)
+		case <-done:
+			return
+		}
+	}
+}
+
+// childStatus is the status aiacc exits with for a child that ended with err: its
+// own code, or 128+signo when a signal killed it (the shell convention).
+func childStatus(ee *exec.ExitError) int {
+	if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	if code := ee.ExitCode(); code >= 0 {
+		return code
+	}
+	return 1
+}
 
 // exitStatus is a child's non-zero exit status, carried up to main so aiacc
 // exits with the same status and prints nothing of its own.
@@ -84,11 +137,7 @@ func newAIMemoryCmd() *cobra.Command {
 			if err := runAIMemory(argv[0], argv[1:]); err != nil {
 				var ee *exec.ExitError
 				if errors.As(err, &ee) {
-					code := ee.ExitCode()
-					if code < 0 { // killed by a signal: no status to pass on
-						code = 1
-					}
-					return exitStatus(code)
+					return exitStatus(childStatus(ee))
 				}
 				return err
 			}
@@ -122,7 +171,13 @@ func aiMemoryInvocation(c *config.Config, account string, native []string) ([]st
 	if _, err := lookPath(account); err != nil {
 		return nil, fmt.Errorf("no launcher named %q on PATH: run `aiacc setup` to install the account launchers", account)
 	}
-	argv := []string{bin, "run", "--env", env + "=" + dir, "--executable", account, harness}
+	// ai-memory resolves a relative dir against its own working directory, not
+	// ours, so the dir it is handed is absolute.
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	argv := []string{bin, "run", "--env", env + "=" + abs, "--executable", account, harness}
 	return append(argv, native...), nil
 }
 

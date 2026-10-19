@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
@@ -263,4 +266,120 @@ func TestHandoffDoneAIMemoryLine(t *testing.T) {
 			t.Fatalf("screen changed without ai-memory:\n%v", *lines)
 		}
 	})
+}
+
+// fakeAIMemoryScript writes a fake ai-memory with body into a fresh directory
+// and returns its path, for tests that drive runAIMemory directly.
+func fakeAIMemoryScript(t *testing.T, body string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "ai-memory")
+	writeExecutable(t, bin, "#!/bin/sh\n"+body)
+	return bin
+}
+
+// TestAIMemoryRelaysSignalsToChild: a signal aiacc receives is delivered to the
+// child, which traps it, and aiacc waits for the child's own exit status instead
+// of exiting first. The child signals readiness only after its trap is set, so
+// the signal cannot race the trap installation.
+func TestAIMemoryRelaysSignalsToChild(t *testing.T) {
+	cases := []struct {
+		sig  syscall.Signal
+		trap string // the name the shell's trap builtin takes
+	}{
+		{syscall.SIGINT, "INT"}, {syscall.SIGTERM, "TERM"}, {syscall.SIGHUP, "HUP"}, {syscall.SIGQUIT, "QUIT"},
+	}
+	for _, tc := range cases {
+		sig := tc.sig
+		t.Run(tc.trap, func(t *testing.T) {
+			dir := t.TempDir()
+			ready, mark := filepath.Join(dir, "ready"), filepath.Join(dir, "mark")
+			// Bounded loop so a relay that never happens ends the child, not the run.
+			bin := fakeAIMemoryScript(t, fmt.Sprintf(
+				"trap 'echo %[1]s > %[2]q; exit 3' %[1]s\n"+
+					"echo ready > %[3]q\n"+
+					"i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done\n"+
+					"exit 9\n", tc.trap, mark, ready))
+
+			sigs := make(chan os.Signal, 1)
+			old := signalSource
+			signalSource = func() (<-chan os.Signal, func()) { return sigs, func() {} }
+			t.Cleanup(func() { signalSource = old })
+
+			errc := make(chan error, 1)
+			go func() { errc <- runAIMemory(bin, []string{"run"}) }()
+			waitForFile(t, ready)
+			sigs <- sig
+
+			var err error
+			select {
+			case err = <-errc:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("aiacc did not finish after %v: the signal was not relayed", tc.trap)
+			}
+			if _, statErr := os.Stat(mark); statErr != nil {
+				t.Fatalf("child did not receive %v: %v", tc.trap, statErr)
+			}
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) || ee.ExitCode() != 3 {
+				t.Fatalf("child status after %v = %v, want the trap's exit 3", tc.trap, err)
+			}
+		})
+	}
+}
+
+// waitForFile polls until path exists, failing the test after a few seconds.
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never appeared", path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestAIMemorySignalKilledChildMapsToShellStatus: a child that dies to a signal
+// makes aiacc exit 128+signo, the shell convention, not a flat 1.
+func TestAIMemorySignalKilledChildMapsToShellStatus(t *testing.T) {
+	c := aiMemoryFixture(t)
+	path := withTempConfig(t)
+	if err := config.Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	fakeAIMemoryPath(t, 0, "claude-glm")
+	old := runAIMemory
+	runAIMemory = func(string, []string) error {
+		return exec.Command("/bin/sh", "-c", "kill -KILL $$").Run()
+	}
+	t.Cleanup(func() { runAIMemory = old })
+
+	cmd := newAIMemoryCmd()
+	cmd.SetArgs([]string{"claude-glm"})
+	if code, ok := ExitStatus(cmd.Execute()); !ok || code != 128+int(syscall.SIGKILL) {
+		t.Fatalf("ExitStatus = %d, %v; want %d", code, ok, 128+int(syscall.SIGKILL))
+	}
+}
+
+// TestAIMemoryAccountDirIsAbsolute: a relative account dir is handed to
+// ai-memory as an absolute path, so ai-memory does not resolve it against its
+// own working directory.
+func TestAIMemoryAccountDirIsAbsolute(t *testing.T) {
+	fakeAIMemoryPath(t, 0, "claude-glm")
+	c := aiMemoryFixture(t)
+	c.Providers["claude"].Accounts["claude-glm"] = config.Account{Dir: "rel/glm"}
+	argv, err := aiMemoryInvocation(c, "claude-glm", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.Abs("rel/glm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := "CLAUDE_CONFIG_DIR=" + want; !slices.Contains(argv, got) {
+		t.Fatalf("argv %q does not carry %s", argv, got)
+	}
 }
