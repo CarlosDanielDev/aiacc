@@ -20,27 +20,35 @@ import (
 // aiMemoryURL is the ai-memory project, named when its binary is missing.
 const aiMemoryURL = "https://github.com/akitaonrails/ai-memory"
 
-// forwardedSignals are the signals aiacc relays to the child instead of dying
-// on. Ctrl-C reaches the child through the terminal's process group as well, so
-// the child can see a signal twice; a harness that handles SIGINT copes with that.
-var forwardedSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+// relayedSignals are the signals aiacc forwards to the child: the ones the
+// terminal does not deliver to the foreground process group, which holds the
+// child. SIGHUP is also sent to that group when the terminal hangs up, so a
+// hangup can reach the child twice; the session is ending then anyway.
+var relayedSignals = []os.Signal{syscall.SIGTERM, syscall.SIGHUP}
 
-// lookPath, runAIMemory and signalSource are variables so tests stub the lookup,
-// the process run and the signal source, and never exec a real ai-memory or
-// launcher. signalSource returns the channel signals arrive on and a stop func.
+// absorbedSignals are received and dropped while the child runs. The terminal
+// already delivers SIGINT (Ctrl-C) and SIGQUIT (Ctrl-backslash) to the child, so relaying
+// them as well would hand the child each keypress twice, and a second Ctrl-C can
+// read as quit. Receiving them keeps aiacc alive to wait for the child.
+var absorbedSignals = []os.Signal{syscall.SIGINT, syscall.SIGQUIT}
+
+// lookPath and runAIMemory are variables so tests stub the lookup and the process
+// run, and never exec a real ai-memory or launcher. signalSource is the real
+// signal.Notify for relayed and absorbed signals; it returns the channel they
+// arrive on and a stop func.
 var (
 	lookPath     = exec.LookPath
 	runAIMemory  = execAIMemory
 	signalSource = func() (<-chan os.Signal, func()) {
 		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, forwardedSignals...)
+		signal.Notify(ch, slices.Concat(relayedSignals, absorbedSignals)...)
 		return ch, func() { signal.Stop(ch) }
 	}
 )
 
 // execAIMemory runs bin attached to this terminal and returns when the child
-// exits. Signals aiacc receives are relayed to the child, so aiacc does not exit
-// and orphan it; aiacc keeps waiting for the child's own exit.
+// exits. aiacc stays alive for the child's whole run: it absorbs the signals the
+// terminal already delivers and relays the rest, so the child is never orphaned.
 func execAIMemory(bin string, args []string) error {
 	sigs, stop := signalSource() // before Start, so no early signal kills aiacc
 	defer stop()
@@ -55,14 +63,16 @@ func execAIMemory(bin string, args []string) error {
 	return cmd.Wait()
 }
 
-// relaySignals delivers each signal from sigs to the child until done closes.
-// A signal that arrives after the child has been reaped fails to deliver, which
-// is harmless.
+// relaySignals delivers each relayed signal from sigs to the child until done
+// closes, and drops the absorbed ones. A signal that arrives after the child has
+// been reaped fails to deliver, which is harmless.
 func relaySignals(child *os.Process, sigs <-chan os.Signal, done <-chan struct{}) {
 	for {
 		select {
 		case s := <-sigs:
-			_ = child.Signal(s)
+			if slices.Contains(relayedSignals, s) {
+				_ = child.Signal(s)
+			}
 		case <-done:
 			return
 		}

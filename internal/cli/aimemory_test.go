@@ -277,53 +277,78 @@ func fakeAIMemoryScript(t *testing.T, body string) string {
 	return bin
 }
 
-// TestAIMemoryRelaysSignalsToChild: a signal aiacc receives is delivered to the
-// child, which traps it, and aiacc waits for the child's own exit status instead
-// of exiting first. The child signals readiness only after its trap is set, so
-// the signal cannot race the trap installation.
-func TestAIMemoryRelaysSignalsToChild(t *testing.T) {
-	cases := []struct {
-		sig  syscall.Signal
-		trap string // the name the shell's trap builtin takes
-	}{
-		{syscall.SIGINT, "INT"}, {syscall.SIGTERM, "TERM"}, {syscall.SIGHUP, "HUP"}, {syscall.SIGQUIT, "QUIT"},
+// TestAIMemorySignalDelivery sends real signals to aiacc's own process while the
+// child runs, and records what the child receives. The terminal delivers Ctrl-C
+// (SIGINT) and Ctrl-backslash (SIGQUIT) to the child through the process group, so aiacc
+// must absorb them and never relay them: the child gets each of those zero times
+// from aiacc. SIGTERM and SIGHUP are not delivered by the terminal, so aiacc relays
+// each one exactly once. The child stops on a file rather than a signal, so every
+// delivery is recorded before it exits.
+func TestAIMemorySignalDelivery(t *testing.T) {
+	dir := t.TempDir()
+	ready, stop, log := filepath.Join(dir, "ready"), filepath.Join(dir, "stop"), filepath.Join(dir, "log")
+	// Bounded loop so a missing stop file ends the child, not the run.
+	bin := fakeAIMemoryScript(t, fmt.Sprintf(
+		"for s in INT QUIT TERM HUP; do trap \"echo $s >> %[1]q\" $s; done\n"+
+			"echo ready > %[2]q\n"+
+			"i=0; while [ ! -f %[3]q ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done\n"+
+			"exit 0\n", log, ready, stop))
+
+	errc := make(chan error, 1)
+	go func() { errc <- runAIMemory(bin, []string{"run"}) }()
+	waitForFile(t, ready)
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP} {
+		if err := syscall.Kill(os.Getpid(), sig); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	for _, tc := range cases {
-		sig := tc.sig
-		t.Run(tc.trap, func(t *testing.T) {
-			dir := t.TempDir()
-			ready, mark := filepath.Join(dir, "ready"), filepath.Join(dir, "mark")
-			// Bounded loop so a relay that never happens ends the child, not the run.
-			bin := fakeAIMemoryScript(t, fmt.Sprintf(
-				"trap 'echo %[1]s > %[2]q; exit 3' %[1]s\n"+
-					"echo ready > %[3]q\n"+
-					"i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done\n"+
-					"exit 9\n", tc.trap, mark, ready))
+	// Wait for the two relayed signals, then give any stray INT or QUIT time to show.
+	waitFor(t, 5*time.Second, func() bool { return countLines(t, log, "TERM") >= 1 && countLines(t, log, "HUP") >= 1 }, "TERM and HUP to reach the child")
+	time.Sleep(200 * time.Millisecond)
+	writeExecutable(t, stop, "")
 
-			sigs := make(chan os.Signal, 1)
-			old := signalSource
-			signalSource = func() (<-chan os.Signal, func()) { return sigs, func() {} }
-			t.Cleanup(func() { signalSource = old })
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("child run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("aiacc did not finish after the child was stopped")
+	}
+	want := map[string]int{"INT": 0, "QUIT": 0, "TERM": 1, "HUP": 1}
+	for name, n := range want {
+		if got := countLines(t, log, name); got != n {
+			t.Errorf("child received %s %d times from aiacc, want %d", name, got, n)
+		}
+	}
+}
 
-			errc := make(chan error, 1)
-			go func() { errc <- runAIMemory(bin, []string{"run"}) }()
-			waitForFile(t, ready)
-			sigs <- sig
+// countLines counts the lines of the child's signal log equal to name.
+func countLines(t *testing.T, log, name string) int {
+	t.Helper()
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, l := range strings.Split(string(raw), "\n") {
+		if l == name {
+			n++
+		}
+	}
+	return n
+}
 
-			var err error
-			select {
-			case err = <-errc:
-			case <-time.After(10 * time.Second):
-				t.Fatalf("aiacc did not finish after %v: the signal was not relayed", tc.trap)
-			}
-			if _, statErr := os.Stat(mark); statErr != nil {
-				t.Fatalf("child did not receive %v: %v", tc.trap, statErr)
-			}
-			var ee *exec.ExitError
-			if !errors.As(err, &ee) || ee.ExitCode() != 3 {
-				t.Fatalf("child status after %v = %v, want the trap's exit 3", tc.trap, err)
-			}
-		})
+// waitFor polls cond until it holds, failing the test after d.
+func waitFor(t *testing.T, d time.Duration, cond func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
