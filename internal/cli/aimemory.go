@@ -32,10 +32,11 @@ var relayedSignals = []os.Signal{syscall.SIGTERM, syscall.SIGHUP}
 // read as quit. Receiving them keeps aiacc alive to wait for the child.
 var absorbedSignals = []os.Signal{syscall.SIGINT, syscall.SIGQUIT}
 
-// lookPath and runAIMemory are variables so tests stub the lookup and the process
-// run, and never exec a real ai-memory or launcher. signalSource is the real
-// signal.Notify for relayed and absorbed signals; it returns the channel they
-// arrive on and a stop func.
+// lookPath, runAIMemory and signalSource are variables so tests can replace them.
+// The tests put a fake ai-memory on PATH, so lookPath stays exec.LookPath;
+// runAIMemory is stubbed where a test needs a fixed child status. signalSource
+// is the real signal.Notify for relayed and absorbed signals; it returns the
+// channel they arrive on and a stop func.
 var (
 	lookPath     = exec.LookPath
 	runAIMemory  = execAIMemory
