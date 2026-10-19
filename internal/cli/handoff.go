@@ -208,8 +208,9 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 // checkbox: the resume line gets the flag only while it is checked, and ^C copies
 // whatever the screen shows.
 func showDone(bypass, to string, meta session.Meta, id string) error {
+	aiMemory := aiMemoryOnPath() // asked once, so the screen cannot change under the box
 	if bypass == "" {
-		return showMessage("hand off · done", handoffDoneLines(to, meta, id))
+		return showMessage("hand off · done", handoffDoneLinesAI(to, meta, id, "", aiMemory))
 	}
 	box := tui.Checkbox{Label: "bypass permissions (" + bypass + ")", Warning: bypassWarning}
 	return showHandoffDone("hand off · done", box, func(checked bool) []tui.Line {
@@ -217,7 +218,7 @@ func showDone(bypass, to string, meta session.Meta, id string) error {
 		if checked {
 			flag = bypass
 		}
-		return handoffDoneLinesFlag(to, meta, id, flag)
+		return handoffDoneLinesAI(to, meta, id, flag, aiMemory)
 	})
 }
 
@@ -234,6 +235,13 @@ func handoffDoneLines(to string, meta session.Meta, id string) []tui.Line {
 // the lines are then exactly handoffDoneLines'. The flag is a preset constant,
 // not user input, so it is written bare rather than shell-quoted.
 func handoffDoneLinesFlag(to string, meta session.Meta, id, bypass string) []tui.Line {
+	return handoffDoneLinesAI(to, meta, id, bypass, false)
+}
+
+// handoffDoneLinesAI is handoffDoneLinesFlag plus, when aiMemory is set, a
+// second resume line that runs the account under ai-memory. Without it the lines
+// are exactly handoffDoneLinesFlag's.
+func handoffDoneLinesAI(to string, meta session.Meta, id, bypass string, aiMemory bool) []tui.Line {
 	body := []tui.Line{
 		{Text: "✓ Copied to " + to, Color: tui.Green},
 		{},
@@ -242,7 +250,12 @@ func handoffDoneLinesFlag(to string, meta session.Meta, id, bypass string) []tui
 	if meta.Cwd != "" {
 		body = append(body, tui.Line{Text: "cd " + shell.PosixQuote(meta.Cwd), Color: tui.Blue})
 	}
-	return append(body, tui.Line{Text: resumeLine(to, bypass, id), Color: tui.Blue})
+	resume := resumeLine(to, bypass, id)
+	body = append(body, tui.Line{Text: resume, Color: tui.Blue})
+	if aiMemory {
+		body = append(body, tui.Line{Text: "or with ai-memory: aiacc ai-memory " + resume, Color: tui.Blue})
+	}
+	return body
 }
 
 // resumeLine is the command that resumes session id under the to account: the

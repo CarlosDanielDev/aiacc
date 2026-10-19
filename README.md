@@ -239,6 +239,7 @@ missing.
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there — Claude profiles only for now, the transcript format is Claude's. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
+| `aiacc ai-memory <account> [args...]` | Run a claude or codex account under [ai-memory](https://github.com/akitaonrails/ai-memory), with its launcher and config dir set. Arguments after the account go to the CLI unchanged. See below. |
 | `aiacc link [provider] [account]` | Share your skills, sub-agents, commands and hooks with a profile (all of them by default). `--replace` takes over entries a profile owns; `--prune` removes dead links (asks first). |
 | `aiacc list` | Table of providers and their accounts. `--status` adds the active config dir and last-used time; `--usage` adds token totals and `USED/QUOTA` (`-` until the account has a `--quota`) from local session logs, so it is opt-in. |
 | `aiacc doctor` | Check that your launchers still work: duplicate installs, alias-only installs, stale launchers, dead shared links. Read-only; exits non-zero when something is broken. |
@@ -390,6 +391,28 @@ A subagent that had already finished has its final report in that transcript. A
 subagent still running or paused when you hand off does not resume in the new
 account, and you should not expect a notification from it after `--resume`; re-run
 it there if you still need its result.
+
+## 🧠 Run an account under ai-memory
+
+[ai-memory](https://github.com/akitaonrails/ai-memory) keeps a managed workstream
+across sessions, but it reads a name like `claude-glm` as a label only: on its own
+it runs plain `claude` and looks for sessions in `~/.claude`. `aiacc ai-memory`
+passes the account's launcher and config dir for you:
+
+```console
+$ aiacc ai-memory claude-glm --dangerously-skip-permissions --resume 2f1c…
+```
+
+It runs `ai-memory run --env CLAUDE_CONFIG_DIR=<account dir> --executable claude-glm claude-glm …`,
+passes the arguments after the account on to ai-memory unchanged, and exits with
+the status the CLI leaves. Codex accounts work the same way with `CODEX_HOME`.
+It needs ai-memory on your `PATH` and the account's launcher (`aiacc setup`). When
+ai-memory is on your `PATH`, the hand-off screen also shows this command.
+
+By hand, the equivalent is `ai-memory run --env CLAUDE_CONFIG_DIR=$HOME/.claude-glm
+--executable claude-glm claude-glm`. ai-memory still takes its own wrapper flags
+(such as `--yolo` and `--fresh`) from the arguments it receives, so those do not reach
+the CLI.
 
 ## 🔌 Providers — any AI CLI
 
