@@ -406,7 +406,8 @@ $ aiacc ai-memory claude-glm --dangerously-skip-permissions --resume 2f1c…
 It runs `ai-memory run --env CLAUDE_CONFIG_DIR=<account dir> --executable claude-glm claude-glm …`,
 passes the arguments after the account on to ai-memory unchanged, and exits with
 the status the CLI leaves (128 plus the signal number when a signal ends it). Ctrl-C
-and the other common signals are relayed to the CLI, which then gets to finish. Codex accounts work the same way with `CODEX_HOME`.
+goes to the CLI through the terminal, as usual, and aiacc keeps waiting for it; a
+terminate or hangup signal sent to aiacc is passed on to the CLI. Codex accounts work the same way with `CODEX_HOME`.
 It needs ai-memory on your `PATH` and the account's launcher (`aiacc setup`). When
 ai-memory is on your `PATH`, the hand-off screen also shows this command.
 
