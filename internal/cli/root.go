@@ -58,6 +58,7 @@ func NewRoot() *cobra.Command {
 		newLinkCmd(),
 		newDoctorCmd(),
 		newShellInitCmd(),
+		newAIMemoryCmd(),
 	)
 	return root
 }
