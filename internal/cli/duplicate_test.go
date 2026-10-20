@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -113,8 +115,9 @@ func TestDuplicateNeverCopiesIdentity(t *testing.T) {
 	}
 }
 
-// treeOf lists every path under root with its size, so a refusal can be shown
-// to have written nothing anywhere under the hermetic HOME.
+// treeOf lists every path under root with its type and, for a file, a hash of
+// its bytes, so a refusal can be shown to have written nothing anywhere under
+// the hermetic HOME: no path added or removed, no file changed.
 func treeOf(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
@@ -122,11 +125,36 @@ func treeOf(t *testing.T, root string) []string {
 		if err != nil {
 			return nil
 		}
-		out = append(out, p)
+		entry := p + " " + d.Type().String()
+		if d.Type().IsRegular() {
+			body, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatalf("read %s: %v", p, err)
+			}
+			entry += fmt.Sprintf(" %x", sha256.Sum256(body))
+		}
+		out = append(out, entry)
 		return nil
 	})
 	slices.Sort(out)
 	return out
+}
+
+// treeOf sees a changed file, not just an added or removed path: a refusal
+// that rewrote a file in place must not pass for one that wrote nothing.
+func TestTreeOfSeesChangedFile(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "f")
+	if err := os.WriteFile(p, []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := treeOf(t, root)
+	if err := os.WriteFile(p, []byte("two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Equal(before, treeOf(t, root)) {
+		t.Fatal("treeOf did not see the file's bytes change")
+	}
 }
 
 // Every refusal is decided before the first write: the config file and the
@@ -240,5 +268,27 @@ func TestWriteNewNeverOverwrites(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(p); string(got) != "theirs" {
 		t.Fatalf("existing file now %q, want it untouched", got)
+	}
+}
+
+// A target whose parents are missing too: MkdirAll makes every one of them, so
+// a failure after it removes the whole chain this command made — leaf first,
+// each only if empty — and stops at the first dir that was already there.
+func TestDuplicateFailureRemovesCreatedParents(t *testing.T) {
+	home, cfgPath, _ := dupFixture(t)
+	cfgDir := filepath.Dir(cfgPath)
+	if err := os.Chmod(cfgDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runDuplicate(t, "claude", "work", "work2", "--dir", "~/new/a/b/c")
+	_ = os.Chmod(cfgDir, 0o755)
+	if err == nil {
+		t.Fatal("duplicate succeeded with an unwritable config dir")
+	}
+	if _, err := os.Lstat(filepath.Join(home, "new")); !os.IsNotExist(err) {
+		t.Fatalf("created parents left behind under ~/new (err=%v): %v", err, treeOf(t, filepath.Join(home, "new")))
+	}
+	if _, err := os.Stat(home); err != nil {
+		t.Fatalf("the existing ancestor went too: %v", err)
 	}
 }

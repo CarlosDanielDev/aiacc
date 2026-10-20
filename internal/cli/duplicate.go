@@ -142,7 +142,11 @@ func duplicateAccount(cfgPath, providerName, src, name, dir string) (duplicated,
 		settings = filepath.Join(dir, filepath.Base(acct.Settings))
 	}
 
+	// MkdirAll makes every missing parent too, so record the whole chain it
+	// is about to create (leaf first) — the rollback removes exactly those.
+	var created []string
 	if !existed {
+		created = missingDirs(realDir)
 		if err := os.MkdirAll(realDir, 0o755); err != nil {
 			return duplicated{}, err
 		}
@@ -152,8 +156,8 @@ func duplicateAccount(cfgPath, providerName, src, name, dir string) (duplicated,
 		if copied != "" {
 			_ = os.Remove(copied)
 		}
-		if !existed {
-			_ = os.Remove(realDir) // only the dir this call made, and only if empty
+		for _, d := range created {
+			_ = os.Remove(d) // only dirs this call made, and only if empty
 		}
 	}
 	if body != nil {
@@ -173,6 +177,18 @@ func duplicateAccount(cfgPath, providerName, src, name, dir string) (duplicated,
 		provider: providerName, src: src, name: name, dir: dir, settings: settings,
 		launcher: syncLauncher(cfgPath, providerName, name),
 	}, nil
+}
+
+// missingDirs lists dir and each missing parent above it, leaf first, up to
+// (not including) the first ancestor that exists: what MkdirAll(dir) creates.
+func missingDirs(dir string) []string {
+	var out []string
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil || filepath.Dir(d) == d {
+			return out
+		}
+		out = append(out, d)
+	}
 }
 
 // writeNew writes body to a file that must not exist yet, mode 0600.
