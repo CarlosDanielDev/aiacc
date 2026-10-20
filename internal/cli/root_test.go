@@ -16,7 +16,7 @@ func TestNewRootHasAllSubcommands(t *testing.T) {
 		got = append(got, c.Name())
 	}
 	sort.Strings(got)
-	want := []string{"add", "ai-memory", "doctor", "handoff", "link", "list", "remove", "rename", "setup", "shell-init", "status", "usage"}
+	want := []string{"add", "ai-memory", "doctor", "duplicate", "handoff", "link", "list", "remove", "rename", "setup", "shell-init", "status", "usage"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("subcommands = %v, want %v", got, want)
 	}
