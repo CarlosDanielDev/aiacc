@@ -97,7 +97,10 @@ func resumeDirect(cmd *cobra.Command, cfgPath, providerName, account, sessionID,
 			return err
 		}
 	}
-	meta, _ := session.ReadMeta(sess.Path)
+	meta, err := readMeta(sess)
+	if err != nil {
+		return err
+	}
 	cwd, err := resumeCwd(meta.Cwd, cwdFlag)
 	if err != nil {
 		return err
@@ -160,6 +163,16 @@ func resumeCwd(recorded, override string) (string, error) {
 		return "", fmt.Errorf("the session's directory %s no longer exists — pass --cwd <dir> to resume it from another", recorded)
 	}
 	return recorded, nil
+}
+
+// readMeta reads the session's transcript for resuming. A read error is its
+// own refusal: without it the empty Meta would read as "no recorded directory".
+func readMeta(s session.Info) (session.Meta, error) {
+	m, err := session.ReadMeta(s.Path)
+	if err != nil {
+		return m, fmt.Errorf("can't read session transcript %s: %w", s.Path, err)
+	}
+	return m, nil
 }
 
 func titleOf(m session.Meta) string {
@@ -232,7 +245,7 @@ func runResumeTUI(cfgPath, providerName, account string) error {
 	if err != nil {
 		return err
 	}
-	sessions, items, metas, err := sessionChoices(dir)
+	sessions, items, _, err := sessionChoices(dir)
 	if err != nil {
 		return err
 	}
@@ -243,7 +256,12 @@ func runResumeTUI(cfgPath, providerName, account string) error {
 	if err != nil || si < 0 {
 		return err
 	}
-	cwd, err := resumeCwd(metas[si].Cwd, "")
+	// The list tolerates an unreadable transcript; resuming one does not.
+	meta, err := readMeta(sessions[si])
+	if err != nil {
+		return showMessage("resume · "+account, []tui.Line{{Text: err.Error(), Color: tui.Grey}})
+	}
+	cwd, err := resumeCwd(meta.Cwd, "")
 	if err != nil {
 		return showMessage("resume · "+account, []tui.Line{
 			{Text: err.Error(), Color: tui.Grey},
@@ -251,7 +269,7 @@ func runResumeTUI(cfgPath, providerName, account string) error {
 			{Text: "From a shell: aiacc resume " + providerName + " " + account + " --session " + shortID(sessions[si].ID) + " --cwd <dir>", Color: tui.Blue},
 		})
 	}
-	fmt.Println(resumingLine(sessions[si], metas[si], cwd))
+	fmt.Println(resumingLine(sessions[si], meta, cwd))
 	return execResume(dir, provider.LaunchArgs(c, providerName, account), cwd, sessions[si].ID)
 }
 

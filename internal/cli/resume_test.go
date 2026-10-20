@@ -395,3 +395,36 @@ func TestPickerResumeKeyRoutesToResume(t *testing.T) {
 		t.Fatalf("work row: exec calls = %+v", *calls)
 	}
 }
+
+// TestResumeUnreadableTranscript: a transcript that cannot be read is refused
+// naming its path and the read error, on the CLI and on picker select, not
+// misreported as a session with no recorded directory.
+func TestResumeUnreadableTranscript(t *testing.T) {
+	f := seedResume(t, t.TempDir())
+	calls := stubExec(t)
+	stubPickList(t, 0)
+	newest := filepath.Join(f.dir, "projects", "-proj", resumeNewID+".jsonl")
+	if err := os.Chmod(newest, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(newest, 0o600) })
+	if _, err := os.ReadFile(newest); err == nil {
+		t.Skip("running as a user that reads mode-0 files (root?)")
+	}
+
+	_, _, err := runResume(t, "claude", "work", "--print")
+	if err == nil || !strings.Contains(err.Error(), newest) || !strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "--cwd") {
+		t.Fatalf("CLI: want a refusal naming %s and the read error, without the --cwd hint; got %v", newest, err)
+	}
+
+	captured := captureHandoffMessage(t)
+	if err := runResumeTUI(f.cfgPath, "claude", "work"); err != nil {
+		t.Fatalf("picker: want an on-screen message, got error %v", err)
+	}
+	if len(*captured) == 0 || !strings.Contains((*captured)[0].Text, newest) || !strings.Contains((*captured)[0].Text, "permission denied") {
+		t.Fatalf("picker: message %+v does not name %s and the read error", *captured, newest)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("an unreadable transcript must not exec, got %+v", *calls)
+	}
+}
