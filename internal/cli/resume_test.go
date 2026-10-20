@@ -428,3 +428,27 @@ func TestResumeUnreadableTranscript(t *testing.T) {
 		t.Fatalf("an unreadable transcript must not exec, got %+v", *calls)
 	}
 }
+
+// TestFindSessionKeepsListingErrors: when session.Find fails to list the
+// account's projects (here: unreadable), that error comes back unchanged, not
+// as "matches no session" with a stale candidate list.
+func TestFindSessionKeepsListingErrors(t *testing.T) {
+	f := seedResume(t, t.TempDir())
+	sessions, _, _, err := sessionChoices(f.dir)
+	if err != nil || len(sessions) != 2 {
+		t.Fatalf("seed: %d sessions, err %v", len(sessions), err)
+	}
+	projects := filepath.Join(f.dir, "projects")
+	if err := os.Chmod(projects, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(projects, 0o755) })
+	if _, err := os.ReadDir(projects); err == nil {
+		t.Skip("running as a user that reads mode-0 dirs (root?)")
+	}
+
+	_, err = findSession(f.dir, sessions, "zzzz")
+	if err == nil || !strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "matches no session") {
+		t.Fatalf("want the listing error unchanged, got %v", err)
+	}
+}

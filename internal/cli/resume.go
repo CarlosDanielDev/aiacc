@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -123,6 +125,11 @@ func findSession(dir string, sessions []session.Info, id string) (session.Info, 
 	s, err := session.Find(dir, id)
 	if err == nil {
 		return s, nil
+	}
+	// Find's own refusals (not found, ambiguous) are plain messages; a failure
+	// to list the projects dir is a *fs.PathError, returned unchanged.
+	if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
+		return session.Info{}, err
 	}
 	var hits []session.Info
 	for _, s := range sessions {
