@@ -146,31 +146,12 @@ func runHandoffTUI(cfgPath, sProvider, sAccount string) error {
 	if err != nil {
 		return err
 	}
-	sessions, err := session.List(sDir)
+	sessions, items, metas, err := sessionChoices(sDir)
 	if err != nil {
 		return err
 	}
 	if len(sessions) == 0 {
 		return showMessage("hand off · "+sAccount, []tui.Line{{Text: "No sessions found for this account yet.", Color: tui.Grey}})
-	}
-	if len(sessions) > 30 {
-		sessions = sessions[:30] // most recent 30 is plenty to choose from
-	}
-
-	items := make([]tui.ListItem, len(sessions))
-	metas := make([]session.Meta, len(sessions))
-	for i, s := range sessions {
-		m, _ := session.ReadMeta(s.Path)
-		metas[i] = m
-		title := m.Title
-		if title == "" {
-			title = "(untitled)"
-		}
-		sec := shortID(s.ID) + " · " + humanAge(s.Modified)
-		if m.Cwd != "" {
-			sec += " · " + filepath.Base(m.Cwd)
-		}
-		items[i] = tui.ListItem{Primary: title, Secondary: sec}
 	}
 	si, err := tui.RunList("hand off — which session? (from "+sAccount+")", items)
 	if err != nil || si < 0 {

@@ -84,6 +84,12 @@ func runPicker(filter string) error {
 				return err
 			}
 			continue
+		case tui.Resume:
+			row := rows[res.Index]
+			if err := runResumeTUI(path, row.Provider, row.Account); err != nil {
+				return err
+			}
+			continue // a launched resume never returns; a refusal returns to the list
 		case tui.Setup:
 			res, err := doSetup(path, false)
 			if err != nil {

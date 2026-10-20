@@ -239,6 +239,7 @@ missing.
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there — Claude profiles only for now, the transcript format is Claude's. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
+| `aiacc resume [provider] [account]` | Resume a session in the same account, in its original directory — nothing is copied. No args → interactive picker; `--session <id>`, `--cwd <dir>`, `--print`. Claude profiles only. _(picker: `u`)_ |
 | `aiacc ai-memory <account> [args...]` | Run a claude or codex account under [ai-memory](https://github.com/akitaonrails/ai-memory), with its launcher and config dir set. Arguments after the account go to ai-memory, which passes them to the CLI except its own wrapper flags (`--yolo`, `--fresh`, …). See below. |
 | `aiacc link [provider] [account]` | Share your skills, sub-agents, commands and hooks with a profile (all of them by default). `--replace` takes over entries a profile owns; `--prune` removes dead links (asks first). |
 | `aiacc list` | Table of providers and their accounts. `--status` adds the active config dir and last-used time; `--usage` adds token totals and `USED/QUOTA` (`-` until the account has a `--quota`) from local session logs, so it is opt-in. |
@@ -353,7 +354,7 @@ up in the picker next time you run `aiacc`.
 | `⏎` | launch the selected profile | `r` | rename |
 | `e` | edit endpoint, model or key | `h` | hand off a session |
 | `d` | remove (asks first) | `s` | run setup |
-| `q` | quit | | |
+| `q` | quit | `u` | resume a session |
 
 On any screen that ends in a command to run — the hand-off result, for one —
 **`ctrl-c` copies it** to your clipboard instead of closing (`q` still closes).
@@ -391,6 +392,18 @@ A subagent that had already finished has its final report in that transcript. A
 subagent still running or paused when you hand off does not resume in the new
 account, and you should not expect a notification from it after `--resume`; re-run
 it there if you still need its result.
+
+### Resume in the same account
+
+`resume` is `handoff`'s same-account sibling: `aiacc resume claude claude-work`
+continues that account's most recent session where it already lives — it changes
+into the session's recorded directory and runs Claude Code with the account's
+config dir and settings plus `--resume <id>`, copying and writing nothing.
+`handoff` copies the transcript to *another* account; `resume` stays in this one.
+`--session <prefix>` picks another session (an ambiguous or unknown prefix lists
+the candidates), `--cwd <dir>` resumes from a different directory when the
+original is gone, and `--print` prints the command instead of running it. In the
+picker, press `u` on the account.
 
 ## 🧠 Run an account under ai-memory
 

@@ -51,6 +51,7 @@ func NewRoot() *cobra.Command {
 		newRemoveCmd(),
 		newRenameCmd(),
 		newHandoffCmd(),
+		newResumeCmd(),
 		newListCmd(),
 		newStatusCmd(),
 		newUsageCmd(),

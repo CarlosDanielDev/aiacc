@@ -82,6 +82,7 @@ const (
 	Remove                      // confirmed removing Index
 	Setup                       // pressed `s`; the caller runs shell setup
 	Edit                        // pressed `e`; the caller runs the edit screen on Index
+	Resume                      // pressed `u`; the caller resumes a session of Index in place
 )
 
 // Result is what Run/drive returns. Index is meaningful for Launch and Remove.
@@ -588,7 +589,7 @@ func renderPicker(rows []Row, cursor int, setupNeeded bool, phase int, version s
 	}
 	lines = append(lines, boxRow(withVersion(status, version, w), w), boxBottom(w))
 
-	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"e", "edit"}, {"h", "hand off"}, {"d", "remove"}}
+	pairs := [][2]string{{"↑↓", "move"}, {"⏎", "launch"}, {"a", "add"}, {"r", "rename"}, {"e", "edit"}, {"h", "hand off"}, {"u", "resume"}, {"d", "remove"}}
 	if setupNeeded {
 		pairs = append(pairs, [2]string{"s", "setup"})
 	}
@@ -1210,6 +1211,7 @@ const (
 	keyRename
 	keyEdit
 	keyHandoff
+	keyResume
 	keyRemove
 	keySetup
 	keyCopy
@@ -1482,6 +1484,10 @@ func (s *pickerState) handle(rows []Row, k key) (Result, bool) {
 		if s.cursor >= 0 {
 			return Result{Kind: Handoff, Index: s.cursor}, true
 		}
+	case keyResume:
+		if s.cursor >= 0 {
+			return Result{Kind: Resume, Index: s.cursor}, true
+		}
 	case keySetup:
 		return Result{Kind: Setup}, true
 	case keyQuit, keyCopy: // nothing to copy here — Ctrl-C keeps its usual meaning
@@ -1566,6 +1572,8 @@ func readKey(r *bufio.Reader) (key, error) {
 		return keyEdit, nil
 	case 'h', 'H':
 		return keyHandoff, nil
+	case 'u', 'U':
+		return keyResume, nil
 	case 'd', 'D':
 		return keyRemove, nil
 	case 's', 'S':
