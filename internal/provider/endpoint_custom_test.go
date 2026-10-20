@@ -52,6 +52,15 @@ func TestCheckBaseURLDoesNotEchoUserinfo(t *testing.T) {
 	}
 }
 
+// A refused model is not echoed either: a key pasted into the wrong field
+// must not land in the scrollback.
+func TestCheckModelDoesNotEchoValue(t *testing.T) {
+	err := CheckModel("sk-ant s3cret")
+	if err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("model refusal echoes the value or is missing: %v", err)
+	}
+}
+
 func TestCheckModel(t *testing.T) {
 	for _, m := range []string{"", "   ", "my model", "m\t1", PlaceholderToken} {
 		if err := CheckModel(m); err == nil {

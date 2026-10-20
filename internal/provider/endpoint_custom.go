@@ -2,7 +2,6 @@ package provider
 
 import (
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 	"unicode"
@@ -66,13 +65,15 @@ func isLoopback(host string) bool {
 }
 
 // CheckModel validates a custom endpoint's model id: non-empty, no
-// whitespace, and not the key placeholder pasted into the wrong field.
+// whitespace, and not the key placeholder pasted into the wrong field. Like
+// CheckBaseURL, a refusal never echoes the value: a key pasted into the model
+// field must not land in the scrollback.
 func CheckModel(model string) error {
 	switch {
 	case model == "":
 		return errors.New("model is required")
 	case strings.ContainsFunc(model, unicode.IsSpace):
-		return fmt.Errorf("model %q must not contain whitespace", model)
+		return errors.New("model must be one word, with no whitespace")
 	case model == PlaceholderToken:
 		return errors.New("model is the key placeholder; give the endpoint's model id")
 	}

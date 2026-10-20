@@ -84,11 +84,18 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			// Every settings refusal is decided before the dir is created, so a
-			// refused add leaves nothing on disk.
+			// refused add leaves nothing on disk. The order is the one the add
+			// path always had — the settings value, then the provider's flag —
+			// with custom's own checks after both.
+			ep, custom := customPreset(providerName, settings)
+			if !custom {
+				if _, _, err := settingsEndpoint(providerName, settings); err != nil {
+					return err
+				}
+			}
 			if err := settingsFlagRefusal(providerName, settings); err != nil {
 				return err
 			}
-			ep, custom := customPreset(providerName, settings)
 			if custom {
 				var missing []string
 				if baseURL == "" {
@@ -112,9 +119,6 @@ func newAddCmd() *cobra.Command {
 					}
 				}
 				if err := endpointFlagsRefusal(settings, given); err != nil {
-					return err
-				}
-				if _, _, err := settingsEndpoint(providerName, settings); err != nil {
 					return err
 				}
 			}
@@ -198,7 +202,7 @@ func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, erro
 		return provider.Endpoint{}, false, nil
 	}
 	if ep.BaseURL == "" {
-		// The add paths fill custom through customPreset before reaching here.
+		// Unreachable from the add paths, which fill custom through customPreset.
 		return provider.Endpoint{}, false, fmt.Errorf("--settings %s needs --base-url and --model", value)
 	}
 	return ep, true, nil
@@ -210,8 +214,9 @@ func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, erro
 // (glm) generates the settings skeleton into the account dir and yields the
 // generated path, exactly as if the user had written the file by hand and
 // passed its path. A keyword whose preset has no base URL (custom) is
-// refused: its base URL is the user's to type, and only the interactive
-// add screen can ask for it. A bare word that names no keyword is refused
+// refused here: the add paths fill it from --base-url/--model (or the
+// wizard's answers) through customPreset and provider.FillEndpoint and never
+// pass it in. A bare word that names no keyword is refused
 // with the valid ones listed — a typo must not silently register a bogus
 // settings path — while anything path-like keeps today's verbatim path
 // behavior. A file already at the target aborts the add with its path named;

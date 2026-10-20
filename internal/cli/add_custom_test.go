@@ -163,3 +163,28 @@ func TestAddEndpointFlagsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestAddSettingsDirForProviderWithoutFlag: a directory given as --settings is
+// refused as a directory before the provider's missing settings flag is, the
+// order the add path had before the endpoint flags existed.
+func TestAddSettingsDirForProviderWithoutFlag(t *testing.T) {
+	path := withTempConfig(t)
+	dir := filepath.Join(t.TempDir(), "acct")
+	add := newAddCmd()
+	add.SetOut(&bytes.Buffer{})
+	add.SetArgs([]string{"codex", "foo", "--dir", dir, "--settings", t.TempDir()})
+	err := add.Execute()
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("want the directory refusal first, got %v", err)
+	}
+	if _, statErr := os.Stat(dir); statErr == nil {
+		t.Errorf("refused add created the account dir")
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Providers) != 0 {
+		t.Errorf("refused add registered %+v", c.Providers)
+	}
+}

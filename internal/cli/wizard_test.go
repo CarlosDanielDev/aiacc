@@ -767,8 +767,20 @@ func TestAddWizardCustomEndpointPrefilled(t *testing.T) {
 	if err := runAddWizard(bytes.NewBufferString("foo\nclaude\n"), &out, path, pre); err != nil {
 		t.Fatalf("wizard: %v\n%s", err, out.String())
 	}
-	if strings.Contains(out.String(), "Base URL: ") && !strings.Contains(out.String(), "(from --base-url)") {
-		t.Errorf("wizard re-asked a prefilled answer:\n%s", out.String())
+	// Each prefilled answer is echoed once with its flag and never prompted:
+	// a prompt would add a second "Base URL: " / "Model: ", or the display
+	// name's "[<model>]" default.
+	for want, n := range map[string]int{
+		"Base URL: https://h (from --base-url)\n": 1,
+		"Base URL: ":                 1,
+		"Model: m1 (from --model)\n": 1,
+		"Model: ":                    1,
+		"Model display name: M One (from --model-name)\n": 1,
+		"Model display name [":                            0,
+	} {
+		if got := strings.Count(out.String(), want); got != n {
+			t.Errorf("%q appears %d times, want %d — a prefilled answer was asked again:\n%s", want, got, n, out.String())
+		}
 	}
 	env := readSkeletonEnv(t, filepath.Join(dir, "custom.json"))
 	if env["ANTHROPIC_BASE_URL"] != "https://h" || env["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"] != "M One" {

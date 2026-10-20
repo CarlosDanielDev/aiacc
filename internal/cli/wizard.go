@@ -130,13 +130,19 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 	}
 
 	// Every refusal is decided before the first filesystem write: the taken name,
-	// then the settings answer (a typo keyword, custom, a provider with no
-	// settings flag). Only then is the dir created; a generated skeleton creates
-	// it too.
+	// then the settings answer (a typo keyword, a directory, a provider with no
+	// settings flag), then custom's answers — or, for any other settings value,
+	// a prefilled endpoint flag. Only then is the dir created; a generated
+	// skeleton creates it too.
+	ep, custom := customPreset(providerName, settings)
+	if !custom {
+		if _, _, err := settingsEndpoint(providerName, settings); err != nil {
+			return err
+		}
+	}
 	if err := settingsFlagRefusal(providerName, settings); err != nil {
 		return err
 	}
-	ep, custom := customPreset(providerName, settings)
 	if custom {
 		if ep, err = askCustomEndpoint(r, out, ep, pre); err != nil {
 			return err
@@ -150,9 +156,6 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 		}
 		slices.Sort(given)
 		if err := endpointFlagsRefusal(settings, given); err != nil {
-			return err
-		}
-		if _, _, err := settingsEndpoint(providerName, settings); err != nil {
 			return err
 		}
 	}
