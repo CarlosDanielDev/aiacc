@@ -413,9 +413,10 @@ func TestAddWizardRefusesBadNameBeforeAnyWrite(t *testing.T) {
 }
 
 // TestAddWizardRefusedSettingsWritesNothing: a settings answer the rules refuse
-// (a typo keyword, the custom keyword, or any settings value for a provider with
-// no settings flag) is refused before the account dir is created, so nothing is
-// left on disk or in the config.
+// (a typo keyword, custom whose base URL never comes, the endpoint flags with
+// another settings value, or any settings value for a provider with no settings
+// flag) is refused before the account dir is created, so nothing is left on disk
+// or in the config.
 func TestAddWizardRefusedSettingsWritesNothing(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -429,9 +430,29 @@ func TestAddWizardRefusedSettingsWritesNothing(t *testing.T) {
 			wantErr: `"kimi"`,
 		},
 		{
-			name:    "custom keyword at the settings prompt",
+			name:    "custom keyword with the input ending before its base URL",
 			input:   func(d string) string { return "foo\n" + d + "\nclaude\ncustom\n" },
-			wantErr: "needs a base URL",
+			wantErr: "base URL",
+		},
+		{
+			name: "custom keyword with three bad base URLs",
+			input: func(d string) string {
+				return "foo\n" + d + "\nclaude\ncustom\nftp://h\nhttp://example.com\nhttps://u:p@h\nhttps://good.example.com\nm1\n"
+			},
+			wantErr: "base URL",
+		},
+		{
+			name: "custom keyword with three bad models",
+			input: func(d string) string {
+				return "foo\n" + d + "\nclaude\ncustom\nhttps://h\n\nm 1\n" + provider.PlaceholderToken + "\nm1\n"
+			},
+			wantErr: "model",
+		},
+		{
+			name:    "prefilled --base-url with another settings value",
+			input:   func(d string) string { return "foo\n" + d + "\nclaude\nglm\n" },
+			pre:     func(string) addPrefill { return addPrefill{BaseURL: "https://h"} },
+			wantErr: "--settings custom",
 		},
 		{
 			name:    "prefilled --settings for a provider with no settings flag",
@@ -684,5 +705,73 @@ func TestAddWizardNameRegisteredDuringSettingsPromptCreatesNoDir(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dir); statErr == nil {
 		t.Fatalf("refused wizard created %s after the name was taken", dir)
+	}
+}
+
+// TestAddWizardCustomEndpoint: answering custom asks the base URL, the model
+// and its display name; a bad base URL is re-asked, and the good answer that
+// follows produces the skeleton. The API key is never asked.
+func TestAddWizardCustomEndpoint(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	dir := filepath.Join(home, "acct")
+	in := bytes.NewBufferString("foo\n" + dir + "\nclaude\ncustom\nhttp://example.com\nhttps://api.example.com/anthropic/\nm1\n\n")
+	var out bytes.Buffer
+	if err := runAddWizard(in, &out, path, addPrefill{}); err != nil {
+		t.Fatalf("wizard: %v\n%s", err, out.String())
+	}
+	if n := strings.Count(out.String(), "Base URL: "); n != 2 {
+		t.Errorf("Base URL asked %d times, want 2 (one re-ask):\n%s", n, out.String())
+	}
+	for _, want := range []string{"Model: ", "Model display name [m1]: "} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("wizard did not ask %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(strings.ToLower(out.String()), "key:") {
+		t.Errorf("wizard prompted for the key:\n%s", out.String())
+	}
+	skeleton := filepath.Join(dir, "custom.json")
+	env := readSkeletonEnv(t, skeleton)
+	for k, v := range map[string]string{
+		"ANTHROPIC_BASE_URL":                 "https://api.example.com/anthropic",
+		"ANTHROPIC_AUTH_TOKEN":               provider.PlaceholderToken,
+		"ANTHROPIC_MODEL":                    "m1",
+		"ANTHROPIC_CUSTOM_MODEL_OPTION":      "m1",
+		"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "m1",
+	} {
+		if env[k] != v {
+			t.Errorf("%s = %q, want %q", k, env[k], v)
+		}
+	}
+	if !strings.Contains(out.String(), skeleton) {
+		t.Errorf("wizard does not name the file to paste the key into:\n%s", out.String())
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Providers["claude"].Accounts["foo"].Settings; got != skeleton {
+		t.Errorf("settings = %q, want %q", got, skeleton)
+	}
+}
+
+// TestAddWizardCustomEndpointPrefilled: the endpoint flags preempt their
+// questions, like every other flag the wizard takes.
+func TestAddWizardCustomEndpointPrefilled(t *testing.T) {
+	home := hermeticHome(t)
+	path := filepath.Join(home, "config.toml")
+	dir := filepath.Join(home, "acct")
+	var out bytes.Buffer
+	pre := addPrefill{Dir: dir, Settings: "custom", BaseURL: "https://h", Model: "m1", ModelName: "M One"}
+	if err := runAddWizard(bytes.NewBufferString("foo\nclaude\n"), &out, path, pre); err != nil {
+		t.Fatalf("wizard: %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "Base URL: ") && !strings.Contains(out.String(), "(from --base-url)") {
+		t.Errorf("wizard re-asked a prefilled answer:\n%s", out.String())
+	}
+	env := readSkeletonEnv(t, filepath.Join(dir, "custom.json"))
+	if env["ANTHROPIC_BASE_URL"] != "https://h" || env["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"] != "M One" {
+		t.Errorf("env = %v", env)
 	}
 }

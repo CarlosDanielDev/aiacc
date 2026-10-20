@@ -17,7 +17,7 @@ func TestSettingsRefusalSaysNeitherPathNorKeyword(t *testing.T) {
 		t.Fatal("--settings kimi was accepted")
 	}
 	msg := err.Error()
-	for _, want := range []string{"neither a file path nor a known endpoint keyword", "custom, glm", "aiacc add", "\"custom\" needs the interactive add screen"} {
+	for _, want := range []string{"neither a file path nor a known endpoint keyword", "custom, glm", "aiacc add", "\"custom\" takes --base-url and --model"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal missing %q: %s", want, msg)
 		}

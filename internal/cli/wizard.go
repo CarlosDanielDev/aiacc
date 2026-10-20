@@ -20,6 +20,7 @@ import (
 type addPrefill struct {
 	Dir, Settings, Env, Command string
 	Quota                       int
+	BaseURL, Model, ModelName   string // the custom endpoint's answers
 }
 
 // runAddWizard walks the user through registering a new account. The questions
@@ -132,11 +133,28 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 	// then the settings answer (a typo keyword, custom, a provider with no
 	// settings flag). Only then is the dir created; a generated skeleton creates
 	// it too.
-	if _, _, err := settingsEndpoint(providerName, settings); err != nil {
-		return err
-	}
 	if err := settingsFlagRefusal(providerName, settings); err != nil {
 		return err
+	}
+	ep, custom := customPreset(providerName, settings)
+	if custom {
+		if ep, err = askCustomEndpoint(r, out, ep, pre); err != nil {
+			return err
+		}
+	} else {
+		var given []string
+		for flag, v := range map[string]string{"--base-url": pre.BaseURL, "--model": pre.Model, "--model-name": pre.ModelName} {
+			if v != "" {
+				given = append(given, flag)
+			}
+		}
+		slices.Sort(given)
+		if err := endpointFlagsRefusal(settings, given); err != nil {
+			return err
+		}
+		if _, _, err := settingsEndpoint(providerName, settings); err != nil {
+			return err
+		}
 	}
 	// The dir is created expanded — a literal ~ must not grow a "./~" tree in
 	// the working directory — while the account registers the as-typed form.
@@ -152,7 +170,12 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 	if err := os.MkdirAll(realDir, 0o755); err != nil {
 		return err
 	}
-	settingsPath, err := resolveSettings(providerName, dir, settings)
+	var settingsPath string
+	if custom {
+		settingsPath, err = provider.EnsureSkeleton(dir, ep)
+	} else {
+		settingsPath, err = resolveSettings(providerName, dir, settings)
+	}
 	if err != nil {
 		return err
 	}
@@ -175,6 +198,9 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 		command = providerName
 	}
 	fmt.Fprintf(out, "\nRegistered '%s' → %s\n", name, dir)
+	if custom {
+		printKeyHint(out, realDir, ep)
+	}
 	// Claude keeps the wording the wizard always printed; other providers name
 	// their own CLI, since the wizard now asks which provider it is.
 	if providerName == "claude" {
@@ -205,6 +231,51 @@ func validProviders(c *config.Config) []string {
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
+}
+
+// askCustomEndpoint takes the custom endpoint's base URL, model and display
+// name, each from its prefilled flag or else asked. An invalid answer is
+// re-asked up to three times; the third aborts the add before anything is
+// written. The API key is never asked (ADR-0007).
+func askCustomEndpoint(r *bufio.Reader, out io.Writer, ep provider.Endpoint, pre addPrefill) (provider.Endpoint, error) {
+	base, err := askValid(r, out, "Base URL", pre.BaseURL, "--base-url", provider.CheckBaseURL)
+	if err != nil {
+		return provider.Endpoint{}, err
+	}
+	model, err := askValid(r, out, "Model", pre.Model, "--model", func(m string) (string, error) {
+		return m, provider.CheckModel(m)
+	})
+	if err != nil {
+		return provider.Endpoint{}, err
+	}
+	name := pre.ModelName
+	if name == "" {
+		name = strings.TrimSpace(ask(r, out, fmt.Sprintf("Model display name [%s]: ", model)))
+	} else {
+		fmt.Fprintf(out, "Model display name: %s (from --model-name)\n", name)
+	}
+	return provider.FillEndpoint(ep, base, model, name)
+}
+
+// askValid returns the prefilled value if given, checked once, or else asks
+// label until check accepts the answer, at most three times.
+func askValid(r *bufio.Reader, out io.Writer, label, given, flag string, check func(string) (string, error)) (string, error) {
+	if given != "" {
+		v, err := check(strings.TrimSpace(given))
+		if err == nil {
+			fmt.Fprintf(out, "%s: %s (from %s)\n", label, v, flag)
+		}
+		return v, err
+	}
+	var err error
+	for range 3 {
+		var v string
+		if v, err = check(strings.TrimSpace(ask(r, out, label+": "))); err == nil {
+			return v, nil
+		}
+		fmt.Fprintf(out, "  %v\n", err)
+	}
+	return "", fmt.Errorf("%w (3 tries, nothing written)", err)
 }
 
 func ask(r *bufio.Reader, out io.Writer, label string) string {

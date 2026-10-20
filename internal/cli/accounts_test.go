@@ -403,8 +403,7 @@ func TestAddFlagsInteractiveNoArgsError(t *testing.T) {
 
 // TestAddSettingsUnknown: a bare word that is no endpoint keyword is refused
 // with the valid ones listed (a typo must not silently register a bogus
-// settings path), and custom points at the interactive add screen — the CLI
-// has nowhere to ask for its base URL.
+// settings path), and custom without its endpoint flags is refused naming them.
 func TestAddSettingsUnknown(t *testing.T) {
 	path := withTempConfig(t)
 	dir := t.TempDir()
@@ -426,11 +425,11 @@ func TestAddSettingsUnknown(t *testing.T) {
 	if err == nil {
 		t.Fatalf("--settings custom was accepted")
 	}
-	if !strings.Contains(err.Error(), "aiacc add") {
-		t.Fatalf("custom error does not point at the interactive add screen: %v", err)
+	if !strings.Contains(err.Error(), "--base-url") || !strings.Contains(err.Error(), "--model") {
+		t.Fatalf("custom error does not name the flags to add: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "custom.json")); err == nil {
-		t.Fatalf("a custom skeleton was generated from the CLI")
+		t.Fatalf("a custom skeleton was generated without its endpoint flags")
 	}
 	c, err := config.Load(path)
 	if err != nil {
