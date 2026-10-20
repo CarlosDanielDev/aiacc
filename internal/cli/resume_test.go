@@ -175,12 +175,12 @@ func TestResumeSessionPrefix(t *testing.T) {
 		t.Fatalf("unique prefix: out %q, err %v", out, err)
 	}
 
-	for _, prefix := range []string{"aaaa", "zzzz"} {
+	for prefix, verdict := range map[string]string{"aaaa": "is ambiguous", "zzzz": "matches no session"} {
 		_, _, err := runResume(t, "claude", "work", "--print", "--session", prefix)
 		if err == nil {
 			t.Fatalf("prefix %q: want a refusal", prefix)
 		}
-		for _, want := range []string{prefix, "aaaa1111", "title aaaa1111", "aaaa2222", "title aaaa2222"} {
+		for _, want := range []string{`"` + prefix + `" ` + verdict, "aaaa1111", "title aaaa1111", "aaaa2222", "title aaaa2222"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("prefix %q: error missing %q:\n%v", prefix, want, err)
 			}
@@ -346,5 +346,52 @@ func TestResumeTUIRefusals(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("refused or cancelled resumes must not exec, got %+v", *calls)
+	}
+}
+
+// TestPickerResumeKeyRoutesToResume drives runPicker: `u` on a row resumes a
+// session of that row's account, and a refusal returns to the list. The
+// launcher screen answers `u` on the given row, then quits.
+func TestPickerResumeKeyRoutesToResume(t *testing.T) {
+	t.Setenv("PATH", "")
+	f := seedResume(t, t.TempDir())
+	calls := stubExec(t)
+	stubPickList(t, 0)
+
+	drive := func(account string) {
+		t.Helper()
+		answers := 0
+		old := runLauncher
+		runLauncher = func(rows []tui.Row, _ bool, _ string) (tui.Result, error) {
+			answers++
+			if answers > 1 {
+				return tui.Result{Kind: tui.Cancelled}, nil
+			}
+			for i, r := range rows {
+				if r.Account == account {
+					return tui.Result{Kind: tui.Resume, Index: i}, nil
+				}
+			}
+			t.Fatalf("no row for %s in %+v", account, rows)
+			return tui.Result{}, nil
+		}
+		t.Cleanup(func() { runLauncher = old })
+		if err := runPicker(""); err != nil {
+			t.Fatalf("picker: %v", err)
+		}
+		if answers != 2 {
+			t.Fatalf("picker did not return to the list after resume: %d screens", answers)
+		}
+	}
+
+	captured := captureHandoffMessage(t)
+	drive("main") // codex row: refused on screen, nothing launched
+	if len(*calls) != 0 || len(*captured) == 0 || !strings.Contains((*captured)[0].Text, "claude-only") {
+		t.Fatalf("codex row: calls %+v, message %+v", *calls, *captured)
+	}
+
+	drive("work")
+	if len(*calls) != 1 || (*calls)[0].dir != f.dir || (*calls)[0].id != resumeNewID {
+		t.Fatalf("work row: exec calls = %+v", *calls)
 	}
 }

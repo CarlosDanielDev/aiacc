@@ -93,7 +93,7 @@ func resumeDirect(cmd *cobra.Command, cfgPath, providerName, account, sessionID,
 	}
 	sess := sessions[0]
 	if sessionID != "" {
-		if sess, err = findSession(sessions, sessionID); err != nil {
+		if sess, err = findSession(dir, sessions, sessionID); err != nil {
 			return err
 		}
 	}
@@ -112,27 +112,24 @@ func resumeDirect(cmd *cobra.Command, cfgPath, providerName, account, sessionID,
 	return execResume(dir, args, cwd, sess.ID)
 }
 
-// findSession resolves an exact id or a unique prefix of one. An unknown or
-// ambiguous prefix is refused with the candidates listed, so the user can pick
-// a longer prefix without another command.
-func findSession(sessions []session.Info, id string) (session.Info, error) {
+// findSession resolves an exact id or a unique prefix of one with
+// session.Find, the matcher handoff uses. Only on a refusal does it build its
+// own message: the matches of an ambiguous prefix, or the account's sessions
+// for an unknown one, so the user can pick without another command.
+func findSession(dir string, sessions []session.Info, id string) (session.Info, error) {
+	s, err := session.Find(dir, id)
+	if err == nil {
+		return s, nil
+	}
 	var hits []session.Info
 	for _, s := range sessions {
-		if s.ID == id {
-			return s, nil
-		}
-		if strings.HasPrefix(s.ID, id) {
+		if id != "" && strings.HasPrefix(s.ID, id) {
 			hits = append(hits, s)
 		}
 	}
-	if len(hits) == 1 {
-		return hits[0], nil
-	}
-	what := "matches no session"
-	if len(hits) > 1 {
-		what = "is ambiguous"
-	} else {
-		hits = sessions
+	what := "is ambiguous"
+	if len(hits) < 2 {
+		what, hits = "matches no session", sessions
 	}
 	if len(hits) > 10 {
 		hits = hits[:10]
