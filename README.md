@@ -257,7 +257,7 @@ missing.
 | `aiacc duplicate <provider> <src> <new> [--dir <path>]` | Register a new account shaped like `src`: its quota and a private copy (mode `0600`) of its settings file. The login, sessions and history are never copied — the new profile logs in on its first run. Dir defaults to `~/.<provider>-<new>`, without doubling a `<provider>-` the name already starts with (`claude-glm2` → `~/.claude-glm2`). _(picker: `c`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there — Claude profiles only for now, the transcript format is Claude's. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
-| `aiacc resume [provider] [account]` | Resume a session in the same account, in its original directory — nothing is copied. No args → interactive picker; `--session <id>`, `--cwd <dir>`, `--print`. Claude profiles only. _(picker: `u`)_ |
+| `aiacc resume [provider] [account]` | Resume a session in the same account, in its original directory — nothing is copied. No args → interactive picker; `--session <id>`, `--cwd <dir>`, `--print`, `--bypass`. Claude profiles only. _(picker: `u`, then `b` on the session list for bypass)_ |
 | `aiacc ai-memory <account> [args...]` | Run a claude or codex account under [ai-memory](https://github.com/akitaonrails/ai-memory), with its launcher and config dir set. Arguments after the account go to ai-memory, which passes them to the CLI except its own wrapper flags (`--yolo`, `--fresh`, …). See below. |
 | `aiacc link [provider] [account]` | Share your skills, sub-agents, commands and hooks with a profile (all of them by default). `--replace` takes over entries a profile owns; `--prune` removes dead links (asks first). |
 | `aiacc list` | Table of providers and their accounts. `--status` adds the active config dir and last-used time; `--usage` adds token totals and `USED/QUOTA` (`-` until the account has a `--quota`) from local session logs, so it is opt-in. |
@@ -420,8 +420,12 @@ config dir and settings plus `--resume <id>`, copying and writing nothing.
 `handoff` copies the transcript to *another* account; `resume` stays in this one.
 `--session <prefix>` picks another session (an ambiguous or unknown prefix lists
 the candidates), `--cwd <dir>` resumes from a different directory when the
-original is gone, and `--print` prints the command instead of running it. In the
-picker, press `u` on the account.
+original is gone, and `--print` prints the command instead of running it.
+Permission prompts stay on unless you opt in for that one resume: `--bypass` adds
+the provider's bypass flag (`--dangerously-skip-permissions` for claude) before
+`--resume <id>`, and is refused for a provider without one. In the picker, press
+`u` on the account; on the session list `b` (or space) toggles bypass — off on
+every open, shown in the title and legend.
 
 ## 🧠 Run an account under ai-memory
 

@@ -1043,8 +1043,23 @@ type ListItem struct {
 
 // RenderList returns a framed single-column selection list. Pure, for tests.
 func RenderList(title string, items []ListItem, cursor int, sz Size) string {
+	return renderList(title, items, cursor, "", false, sz)
+}
+
+// renderList is RenderList with an optional toggle: a non-empty label adds
+// "b <label>: off|on" to the legend and, while on, " · <label> on" to the
+// title. An empty label renders the plain list.
+func renderList(title string, items []ListItem, cursor int, toggle string, on bool, sz Size) string {
 	w := innerWidth(sz.cols())
 	primCol := min(max(w/2, 8), 24)
+	keys := [][2]string{{"↑↓", "move"}, {"⏎", "select"}, {"q", "cancel"}}
+	if toggle != "" {
+		state := "off"
+		if on {
+			state, title = "on", title+" · "+toggle+" on"
+		}
+		keys = append(keys[:2:2], [2]string{"b", toggle + ": " + state}, keys[2])
+	}
 	lines := []string{boxTop(title, w), boxBlank(w)}
 	if len(items) == 0 {
 		lines = append(lines, boxRow([]seg{pad(2), {"nothing to choose", inkDim}}, w), boxBlank(w))
@@ -1075,19 +1090,29 @@ func RenderList(title string, items []ListItem, cursor int, sz Size) string {
 		lines = append(lines, boxRow(moreLine(start, end, len(items)), w))
 	}
 	lines = append(lines, boxBottom(w))
-	return frame(lines, legendLine([][2]string{{"↑↓", "move"}, {"⏎", "select"}, {"q", "cancel"}}), sz, w)
+	return frame(lines, legendLine(keys), sz, w)
 }
 
 // driveList is the selection loop, decoupled from /dev/tty for tests. Returns the
 // chosen index, or -1 if cancelled.
 func driveList(title string, items []ListItem, g *geom, in io.Reader, out io.Writer) (int, error) {
-	cursor, chosen := 0, -1
+	i, _, err := driveListToggle(title, items, "", g, in, out)
+	return i, err
+}
+
+// driveListToggle is driveList with an optional toggle (see renderList) that
+// space or b flips; it starts off and is reported with the choice, never on a
+// cancel. An empty label means no toggle, and space and b do nothing.
+func driveListToggle(title string, items []ListItem, toggle string, g *geom, in io.Reader, out io.Writer) (int, bool, error) {
+	cursor, chosen, on := 0, -1, false
 	if len(items) == 0 {
 		cursor = -1
 	}
-	err := screenLoop(g, in, out, readKey, func(sz Size) string { return RenderList(title, items, cursor, sz) },
+	err := screenLoop(g, in, out, readKey, func(sz Size) string { return renderList(title, items, cursor, toggle, on, sz) },
 		func(k key) bool {
 			switch k {
+			case keyToggle:
+				on = toggle != "" && !on
 			case keyUp:
 				if cursor > 0 {
 					cursor--
@@ -1106,12 +1131,24 @@ func driveList(title string, items []ListItem, g *geom, in io.Reader, out io.Wri
 			}
 			return false
 		})
-	return chosen, err
+	return chosen, on && chosen >= 0, err
 }
 
 // RunList shows a selection list on /dev/tty and returns the chosen index or -1.
 func RunList(title string, items []ListItem) (int, error) {
 	return onTTY(-1, func(tty *os.File, g *geom) (int, error) { return driveList(title, items, g, tty, tty) })
+}
+
+// RunListToggle is RunList with an optional toggle labelled toggle ("" = none,
+// the plain list), returning its state with the choice. It starts off.
+func RunListToggle(title string, items []ListItem, toggle string) (int, bool, error) {
+	on := false
+	i, err := onTTY(-1, func(tty *os.File, g *geom) (int, error) {
+		i, o, err := driveListToggle(title, items, toggle, g, tty, tty)
+		on = o
+		return i, err
+	})
+	return i, on, err
 }
 
 // Line is one body line of a framed message. Color is an exported palette name

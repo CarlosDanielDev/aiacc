@@ -1215,3 +1215,51 @@ func TestDuplicateFramesFit(t *testing.T) {
 		}
 	}
 }
+
+// TestDriveListToggle: on a list with a toggle, b and space flip it, the title
+// and legend show its state, and ⏎ returns it with the chosen row. It starts off.
+func TestDriveListToggle(t *testing.T) {
+	items := []ListItem{{Primary: "a"}, {Primary: "b"}}
+	for _, tc := range []struct {
+		keys   string
+		row    int
+		on     bool
+		screen string
+	}{
+		{"\r", 0, false, "b bypass: off"},
+		{"b\x1b[B\r", 1, true, "b bypass: on"},
+		{"b \r", 0, false, "b bypass: off"},
+	} {
+		var out bytes.Buffer
+		i, on, err := driveListToggle("pick", items, "bypass", fixedGeom(80, 24), bytes.NewBufferString(tc.keys), &out)
+		if err != nil || i != tc.row || on != tc.on {
+			t.Fatalf("keys %q: got (%d, %v, %v), want (%d, %v)", tc.keys, i, on, err, tc.row, tc.on)
+		}
+		last := ansi.ReplaceAllString(out.String(), "")
+		if j := strings.LastIndex(last, "PICK"); j >= 0 {
+			last = last[j:]
+		}
+		if !strings.Contains(last, tc.screen) {
+			t.Fatalf("keys %q: last screen lacks %q:\n%s", tc.keys, tc.screen, last)
+		}
+		if strings.Contains(last, "· BYPASS ON") != tc.on {
+			t.Fatalf("keys %q: title bypass state wrong:\n%s", tc.keys, last)
+		}
+	}
+	if _, on, _ := driveListToggle("pick", items, "bypass", fixedGeom(80, 24), bytes.NewBufferString("bq"), &bytes.Buffer{}); on {
+		t.Fatal("cancel must not report the toggle on")
+	}
+}
+
+// TestRenderListWithoutToggleUnchanged: a list without a toggle renders exactly
+// what RenderList always has — no toggle in its legend.
+func TestRenderListWithoutToggleUnchanged(t *testing.T) {
+	sz := Size{Cols: 80, Rows: 24}
+	items := []ListItem{{Primary: "alpha", Secondary: "detail"}}
+	if got, want := renderList("pick", items, 0, "", false, sz), RenderList("pick", items, 0, sz); got != want {
+		t.Fatalf("renderList with no toggle differs from RenderList")
+	}
+	if strings.Contains(ansi.ReplaceAllString(RenderList("pick", items, 0, sz), ""), "bypass") {
+		t.Fatal("plain list mentions bypass")
+	}
+}
