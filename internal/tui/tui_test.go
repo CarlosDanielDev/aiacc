@@ -1109,3 +1109,84 @@ func TestPlainMessageIgnoresToggleKeys(t *testing.T) {
 		t.Fatalf("space or b changed the state of a plain message:\n%s", out.String())
 	}
 }
+
+// --- Duplicate profile --------------------------------------------------------
+
+func TestDriveDuplicateKey(t *testing.T) {
+	if res := drv(t, "c", sample()); res.Kind != Duplicate || res.Index != 0 {
+		t.Fatalf("got %+v, want Duplicate 0", res)
+	}
+	if out := Render(sample(), 0, false, Size{Cols: 120, Rows: 24}); !strings.Contains(ansi.ReplaceAllString(out, ""), "c duplicate") {
+		t.Fatalf("legend does not offer c duplicate:\n%s", out)
+	}
+}
+
+// duplicate drives the duplicate screen with keys; submit records each answer
+// and refuses the ones in refuse, the way the CLI's function would.
+func duplicate(t *testing.T, keys string, refuse map[string]string) (ok bool, calls [][2]string, out string) {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	ok, err := driveDuplicate("claude", "work", func(name, dir string) error {
+		calls = append(calls, [2]string{name, dir})
+		if msg, bad := refuse[name]; bad {
+			return fmt.Errorf("%s", msg)
+		}
+		return nil
+	}, fixedGeom(80, 24), bytes.NewBufferString(keys), buf)
+	if err != nil {
+		t.Fatalf("driveDuplicate: %v", err)
+	}
+	return ok, calls, ansi.ReplaceAllString(buf.String(), "")
+}
+
+// Enter submits the typed name and dir; an empty dir is passed as empty, so the
+// one default rule (the CLI's) applies.
+func TestDuplicateSubmitsNameAndDir(t *testing.T) {
+	ok, calls, _ := duplicate(t, "w2\r", nil)
+	if !ok || len(calls) != 1 || calls[0] != [2]string{"w2", ""} {
+		t.Fatalf("ok=%v calls=%v, want one submit of (w2, \"\")", ok, calls)
+	}
+	ok, calls, _ = duplicate(t, "w2\t~/x\r", nil)
+	if !ok || len(calls) != 1 || calls[0] != [2]string{"w2", "~/x"} {
+		t.Fatalf("ok=%v calls=%v, want one submit of (w2, ~/x)", ok, calls)
+	}
+}
+
+// A refusal stays on the screen's hint row and the screen stays open; Esc then
+// leaves with nothing done. Esc alone never submits.
+func TestDuplicateRefusalShownThenEsc(t *testing.T) {
+	ok, calls, out := duplicate(t, "taken\r\x1b", map[string]string{"taken": "taken is in use"})
+	if ok || len(calls) != 1 {
+		t.Fatalf("ok=%v calls=%v, want the one refused submit and no success", ok, calls)
+	}
+	if !strings.Contains(out, "taken is in use") {
+		t.Fatalf("refusal not shown on screen:\n%s", out)
+	}
+	if ok, calls, _ := duplicate(t, "w2\x1b", nil); ok || len(calls) != 0 {
+		t.Fatalf("Esc: ok=%v calls=%v, want nothing submitted", ok, calls)
+	}
+}
+
+func TestDuplicateFramesFit(t *testing.T) {
+	for _, sz := range []Size{{20, 10}, {40, 14}, {80, 24}, {200, 60}} {
+		out := RenderDuplicate("claude", "work", AddForm{Name: "work2"}, "a long refusal that will not fit a narrow frame", sz)
+		wid := -1
+		for _, ln := range strings.Split(out, "\r\n") {
+			if n := visibleLen(ln); n > sz.Cols {
+				t.Fatalf("%v: line is %d wide:\n%q", sz, n, ln)
+			}
+			trimmed := strings.TrimLeft(ansi.ReplaceAllString(ln, ""), " ")
+			if !strings.ContainsAny(firstRune(trimmed), "┏┃┗┣") {
+				continue
+			}
+			if n := visibleLen(ln); wid == -1 {
+				wid = n
+			} else if n != wid {
+				t.Fatalf("%v: framed line width %d != %d", sz, n, wid)
+			}
+		}
+		if used := strings.Count(out, "\r\n"); used >= sz.Rows {
+			t.Fatalf("%v: %d rows emitted", sz, used)
+		}
+	}
+}

@@ -73,6 +73,11 @@ func runPicker(filter string) error {
 				}
 			}
 			continue
+		case tui.Duplicate:
+			if err := runDuplicateTUI(path, rows[res.Index]); err != nil {
+				return err
+			}
+			continue
 		case tui.Edit:
 			if err := runEditTUI(rows[res.Index]); err != nil {
 				return err

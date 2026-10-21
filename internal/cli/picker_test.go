@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
+	"github.com/CarlosDanielDev/aiacc/internal/tui"
 )
 
 // setEnv sets the variable the launched CLI reads its account from. A
@@ -102,5 +106,78 @@ func TestCollectRowsKeepsBlockedProfilesVisible(t *testing.T) {
 
 	if got := collectRows(c, "nope"); len(got) != 0 {
 		t.Errorf("filter to an unknown provider returned %d rows", len(got))
+	}
+}
+
+// stubDuplicateScreen replaces the duplicate screen with one that submits each
+// (name, dir) answer in turn, the way Enter would, and records the refusal each
+// one got. The first accepted answer closes the screen; when none is accepted
+// it backs out, as Esc does.
+func stubDuplicateScreen(t *testing.T, answers ...[2]string) *[]error {
+	t.Helper()
+	refusals := &[]error{}
+	old := duplicateScreen
+	duplicateScreen = func(_, _ string, submit func(name, dir string) error) (bool, error) {
+		for _, a := range answers {
+			if err := submit(a[0], a[1]); err != nil {
+				*refusals = append(*refusals, err)
+				continue // the screen keeps the refusal on its hint row
+			}
+			return true, nil
+		}
+		return false, nil // Esc
+	}
+	t.Cleanup(func() { duplicateScreen = old })
+	return refusals
+}
+
+// The picker's c duplicates through the CLI's function: a refused name is
+// returned to the screen and writes nothing, and the corrected one registers.
+func TestPickerDuplicateRefusalThenSuccess(t *testing.T) {
+	home, cfgPath, _ := dupFixture(t)
+	shown := captureHandoffMessage(t)
+	refusals := stubDuplicateScreen(t, [2]string{"taken", ""}, [2]string{"work2", ""})
+
+	if err := runDuplicateTUI(cfgPath, tui.Row{Provider: "claude", Account: "work"}); err != nil {
+		t.Fatalf("runDuplicateTUI: %v", err)
+	}
+	if len(*refusals) != 1 || !strings.Contains((*refusals)[0].Error(), `"taken" already exists`) {
+		t.Fatalf("refusals = %v, want the taken-name refusal", *refusals)
+	}
+	c, _ := config.Load(cfgPath)
+	if c.Providers["claude"].Accounts["work2"].Quota != 7 {
+		t.Fatalf("work2 not registered: %+v", c.Providers["claude"].Accounts)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude-taken")); !os.IsNotExist(err) {
+		t.Fatalf("refused name touched disk: %v", err)
+	}
+	var text []string
+	for _, l := range *shown {
+		text = append(text, l.Text)
+	}
+	if !strings.Contains(strings.Join(text, "\n"), "/login") {
+		t.Fatalf("done message does not say how to log in: %v", text)
+	}
+}
+
+// Esc on the duplicate screen writes nothing, and a refusal followed by Esc
+// writes nothing either.
+func TestPickerDuplicateCancelWritesNothing(t *testing.T) {
+	for _, answers := range [][][2]string{nil, {{"taken", ""}}} {
+		home, cfgPath, _ := dupFixture(t)
+		captureHandoffMessage(t)
+		stubDuplicateScreen(t, answers...)
+		cfgBefore, _ := os.ReadFile(cfgPath)
+		diskBefore := contentTreeOf(t, home)
+
+		if err := runDuplicateTUI(cfgPath, tui.Row{Provider: "claude", Account: "work"}); err != nil {
+			t.Fatalf("runDuplicateTUI: %v", err)
+		}
+		if cfgAfter, _ := os.ReadFile(cfgPath); !bytes.Equal(cfgBefore, cfgAfter) {
+			t.Errorf("answers %v: config changed", answers)
+		}
+		if diskAfter := contentTreeOf(t, home); !slices.Equal(diskBefore, diskAfter) {
+			t.Errorf("answers %v: disk changed", answers)
+		}
 	}
 }
