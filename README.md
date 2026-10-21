@@ -196,20 +196,37 @@ placeholder where your key goes, created `chmod 600`:
 
 Open the file it names, paste your API key over the placeholder, and launch —
 `claude-glm` now talks to GLM from any directory. `custom` is the other
-preset: the same step, with the base URL left blank for you to fill in (add
-any model fields yourself). A settings file that is already there aborts the
-create — nothing is overwritten, ever.
+preset, for any GLM-like Anthropic-compatible endpoint (DeepSeek, Kimi,
+OpenRouter, a local proxy). In the picker it writes the same skeleton with the
+base URL left blank for you to fill in (add any model fields yourself). A
+settings file that is already there aborts the create — nothing is
+overwritten, ever.
 
-Anything the presets don't cover, write the file yourself and hand aiacc the
-path. `glm` works on the command line too — `--settings glm` generates the
-same skeleton non-interactively (an existing file aborts, nothing is
-overwritten), while `custom` stays picker-only, since its blank base URL is
-yours to type in:
+Both presets work on the command line too. `--settings glm` generates the GLM
+skeleton non-interactively; `--settings custom` takes the endpoint up front —
+`--base-url` and `--model` are required, `--model-name` (the display name)
+defaults to the model:
 
 ```sh
 aiacc add claude claude-glm --dir ~/.claude-glm --settings glm                     # generate it
+aiacc add claude claude-ds  --dir ~/.claude-ds  --settings custom \
+  --base-url https://api.deepseek.com/anthropic --model deepseek-chat           # any endpoint
 aiacc add claude claude-glm --dir ~/.claude-glm --settings ~/.claude-glm/glm.json # or hand-write it
 ```
+
+The base URL is checked before anything is written: `https://` (plain
+`http://` only for `localhost`, `127.0.0.1` or `::1` — a local proxy), a host,
+no `user:password@`, no `?query` or `#fragment`; a trailing `/` is trimmed. The
+model must be one word. `custom` fills `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` and
+`ANTHROPIC_CUSTOM_MODEL_OPTION(_NAME)`, with the same key placeholder, and aiacc
+prints the file to paste your key into — the key itself is never asked for.
+`aiacc add` piped (the line wizard) asks `Base URL:`, `Model:` and `Model
+display name` when you answer `custom`, re-asking a bad answer up to three
+times. `--base-url`, `--model` and `--model-name` with any other settings value
+are refused, not ignored.
+
+Anything the presets don't cover, write the file yourself and hand aiacc the
+path:
 
 ```json
 { "env": { "ANTHROPIC_BASE_URL": "…", "ANTHROPIC_AUTH_TOKEN": "…", "ANTHROPIC_MODEL": "…" } }
@@ -235,7 +252,7 @@ missing.
 | `aiacc` | The interactive picker (front door). Piped/redirected, it prints help instead. |
 | **`<account>`** &nbsp;e.g. `claude-work` | Launch Claude Code in that account (installed by `aiacc setup`). |
 | `aiacc setup` | One-step install of the launcher commands onto your `PATH` — they work immediately. |
-| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. `--quota N` sets an optional manual plan size. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you; an existing file is never overwritten (claude). |
+| `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. `--quota N` sets an optional manual plan size. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you, and `--settings custom --base-url <URL> --model <id> [--model-name <name>]` one for any Anthropic-compatible endpoint; an existing file is never overwritten (claude). |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there — Claude profiles only for now, the transcript format is Claude's. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |

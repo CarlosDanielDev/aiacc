@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -25,6 +26,7 @@ var stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
 
 func newAddCmd() *cobra.Command {
 	var dir, envVar, command, settings string
+	var baseURL, model, modelName string
 	var quota int
 	cmd := &cobra.Command{
 		Use:   "add [provider] [account]",
@@ -45,7 +47,7 @@ func newAddCmd() *cobra.Command {
 				// (and tests) → the line wizard, which reads stdin and lets
 				// each given flag preempt its question.
 				if stdinIsTerminal() {
-					for _, flag := range []string{"dir", "settings", "env", "command", "quota"} {
+					for _, flag := range []string{"dir", "settings", "env", "command", "quota", "base-url", "model", "model-name"} {
 						if cmd.Flags().Changed(flag) {
 							return fmt.Errorf("--%s needs <provider> <account> arguments — "+
 								"run \"aiacc add <provider> <account> --dir …\" for the flag form, "+
@@ -55,7 +57,8 @@ func newAddCmd() *cobra.Command {
 					return runAddTUI(path)
 				}
 				return runAddWizard(cmd.InOrStdin(), cmd.OutOrStdout(), path,
-					addPrefill{Dir: dir, Settings: settings, Env: envVar, Command: command, Quota: quota})
+					addPrefill{Dir: dir, Settings: settings, Env: envVar, Command: command, Quota: quota,
+						BaseURL: baseURL, Model: model, ModelName: modelName})
 			}
 			if len(args) != 2 {
 				return fmt.Errorf("give both <provider> and <account>, or no arguments for the wizard")
@@ -81,17 +84,53 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			// Every settings refusal is decided before the dir is created, so a
-			// refused add leaves nothing on disk.
-			if _, _, err := settingsEndpoint(providerName, settings); err != nil {
-				return err
+			// refused add leaves nothing on disk. The order is the one the add
+			// path always had — the settings value, then the provider's flag —
+			// with custom's own checks after both.
+			ep, custom := customPreset(providerName, settings)
+			if !custom {
+				if _, _, err := settingsEndpoint(providerName, settings); err != nil {
+					return err
+				}
 			}
 			if err := settingsFlagRefusal(providerName, settings); err != nil {
 				return err
 			}
+			if custom {
+				var missing []string
+				if baseURL == "" {
+					missing = append(missing, "--base-url")
+				}
+				if model == "" {
+					missing = append(missing, "--model")
+				}
+				if len(missing) > 0 {
+					return fmt.Errorf("--settings custom is missing %s (the endpoint's base URL and model id)",
+						strings.Join(missing, " and "))
+				}
+				if ep, err = provider.FillEndpoint(ep, baseURL, model, modelName); err != nil {
+					return err
+				}
+			} else {
+				var given []string
+				for _, flag := range []string{"base-url", "model", "model-name"} {
+					if cmd.Flags().Changed(flag) {
+						given = append(given, "--"+flag)
+					}
+				}
+				if err := endpointFlagsRefusal(settings, given); err != nil {
+					return err
+				}
+			}
 			if err := os.MkdirAll(realDir, 0o755); err != nil {
 				return err
 			}
-			if settings, err = resolveSettings(providerName, dir, settings); err != nil {
+			if custom {
+				settings, err = provider.EnsureSkeleton(dir, ep)
+			} else {
+				settings, err = resolveSettings(providerName, dir, settings)
+			}
+			if err != nil {
 				return err
 			}
 			if err := saveAccount(path, providerName, account, dir, quota, envVar, command, settings); err != nil {
@@ -101,6 +140,9 @@ func newAddCmd() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), "aiacc:", err)
 			}
 			linkProfile(providerName, realDir) // same skills/agents as the bare CLI
+			if custom {
+				printKeyHint(cmd.OutOrStdout(), realDir, ep)
+			}
 			return nil
 		},
 	}
@@ -108,7 +150,10 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().IntVar(&quota, "quota", 0, "optional manual plan size")
 	cmd.Flags().StringVar(&envVar, "env", "", "config-dir env var for a custom (non-preset) provider")
 	cmd.Flags().StringVar(&command, "command", "", "CLI to launch for a custom (non-preset) provider")
-	cmd.Flags().StringVar(&settings, "settings", "", "settings file the launcher passes the CLI: a path, or an endpoint keyword (glm) that generates a skeleton (claude only)")
+	cmd.Flags().StringVar(&settings, "settings", "", "settings file the launcher passes the CLI: a path, or an endpoint keyword (glm, custom) that generates a skeleton (claude only)")
+	cmd.Flags().StringVar(&baseURL, "base-url", "", "with --settings custom: the Anthropic-compatible endpoint's base URL (https)")
+	cmd.Flags().StringVar(&model, "model", "", "with --settings custom: the endpoint's model id")
+	cmd.Flags().StringVar(&modelName, "model-name", "", "with --settings custom: the model's display name (default: the model id)")
 	return cmd
 }
 
@@ -123,7 +168,7 @@ type settingsRefusal struct {
 
 func (e settingsRefusal) Error() string {
 	return fmt.Sprintf("--settings %q is neither a file path nor a known endpoint keyword (known: %s). "+
-		"Give a settings file path instead; \"custom\" needs the interactive add screen (\"aiacc add\" with no arguments)",
+		"Give a settings file path instead; \"custom\" takes --base-url and --model (or pick it in \"aiacc add\" with no arguments)",
 		e.value, e.keywords)
 }
 
@@ -157,8 +202,8 @@ func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, erro
 		return provider.Endpoint{}, false, nil
 	}
 	if ep.BaseURL == "" {
-		return provider.Endpoint{}, false, fmt.Errorf("--settings %s needs a base URL only the interactive add screen can ask for — "+
-			"run \"aiacc add\" with no arguments and pick it there (\"glm\" works right on the command line)", value)
+		// Unreachable from the add paths, which fill custom through customPreset.
+		return provider.Endpoint{}, false, fmt.Errorf("--settings %s needs --base-url and --model", value)
 	}
 	return ep, true, nil
 }
@@ -169,8 +214,9 @@ func settingsEndpoint(providerName, value string) (provider.Endpoint, bool, erro
 // (glm) generates the settings skeleton into the account dir and yields the
 // generated path, exactly as if the user had written the file by hand and
 // passed its path. A keyword whose preset has no base URL (custom) is
-// refused: its base URL is the user's to type, and only the interactive
-// add screen can ask for it. A bare word that names no keyword is refused
+// refused here: the add paths fill it from --base-url/--model (or the
+// wizard's answers) through customPreset and provider.FillEndpoint and never
+// pass it in. A bare word that names no keyword is refused
 // with the valid ones listed — a typo must not silently register a bogus
 // settings path — while anything path-like keeps today's verbatim path
 // behavior. A file already at the target aborts the add with its path named;
@@ -188,6 +234,33 @@ func resolveSettings(providerName, dir, value string) (string, error) {
 	// skeleton lands in the real profile while the registered path keeps the
 	// as-typed form (stored paths re-expand at launch; see EnsureSkeleton).
 	return provider.EnsureSkeleton(dir, ep)
+}
+
+// customPreset reports whether a settings value names the endpoint keyword
+// whose base URL is the user's to give (custom), and returns its preset for
+// provider.FillEndpoint to fill from --base-url/--model/--model-name.
+func customPreset(providerName, settings string) (provider.Endpoint, bool) {
+	ep, keyword, err := provider.ClassifySettings(providerName, settings)
+	return ep, err == nil && keyword && ep.BaseURL == ""
+}
+
+// endpointFlagsRefusal refuses the endpoint flags given with a settings value
+// other than custom: they would otherwise be silently ignored.
+func endpointFlagsRefusal(settings string, given []string) error {
+	if len(given) == 0 {
+		return nil
+	}
+	got := "no --settings"
+	if settings != "" {
+		got = "--settings " + settings
+	}
+	return fmt.Errorf("only --settings custom takes %s (got %s)", strings.Join(given, ", "), got)
+}
+
+// printKeyHint names the generated custom skeleton the user pastes the API key
+// into. aiacc never asks for, reads or writes the key itself (ADR-0007).
+func printKeyHint(out io.Writer, realDir string, ep provider.Endpoint) {
+	fmt.Fprintf(out, "Paste your API key over %s in %s\n", provider.PlaceholderToken, filepath.Join(realDir, ep.Filename))
 }
 
 // settingsFlagRefusal refuses a settings value for a provider whose CLI has no
