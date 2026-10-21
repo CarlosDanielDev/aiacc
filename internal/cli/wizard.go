@@ -66,13 +66,15 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 	dir := pre.Dir
 	if dir == "" {
 		dir = strings.TrimSpace(ask(r, out, fmt.Sprintf(
-			"Config dir [default: ~/.<provider>-%s, i.e. ~/.claude-%s for claude]: ", name, name)))
+			"Config dir [default: %s for claude, ~/.<provider>-<name> for another provider]: ",
+			provider.DefaultDir("claude", name))))
 	} else {
 		fmt.Fprintf(out, "Config dir: %s (from --dir)\n", dir)
 	}
 	// The default depends on the provider, which is only known after this
-	// question: an empty answer takes ~/.claude-<name> for claude and
-	// ~/.<provider>-<name> for any other provider.
+	// question: an empty answer takes provider.DefaultDir — ~/.claude-<name>
+	// for claude, ~/.<provider>-<name> for any other provider, a name already
+	// prefixed with "<provider>-" not prefixed twice.
 	defaulted := dir == ""
 
 	providerName := strings.TrimSpace(ask(r, out, "Provider [claude]: "))
@@ -80,7 +82,7 @@ func runAddWizard(in io.Reader, out io.Writer, cfgPath string, prefill ...addPre
 		providerName = "claude"
 	}
 	if defaulted {
-		dir = filepath.Join(home, "."+providerName+"-"+name) // ~/.claude-<name> for claude
+		dir = filepath.Join(home, strings.TrimPrefix(provider.DefaultDir(providerName, name), "~/"))
 		// The default was only a pattern when it was asked; show the path it
 		// resolved to before the account is registered under it.
 		fmt.Fprintf(out, "Config dir: %s (default for %s)\n", dir, providerName)

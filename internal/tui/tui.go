@@ -265,13 +265,51 @@ func boxRow(segs []seg, w int) string {
 }
 func boxBlank(w int) string { return boxRow(nil, w) }
 
-// hintRow is the refusal line a form shows under its fields: red, cut to the
-// frame, or a blank row while there is no hint to show.
-func hintRow(hint string, w int) string {
+// hintRows is the refusal a form shows under its fields: red, word-wrapped
+// onto as many rows as it needs — never cut, so the remedy a refusal ends with
+// (--dir, "pick another dir") stays on screen — or one blank row while there
+// is no hint to show. The frame's own height clamp still applies.
+func hintRows(hint string, w int) []string {
 	if hint == "" {
-		return boxBlank(w)
+		return []string{boxBlank(w)}
 	}
-	return boxRow([]seg{pad(2), {"⚠ " + trunc(hint, w-4), inkRed}}, w)
+	var rows []string
+	for i, ln := range wrapWords(hint, max(1, w-4)) {
+		lead := "  " // continuation rows align under the text, not the ⚠
+		if i == 0 {
+			lead = "⚠ "
+		}
+		rows = append(rows, boxRow([]seg{pad(2), {lead + ln, inkRed}}, w))
+	}
+	return rows
+}
+
+// wrapWords breaks s into rows of at most n runes at spaces. A word wider than
+// a row is split across rows rather than cut, so no text is ever lost.
+func wrapWords(s string, n int) []string {
+	var out []string
+	line := ""
+	for _, word := range strings.Fields(s) {
+		for runeLen(word) > n {
+			if line != "" {
+				out, line = append(out, line), ""
+			}
+			r := []rune(word)
+			out, word = append(out, string(r[:n])), string(r[n:])
+		}
+		switch {
+		case line == "":
+			line = word
+		case runeLen(line)+1+runeLen(word) <= n:
+			line += " " + word
+		default:
+			out, line = append(out, line), word
+		}
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	return out
 }
 
 // Size is the terminal geometry a frame renders into. Zero values fall back to a
@@ -779,15 +817,15 @@ func nameByte(b byte) bool {
 }
 func printableByte(b byte) bool { return b >= 0x20 && b < 0x7f }
 
-func defaultDir(provider, name string) string {
-	p := provider
+func defaultDir(providerName, name string) string {
+	p := providerName
 	if p == "" {
 		p = "profile"
 	}
 	if name == "" {
 		return "~/." + p + "-<name>"
 	}
-	return "~/." + p + "-" + name
+	return provider.DefaultDir(p, name)
 }
 
 // RenderAdd returns the add-profile frame: the target provider, a live name
@@ -827,7 +865,9 @@ func RenderAdd(currentLogin, provider string, f AddForm, hint string, sz Size) s
 		lines = append(lines, input(2, "settings  ", f.Settings, "glm · custom — or a path"))
 	}
 
-	lines = append(lines, boxBlank(w), hintRow(hint, w), boxBottom(w))
+	lines = append(lines, boxBlank(w))
+	lines = append(lines, hintRows(hint, w)...)
+	lines = append(lines, boxBottom(w))
 
 	// The name becomes the launcher command, so spell that out.
 	tip := "type name"

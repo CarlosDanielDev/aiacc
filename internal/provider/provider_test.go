@@ -189,3 +189,22 @@ func TestBypassFlagNeedsPresetCommand(t *testing.T) {
 		t.Errorf("unpreset provider: BypassFlag = %q, want none", got)
 	}
 }
+
+// DefaultDir is the one rule every add and duplicate surface shares: a name
+// that already carries the provider's prefix is not prefixed twice.
+func TestDefaultDir(t *testing.T) {
+	for _, c := range []struct{ provider, name, want string }{
+		{"claude", "claude-glm2", "~/.claude-glm2"},
+		{"claude", "work", "~/.claude-work"},
+		{"codex", "codex-x", "~/.codex-x"},
+		{"codex", "work", "~/.codex-work"},
+		{"claude", "claude", "~/.claude-claude"},         // no dash: not the prefix
+		{"claude", "claudework", "~/.claude-claudework"}, // prefix needs its dash
+		{"claude", "codex-x", "~/.claude-codex-x"},       // another provider's prefix stays
+		{"claude", "claude-", "~/.claude-claude-"},       // nothing left after the prefix
+	} {
+		if got := DefaultDir(c.provider, c.name); got != c.want {
+			t.Errorf("DefaultDir(%q, %q) = %q, want %q", c.provider, c.name, got, c.want)
+		}
+	}
+}

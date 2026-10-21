@@ -33,8 +33,10 @@ func RenderDuplicate(provider, src string, f AddForm, hint string, sz Size) stri
 	lines = append(lines,
 		input(0, "name      ", f.Name, ""),
 		input(1, "dir       ", f.Dir, defaultDir(provider, f.Name)),
-		boxBlank(w), hintRow(hint, w), boxBottom(w),
+		boxBlank(w),
 	)
+	lines = append(lines, hintRows(hint, w)...)
+	lines = append(lines, boxBottom(w))
 	legend := legendLine([][2]string{{"", "settings copied, login not"}, {"⇥", "field"}, {"⏎", "duplicate"}, {"esc", "cancel"}})
 	return frame(lines, legend, sz, w)
 }
