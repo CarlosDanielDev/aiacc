@@ -29,8 +29,10 @@ type Preset struct {
 	SettingsFlag string
 
 	// BypassFlag is the CLI flag that turns off its permission prompts ("" =
-	// no known flag). aiacc never adds it to a launch: it only shows it, on an
-	// explicit user toggle, in the resume line a hand-off copies.
+	// no known flag). aiacc adds it to a launch only on an explicit opt-in for
+	// that one launch — resume's session-list toggle or --bypass — never by
+	// default and never persisted; hand-off's checkbox only shows it in the
+	// resume line it copies.
 	BypassFlag string
 
 	// Endpoints are the known remote API endpoints an account's settings file

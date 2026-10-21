@@ -1251,15 +1251,19 @@ func TestDriveListToggle(t *testing.T) {
 	}
 }
 
-// TestRenderListWithoutToggleUnchanged: a list without a toggle renders exactly
-// what RenderList always has — no toggle in its legend.
+// TestRenderListWithoutToggleUnchanged pins the plain list (what every
+// RunList caller shows) to the exact text it rendered before lists could carry
+// a toggle: the same title, and the legend with no bypass key.
 func TestRenderListWithoutToggleUnchanged(t *testing.T) {
-	sz := Size{Cols: 80, Rows: 24}
-	items := []ListItem{{Primary: "alpha", Secondary: "detail"}}
-	if got, want := renderList("pick", items, 0, "", false, sz), RenderList("pick", items, 0, sz); got != want {
-		t.Fatalf("renderList with no toggle differs from RenderList")
-	}
-	if strings.Contains(ansi.ReplaceAllString(RenderList("pick", items, 0, sz), ""), "bypass") {
-		t.Fatal("plain list mentions bypass")
+	got := ansi.ReplaceAllString(RenderList("pick", []ListItem{{Primary: "alpha", Secondary: "detail"}}, 0, Size{Cols: 80, Rows: 24}), "")
+	want := "\r\n" +
+		"         ┏━ PICK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\r\n" +
+		"         ┃                                                            ┃\r\n" +
+		"         ┃> alpha                    detail                           ┃\r\n" +
+		"         ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\r\n" +
+		"         \r\n" +
+		"           ↑↓ move   ⏎ select   q cancel   \r\n"
+	if got != want {
+		t.Fatalf("plain list changed:\n got %q\nwant %q", got, want)
 	}
 }

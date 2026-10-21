@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
+	"github.com/CarlosDanielDev/aiacc/internal/session"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
 )
 
@@ -565,5 +566,49 @@ func TestResumeBypassRefusals(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("refused --bypass must not exec, got %+v", *calls)
+	}
+}
+
+// TestResumeBypassShownOnLaunch: with bypass on, the Resuming line says so, on
+// the CLI and in the picker; without it, it does not.
+func TestResumeBypassShownOnLaunch(t *testing.T) {
+	f := seedResume(t, t.TempDir())
+	stubExec(t)
+	for _, on := range []bool{false, true} {
+		args := []string{"claude", "work", "--print"}
+		if on {
+			args = append(args, "--bypass")
+		}
+		_, errOut, err := runResume(t, args...)
+		if err != nil || strings.Contains(errOut, "(bypass on)") != on {
+			t.Fatalf("CLI bypass %v: stderr %q, err %v", on, errOut, err)
+		}
+	}
+	if got := resumingLine(session.Info{ID: resumeNewID}, session.Meta{}, f.cwd, true); !strings.HasSuffix(got, "in "+f.cwd+" (bypass on)") {
+		t.Fatalf("picker line with bypass = %q", got)
+	}
+	if got := resumingLine(session.Info{ID: resumeNewID}, session.Meta{}, f.cwd, false); strings.Contains(got, "bypass") {
+		t.Fatalf("picker line without bypass = %q", got)
+	}
+}
+
+// TestResumeTUIMissingCwdHintKeepsBypass: the "From a shell" hint for a session
+// whose directory is gone carries --bypass when the toggle was on, and only then.
+func TestResumeTUIMissingCwdHintKeepsBypass(t *testing.T) {
+	f := seedResume(t, filepath.Join(t.TempDir(), "deleted-project"))
+	calls := stubExec(t)
+	for _, on := range []bool{false, true} {
+		stubPickToggle(t, 0, on)
+		captured := captureHandoffMessage(t)
+		if err := runResumeTUI(f.cfgPath, "claude", "work"); err != nil {
+			t.Fatal(err)
+		}
+		hint := (*captured)[len(*captured)-1].Text
+		if !strings.HasPrefix(hint, "From a shell: aiacc resume claude work --session aaaa2222") || strings.Contains(hint, " --bypass") != on {
+			t.Fatalf("bypass %v: hint %q", on, hint)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("a missing cwd must not exec, got %+v", *calls)
 	}
 }

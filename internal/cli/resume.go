@@ -118,7 +118,7 @@ func resumeDirect(cmd *cobra.Command, cfgPath, providerName, account, sessionID,
 		return err
 	}
 
-	fmt.Fprintln(cmd.ErrOrStderr(), resumingLine(sess, meta, cwd))
+	fmt.Fprintln(cmd.ErrOrStderr(), resumingLine(sess, meta, cwd, bypass))
 	if printOnly {
 		fmt.Fprintln(cmd.OutOrStdout(), printedResume(dir, args, cwd, sess.ID))
 		return nil
@@ -198,8 +198,14 @@ func titleOf(m session.Meta) string {
 	return truncate(m.Title, 60)
 }
 
-func resumingLine(s session.Info, m session.Meta, cwd string) string {
-	return fmt.Sprintf("Resuming %s %q (%s) in %s", shortID(s.ID), titleOf(m), humanAge(s.Modified), cwd)
+// resumingLine announces the resume, ending in "(bypass on)" when the launch
+// carries the permission-bypass flag.
+func resumingLine(s session.Info, m session.Meta, cwd string, bypass bool) string {
+	line := fmt.Sprintf("Resuming %s %q (%s) in %s", shortID(s.ID), titleOf(m), humanAge(s.Modified), cwd)
+	if bypass {
+		line += " (bypass on)"
+	}
+	return line
 }
 
 // printedResume is what --print shows: the cd, the config-dir env var and the
@@ -286,13 +292,17 @@ func runResumeTUI(cfgPath, providerName, account string) error {
 	}
 	cwd, err := resumeCwd(meta.Cwd, "")
 	if err != nil {
+		hint := "From a shell: aiacc resume " + providerName + " " + account + " --session " + shortID(sessions[si].ID) + " --cwd <dir>"
+		if bypass {
+			hint += " --bypass"
+		}
 		return showMessage("resume · "+account, []tui.Line{
 			{Text: err.Error(), Color: tui.Grey},
 			{},
-			{Text: "From a shell: aiacc resume " + providerName + " " + account + " --session " + shortID(sessions[si].ID) + " --cwd <dir>", Color: tui.Blue},
+			{Text: hint, Color: tui.Blue},
 		})
 	}
-	fmt.Println(resumingLine(sessions[si], meta, cwd))
+	fmt.Println(resumingLine(sessions[si], meta, cwd, bypass))
 	args := provider.LaunchArgs(c, providerName, account)
 	if bypass {
 		args = append(args, bypassFlag)
