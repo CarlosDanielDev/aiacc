@@ -382,7 +382,7 @@ func add(t *testing.T, keys string) AddResult {
 
 func TestAddTypeNameEnter(t *testing.T) {
 	res := add(t, "claude-work\r")
-	if !res.OK || res.Name != "claude-work" || res.Dir != "~/.claude-claude-work" {
+	if !res.OK || res.Name != "claude-work" || res.Dir != "~/.claude-work" {
 		t.Fatalf("got %+v", res)
 	}
 }
@@ -593,6 +593,29 @@ func hintLine(frame string) string {
 	return ""
 }
 
+// hintText is the refusal as the hint rows show it: the ⚠ row and each
+// continuation row under it, up to the blank row or the box bottom, their
+// inner text joined by single spaces.
+func hintText(frame string) string {
+	var words []string
+	started := false
+	for _, l := range strings.Split(frame, "\n") {
+		_, inner, framed := strings.Cut(l, "┃")
+		inner, _, _ = strings.Cut(inner, "┃")
+		if !started {
+			if !framed || !strings.Contains(inner, "⚠") {
+				continue
+			}
+			started, inner = true, strings.Replace(inner, "⚠", "", 1)
+		}
+		if !framed || strings.TrimSpace(inner) == "" {
+			break
+		}
+		words = append(words, strings.Fields(inner)...)
+	}
+	return strings.Join(words, " ")
+}
+
 // typoRefusal is the refusal text the add screen would show for a typo.
 func typoRefusal(t *testing.T, typo string) string {
 	t.Helper()
@@ -627,20 +650,13 @@ func TestAddSettingsKeywordTypo(t *testing.T) {
 			if !strings.Contains(hint, "keywords: custom, glm") {
 				t.Errorf("hint row does not name the valid keywords up front: %q", hint)
 			}
-			// Whether the hint row must truncate is derived from the real refusal
-			// and the real cap, never hardcoded per row: the hint keeps at most
-			// innerWidth(80)-4 runes of the refusal.
-			hintCap := innerWidth(80) - 4
-			overflow := utf8.RuneCountInString(typoRefusal(t, typo)) > hintCap
-			truncated := strings.Contains(hint, "…")
-			if overflow != truncated {
-				t.Errorf("refusal overflows the %d-rune cap = %t, but hint truncated = %t: %q", hintCap, overflow, truncated, hint)
+			// The whole refusal is on screen, wrapped onto as many hint rows as
+			// it needs: never cut with "…", the typo always named.
+			if got, want := hintText(lastFrame(out.String())), strings.Join(strings.Fields(typoRefusal(t, typo)), " "); got != want {
+				t.Errorf("hint rows show %q, want the whole refusal %q", got, want)
 			}
-			if overflow && strings.Contains(hint, typo) {
-				t.Errorf("hint row shows the whole typo %q although the refusal overflows: %q", typo, hint)
-			}
-			if !overflow && !strings.Contains(hint, typo) {
-				t.Errorf("hint row does not name the typo %q: %q", typo, hint)
+			if strings.Contains(lastFrame(out.String()), "…") {
+				t.Errorf("refusal cut with …:\n%s", lastFrame(out.String()))
 			}
 			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 				t.Fatalf("a typo wrote %d file(s) into the dir", len(entries))
@@ -649,42 +665,25 @@ func TestAddSettingsKeywordTypo(t *testing.T) {
 	}
 }
 
-// The keyword list's width boundary, derived from innerWidth and trunc. The
-// list "keywords: custom, glm" (21 runes) is intact from 28 terminal columns
-// up: at 28 the hint cap is 22 runes and trunc keeps 21 plus "…" on overflow.
-// At 27 the cap is 21 and trunc keeps only 20, so the list truncates to
-// "keywords: custom, gl…". 32 columns is one point on the intact side; there
-// innerWidth reaches its 30-column floor (the hint row is 26 runes). Nothing
-// enforces a terminal minimum, so the 27-column case pins the accepted limit
-// and keeps the boundary from rotting.
+// At any width, down to innerWidth's floor and below it, the hint rows carry
+// the whole refusal: a word wider than a row is split across rows, never cut
+// with "…". Compared with spaces removed, since a split word gains a row break.
 func TestAddSettingsKeywordsAtNarrowWidth(t *testing.T) {
-	if innerWidth(32) != 30 || innerWidth(31) >= 30 {
-		t.Fatalf("innerWidth floor moved: innerWidth(31)=%d, innerWidth(32)=%d; update the narrow-width boundary",
-			innerWidth(31), innerWidth(32))
-	}
-	const list = "keywords: custom, glm"
-	for _, c := range []struct {
-		cols       int
-		wantIntact bool
-	}{
-		{32, true},
-		{28, true},
-		{27, false},
-	} {
+	squash := func(s string) string { return strings.Join(strings.Fields(s), "") }
+	for _, cols := range []int{32, 28, 27} {
 		for _, typo := range []string{"kimi", "kimi-coding-plan-v2-enterprise-tier-x"} {
-			t.Run(fmt.Sprintf("%dcols/%s", c.cols, typo), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%dcols/%s", cols, typo), func(t *testing.T) {
 				out := &bytes.Buffer{}
 				keys := "w\t\t" + typo + "\r\x1b"
-				if _, err := driveAdd("", "claude", true, fixedGeom(c.cols, 24), bytes.NewBufferString(keys), out); err != nil {
+				if _, err := driveAdd("", "claude", true, fixedGeom(cols, 24), bytes.NewBufferString(keys), out); err != nil {
 					t.Fatalf("driveAdd: %v", err)
 				}
-				hint := hintLine(lastFrame(out.String()))
-				intact := strings.Contains(hint, list)
-				if intact != c.wantIntact {
-					t.Errorf("at %d columns the list intact = %t, want %t: %q", c.cols, intact, c.wantIntact, hint)
+				frame := lastFrame(out.String())
+				if got, want := squash(hintText(frame)), squash(typoRefusal(t, typo)); got != want {
+					t.Errorf("at %d columns the hint rows show %q, want %q", cols, got, want)
 				}
-				if !c.wantIntact && !strings.Contains(hint, "keywords: custom, gl…") {
-					t.Errorf("at %d columns the truncated hint is not the expected prefix: %q", c.cols, hint)
+				if strings.Contains(frame, "…") {
+					t.Errorf("at %d columns the refusal is cut with …:\n%s", cols, frame)
 				}
 			})
 		}
@@ -1164,6 +1163,32 @@ func TestDuplicateRefusalShownThenEsc(t *testing.T) {
 	}
 	if ok, calls, _ := duplicate(t, "w2\x1b", nil); ok || len(calls) != 0 {
 		t.Fatalf("Esc: ok=%v calls=%v, want nothing submitted", ok, calls)
+	}
+}
+
+// The duplicate screen's dir placeholder is the shared default: a name that
+// already carries the provider prefix is not prefixed twice.
+func TestRenderDuplicateDefaultDir(t *testing.T) {
+	out := ansi.ReplaceAllString(RenderDuplicate("claude", "claude-glm", AddForm{Name: "claude-glm2"}, "", Size{Cols: 80, Rows: 24}), "")
+	if !strings.Contains(out, "~/.claude-glm2") || strings.Contains(out, "claude-claude") {
+		t.Fatalf("dir placeholder is not ~/.claude-glm2:\n%s", out)
+	}
+}
+
+// The real refusal for a leftover dir is wider than the hint row at 80
+// columns: it wraps onto a second row, so the --dir remedy stays visible.
+func TestDuplicateRefusalWrapsAt80(t *testing.T) {
+	const refusal = "~/.claude-claude-glm2 is not empty: pick another dir (--dir)"
+	if len(refusal) <= innerWidth(80)-4 {
+		t.Fatalf("refusal fits one row at 80 columns; the test no longer exercises wrapping")
+	}
+	_, _, out := duplicate(t, "taken\r\x1b", map[string]string{"taken": refusal})
+	frame := lastFrame(out)
+	if got := hintText(frame); got != refusal {
+		t.Fatalf("hint rows show %q, want %q:\n%s", got, refusal, frame)
+	}
+	if strings.Contains(frame, "…") {
+		t.Fatalf("refusal cut with …:\n%s", frame)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
+	"github.com/CarlosDanielDev/aiacc/internal/share"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -22,7 +23,8 @@ func newDuplicateCmd() *cobra.Command {
 		Short: "Register a new account shaped like src (quota, settings file) but with no login",
 		Long: "Register <new> under <provider> with <src>'s quota and a private copy of its " +
 			"settings file. The login, the sessions and the history are never copied: the new " +
-			"profile logs in on its first run. The dir defaults to ~/.<provider>-<new>.",
+			"profile logs in on its first run. The dir defaults to ~/.<provider>-<new>, " +
+			"without doubling a <provider>- prefix <new> already has (claude-glm2 → ~/.claude-glm2).",
 		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := configPath()
@@ -76,6 +78,8 @@ func (d duplicated) lines() []tui.Line {
 // never parsed — ADR-0007) in the new dir, which defaults to
 // ~/.<provider>-<name>. Nothing else is copied: the login, the transcripts and
 // every State entry belong to src, and the clone logs in on its first run.
+// An existing dir is taken only when it is empty or holds nothing but the
+// shared links linkProfile makes (what `aiacc remove` leaves behind).
 //
 // Every refusal is decided before the first write. A failure after this call
 // created the dir removes what it created (the copy, then the dir) and nothing
@@ -100,7 +104,7 @@ func duplicateAccount(cfgPath, providerName, src, name, dir string) (duplicated,
 		return duplicated{}, err
 	}
 	if dir == "" {
-		dir = "~/." + providerName + "-" + name
+		dir = provider.DefaultDir(providerName, name)
 	}
 	realDir, err := provider.ExpandHome(dir)
 	if err != nil {
@@ -116,7 +120,7 @@ func duplicateAccount(cfgPath, providerName, src, name, dir string) (duplicated,
 	ents, err := os.ReadDir(realDir)
 	existed := err == nil
 	switch {
-	case existed && len(ents) > 0:
+	case existed && !onlySharedLinks(providerName, realDir, ents):
 		return duplicated{}, fmt.Errorf("%s is not empty: pick another dir (--dir)", dir)
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return duplicated{}, fmt.Errorf("%s cannot be used as the duplicate's dir: %w", dir, err)
@@ -140,6 +144,10 @@ func duplicateAccount(cfgPath, providerName, src, name, dir string) (duplicated,
 			return duplicated{}, fmt.Errorf("%s's settings file %s cannot be read: %w", src, acct.Settings, err)
 		}
 		settings = filepath.Join(dir, filepath.Base(acct.Settings))
+		// A leftover dir holds shared links; the copy never writes through one.
+		if _, err := os.Lstat(filepath.Join(realDir, filepath.Base(acct.Settings))); err == nil {
+			return duplicated{}, fmt.Errorf("%s already has a %s: pick another dir (--dir)", dir, filepath.Base(acct.Settings))
+		}
 	}
 
 	// MkdirAll makes every missing parent too, so record the whole chain it
@@ -177,6 +185,26 @@ func duplicateAccount(cfgPath, providerName, src, name, dir string) (duplicated,
 		provider: providerName, src: src, name: name, dir: dir, settings: settings,
 		launcher: syncLauncher(cfgPath, providerName, name),
 	}, nil
+}
+
+// onlySharedLinks reports whether every entry of dir is a link linkProfile
+// makes: a shared name pointing at the provider's own base entry. That is what
+// an add followed by `aiacc remove` leaves behind on purpose, so nothing in it
+// is the user's and the duplicate may take the dir. Any other entry — a real
+// file or dir, a link pointing elsewhere — keeps the dir refused.
+func onlySharedLinks(providerName, dir string, ents []os.DirEntry) bool {
+	status := map[string]share.Status{}
+	if base, shared, ok := provider.Shared(providerName); ok {
+		for _, e := range share.Check(base, dir, shared).Entries {
+			status[e.Name] = e.Status
+		}
+	}
+	for _, e := range ents {
+		if status[e.Name()] != share.Already {
+			return false
+		}
+	}
+	return true
 }
 
 // missingDirs lists dir and each missing parent above it, leaf first, up to

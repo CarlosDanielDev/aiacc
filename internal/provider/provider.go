@@ -221,6 +221,19 @@ func ExpandHome(dir string) (string, error) {
 	return dir, nil
 }
 
+// DefaultDir is the config dir a new account gets when none is given:
+// ~/.<provider>-<name>, without doubling a "<provider>-" the name already
+// starts with — claude-glm2 → ~/.claude-glm2, work → ~/.claude-work. The add
+// screen, the duplicate screen, `aiacc duplicate` and the line wizard all
+// default through here. Only new accounts are affected: a registered
+// account's stored dir is never recomputed.
+func DefaultDir(provider, name string) string {
+	if rest, ok := strings.CutPrefix(name, provider+"-"); ok && rest != "" {
+		name = rest
+	}
+	return "~/." + provider + "-" + name
+}
+
 // Shared returns the provider's shared-asset source directory (expanded) and the
 // entry names to share from it. ok is false for a provider aiacc has no preset
 // for — a custom CLI whose asset layout aiacc cannot know, so nothing is shared.

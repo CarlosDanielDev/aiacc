@@ -74,7 +74,8 @@ func RenderEdit(account, file, hint string, f EditForm, sz Size) string {
 		boxBlank(w),
 	)
 
-	lines = append(lines, hintRow(hint, w), boxBottom(w))
+	lines = append(lines, hintRows(hint, w)...)
+	lines = append(lines, boxBottom(w))
 	legend := legendLine([][2]string{{"", "edit settings"}, {"⇥", "field"}, {"⏎", "save"}, {"esc", "cancel"}})
 	return frame(lines, legend, sz, w)
 }

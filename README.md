@@ -254,7 +254,7 @@ missing.
 | `aiacc setup` | One-step install of the launcher commands onto your `PATH` — they work immediately. |
 | `aiacc add [provider] [account] --dir <path>` | Register an account (framed screen with no args in a terminal). Creates the dir if missing. `--quota N` sets an optional manual plan size. For a non-preset provider, add `--env <ENV_VAR> --command <cli>`. `--settings <file>` gives the profile its own settings file — or `--settings glm` generates a skeleton for you, and `--settings custom --base-url <URL> --model <id> [--model-name <name>]` one for any Anthropic-compatible endpoint; an existing file is never overwritten (claude). |
 | `aiacc rename <provider> <old> <new>` | Rename an account **and** its launcher command, keeping its directory. _(picker: `r`)_ |
-| `aiacc duplicate <provider> <src> <new> [--dir <path>]` | Register a new account shaped like `src`: its quota and a private copy (mode `0600`) of its settings file. The login, sessions and history are never copied — the new profile logs in on its first run. Dir defaults to `~/.<provider>-<new>`. _(picker: `c`)_ |
+| `aiacc duplicate <provider> <src> <new> [--dir <path>]` | Register a new account shaped like `src`: its quota and a private copy (mode `0600`) of its settings file. The login, sessions and history are never copied — the new profile logs in on its first run. Dir defaults to `~/.<provider>-<new>`, without doubling a `<provider>-` the name already starts with (`claude-glm2` → `~/.claude-glm2`). _(picker: `c`)_ |
 | `aiacc remove <provider> <account>` | Unregister an account; leaves the directory in place. _(picker: `d`)_ |
 | `aiacc handoff [provider] [from] [to]` | Copy a session between accounts to resume it there — Claude profiles only for now, the transcript format is Claude's. No args → interactive picker; `--session <id>`, `--launch`. _(picker: `h`)_ |
 | `aiacc resume [provider] [account]` | Resume a session in the same account, in its original directory — nothing is copied. No args → interactive picker; `--session <id>`, `--cwd <dir>`, `--print`. Claude profiles only. _(picker: `u`)_ |
@@ -468,7 +468,9 @@ aiacc add glab work --dir ~/.glab-work --env GLAB_CONFIG_DIR --command glab
 ```
 
 In the picker, pressing `a` lets you choose the provider (presets + any you've
-already configured) and defaults the directory to `~/.<provider>-<name>`. A
+already configured) and defaults the directory to `~/.<provider>-<name>` — a
+name that already starts with `<provider>-` is not prefixed twice, so `claude-glm2`
+gets `~/.claude-glm2` and `work` gets `~/.claude-work`. A
 brand-new custom provider is added with the `--env`/`--command` form above.
 
 > Session hand-off is Claude-specific for now — it reads Claude Code's transcript
