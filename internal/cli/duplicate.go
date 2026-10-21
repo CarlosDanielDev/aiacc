@@ -188,19 +188,28 @@ func duplicateAccount(cfgPath, providerName, src, name, dir string) (duplicated,
 }
 
 // onlySharedLinks reports whether every entry of dir is a link linkProfile
-// makes: a shared name pointing at the provider's own base entry. That is what
-// an add followed by `aiacc remove` leaves behind on purpose, so nothing in it
-// is the user's and the duplicate may take the dir. Any other entry — a real
-// file or dir, a link pointing elsewhere — keeps the dir refused.
+// makes: a shared name whose target is exactly the absolute path share.Link
+// writes for it (filepath.Join(base, name)), and that share.Check confirms is
+// live. That is what an add followed by `aiacc remove` leaves behind on
+// purpose, so nothing in it is the user's and the duplicate may take the dir.
+// Any other entry — a real file or dir, a link pointing elsewhere, or one that
+// reaches the base entry only after resolution (via another symlink, a
+// relative or unclean target) — keeps the dir refused.
 func onlySharedLinks(providerName, dir string, ents []os.DirEntry) bool {
 	status := map[string]share.Status{}
-	if base, shared, ok := provider.Shared(providerName); ok {
+	base, shared, ok := provider.Shared(providerName)
+	if ok {
 		for _, e := range share.Check(base, dir, shared).Entries {
 			status[e.Name] = e.Status
 		}
 	}
 	for _, e := range ents {
 		if status[e.Name()] != share.Already {
+			return false
+		}
+		// share.Check matches after resolving symlinks; aiacc's own link is
+		// stricter: the literal target linkProfile wrote.
+		if target, err := os.Readlink(filepath.Join(dir, e.Name())); err != nil || target != filepath.Join(base, e.Name()) {
 			return false
 		}
 	}

@@ -59,6 +59,18 @@ func seedLeftoverLinks(t *testing.T, dir string) {
 	}
 }
 
+// relinkSkills replaces dir's skills link with one pointing at target.
+func relinkSkills(t *testing.T, dir, target string) {
+	t.Helper()
+	link := filepath.Join(dir, "skills")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A dir holding only aiacc's own shared links is taken over: the duplicate is
 // registered there, the settings copy lands beside the links, and every link
 // is left as it was.
@@ -87,7 +99,9 @@ func TestDuplicateAcceptsLeftoverLinks(t *testing.T) {
 }
 
 // Anything aiacc would not have put there still refuses the dir, with nothing
-// written anywhere: a real file, a real dir, a shared name linked elsewhere.
+// written anywhere: a real file, a real dir, a shared name linked elsewhere,
+// dangling, or to the base entry by any target other than the exact absolute
+// path linkProfile writes (via another symlink, relative, unclean).
 func TestDuplicateRefusesLeftoverWithOwnEntries(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -111,6 +125,36 @@ func TestDuplicateRefusesLeftoverWithOwnEntries(t *testing.T) {
 			if err := os.Symlink(t.TempDir(), link); err != nil {
 				t.Fatal(err)
 			}
+		}},
+		{"dangling shared name", func(t *testing.T, dir string) {
+			relinkSkills(t, dir, filepath.Join(filepath.Dir(dir), "gone"))
+		}},
+		{"matches only after resolving a symlink", func(t *testing.T, dir string) {
+			// A hand-made link into a dotfiles dir that is itself a link to
+			// the base entry: the same file, not the link linkProfile writes.
+			home := filepath.Dir(dir)
+			dotfiles := filepath.Join(home, "dotfiles-skills")
+			if err := os.Symlink(filepath.Join(home, ".claude", "skills"), dotfiles); err != nil {
+				t.Fatal(err)
+			}
+			relinkSkills(t, dir, dotfiles)
+		}},
+		{"relative target", func(t *testing.T, dir string) {
+			// ../.claude/skills names the base entry both from the link's own
+			// dir and from the process cwd (dir), but linkProfile only ever
+			// writes the absolute path.
+			relinkSkills(t, dir, filepath.Join("..", ".claude", "skills"))
+			oldWd, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chdir(dir); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chdir(oldWd) })
+		}},
+		{"unclean absolute target", func(t *testing.T, dir string) {
+			relinkSkills(t, dir, filepath.Join(filepath.Dir(dir), ".claude")+"/./skills/")
 		}},
 		{"unshared name linked into base", func(t *testing.T, dir string) {
 			base := filepath.Join(filepath.Dir(dir), ".claude")
