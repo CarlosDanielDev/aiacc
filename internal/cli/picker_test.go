@@ -168,7 +168,7 @@ func TestPickerDuplicateCancelWritesNothing(t *testing.T) {
 		captureHandoffMessage(t)
 		stubDuplicateScreen(t, answers...)
 		cfgBefore, _ := os.ReadFile(cfgPath)
-		diskBefore := treeOf(t, home)
+		diskBefore := contentTreeOf(t, home)
 
 		if err := runDuplicateTUI(cfgPath, tui.Row{Provider: "claude", Account: "work"}); err != nil {
 			t.Fatalf("runDuplicateTUI: %v", err)
@@ -176,7 +176,7 @@ func TestPickerDuplicateCancelWritesNothing(t *testing.T) {
 		if cfgAfter, _ := os.ReadFile(cfgPath); !bytes.Equal(cfgBefore, cfgAfter) {
 			t.Errorf("answers %v: config changed", answers)
 		}
-		if diskAfter := treeOf(t, home); !slices.Equal(diskBefore, diskAfter) {
+		if diskAfter := contentTreeOf(t, home); !slices.Equal(diskBefore, diskAfter) {
 			t.Errorf("answers %v: disk changed", answers)
 		}
 	}

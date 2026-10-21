@@ -34,7 +34,7 @@ func runPicker(filter string) error {
 		if strings.TrimSpace(ver) == "" {
 			ver = "dev"
 		}
-		res, err := tui.Run(rows, setupNeeded(), ver)
+		res, err := runLauncher(rows, setupNeeded(), ver)
 		if err != nil {
 			return err
 		}
@@ -89,6 +89,12 @@ func runPicker(filter string) error {
 				return err
 			}
 			continue
+		case tui.Resume:
+			row := rows[res.Index]
+			if err := runResumeTUI(path, row.Provider, row.Account); err != nil {
+				return err
+			}
+			continue // a launched resume never returns; a refusal returns to the list
 		case tui.Setup:
 			res, err := doSetup(path, false)
 			if err != nil {
@@ -109,6 +115,10 @@ func runPicker(filter string) error {
 		}
 	}
 }
+
+// runLauncher shows the launcher screen. A variable so tests can drive
+// runPicker's dispatch without a tty.
+var runLauncher = tui.Run
 
 // launchProfile replaces the aiacc process with the profile's CLI, its env var
 // pointed at the profile's config dir. On success it never returns (the terminal

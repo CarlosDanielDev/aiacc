@@ -115,10 +115,10 @@ func TestDuplicateNeverCopiesIdentity(t *testing.T) {
 	}
 }
 
-// treeOf lists every path under root with its type and, for a file, a hash of
+// contentTreeOf lists every path under root with its type and, for a file, a hash of
 // its bytes, so a refusal can be shown to have written nothing anywhere under
 // the hermetic HOME: no path added or removed, no file changed.
-func treeOf(t *testing.T, root string) []string {
+func contentTreeOf(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -140,20 +140,20 @@ func treeOf(t *testing.T, root string) []string {
 	return out
 }
 
-// treeOf sees a changed file, not just an added or removed path: a refusal
+// contentTreeOf sees a changed file, not just an added or removed path: a refusal
 // that rewrote a file in place must not pass for one that wrote nothing.
-func TestTreeOfSeesChangedFile(t *testing.T) {
+func TestContentTreeOfSeesChangedFile(t *testing.T) {
 	root := t.TempDir()
 	p := filepath.Join(root, "f")
 	if err := os.WriteFile(p, []byte("one"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	before := treeOf(t, root)
+	before := contentTreeOf(t, root)
 	if err := os.WriteFile(p, []byte("two"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Equal(before, treeOf(t, root)) {
-		t.Fatal("treeOf did not see the file's bytes change")
+	if slices.Equal(before, contentTreeOf(t, root)) {
+		t.Fatal("contentTreeOf did not see the file's bytes change")
 	}
 }
 
@@ -203,7 +203,7 @@ func TestDuplicateRefusals(t *testing.T) {
 				tc.setup(t, home, cfgPath)
 			}
 			cfgBefore, _ := os.ReadFile(cfgPath)
-			diskBefore := treeOf(t, home)
+			diskBefore := contentTreeOf(t, home)
 
 			_, err := runDuplicate(t, tc.args...)
 			if err == nil {
@@ -217,7 +217,7 @@ func TestDuplicateRefusals(t *testing.T) {
 			if cfgAfter, _ := os.ReadFile(cfgPath); !bytes.Equal(cfgBefore, cfgAfter) {
 				t.Errorf("config changed:\n%s\n---\n%s", cfgBefore, cfgAfter)
 			}
-			if diskAfter := treeOf(t, home); !slices.Equal(diskBefore, diskAfter) {
+			if diskAfter := contentTreeOf(t, home); !slices.Equal(diskBefore, diskAfter) {
 				t.Errorf("disk changed:\nbefore %v\nafter  %v", diskBefore, diskAfter)
 			}
 		})
@@ -286,7 +286,7 @@ func TestDuplicateFailureRemovesCreatedParents(t *testing.T) {
 		t.Fatal("duplicate succeeded with an unwritable config dir")
 	}
 	if _, err := os.Lstat(filepath.Join(home, "new")); !os.IsNotExist(err) {
-		t.Fatalf("created parents left behind under ~/new (err=%v): %v", err, treeOf(t, filepath.Join(home, "new")))
+		t.Fatalf("created parents left behind under ~/new (err=%v): %v", err, contentTreeOf(t, filepath.Join(home, "new")))
 	}
 	if _, err := os.Stat(home); err != nil {
 		t.Fatalf("the existing ancestor went too: %v", err)

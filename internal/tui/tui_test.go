@@ -108,6 +108,17 @@ func TestDriveHandoffKey(t *testing.T) {
 	}
 }
 
+// TestDriveResumeKey: `u` resumes a session of the selected row, and the
+// legend advertises it.
+func TestDriveResumeKey(t *testing.T) {
+	if res := drv(t, "ju", sample()); res.Kind != Resume || res.Index != 1 {
+		t.Fatalf("got %+v, want Resume 1", res)
+	}
+	if frame := renderFrame(sample(), 0, false, 0, Size{Cols: 120, Rows: 24}); !strings.Contains(frame, "resume") {
+		t.Fatalf("legend does not show u resume:\n%s", frame)
+	}
+}
+
 // TestLogoGlitchBurst: the static render (phase 0) is clean, and a glitch-phase
 // render differs and contains a glitch glyph — without changing the frame width.
 func TestLogoGlitchBurst(t *testing.T) {
