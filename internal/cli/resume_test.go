@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/CarlosDanielDev/aiacc/internal/config"
+	"github.com/CarlosDanielDev/aiacc/internal/session"
 	"github.com/CarlosDanielDev/aiacc/internal/tui"
 )
 
@@ -280,14 +281,22 @@ func TestShellWordQuotesUnsafe(t *testing.T) {
 // items it was shown.
 func stubPickList(t *testing.T, pick int) *[]tui.ListItem {
 	t.Helper()
-	shown := &[]tui.ListItem{}
+	shown, _ := stubPickToggle(t, pick, false)
+	return shown
+}
+
+// stubPickToggle is stubPickList that also answers the list's toggle with on,
+// and records the toggle label each list was offered ("" = none).
+func stubPickToggle(t *testing.T, pick int, on bool) (*[]tui.ListItem, *[]string) {
+	t.Helper()
+	shown, toggles := &[]tui.ListItem{}, &[]string{}
 	old := pickList
-	pickList = func(title string, items []tui.ListItem) (int, error) {
-		*shown = items
-		return pick, nil
+	pickList = func(title string, items []tui.ListItem, toggle string) (int, bool, error) {
+		*shown, *toggles = items, append(*toggles, toggle)
+		return pick, on && toggle != "", nil
 	}
 	t.Cleanup(func() { pickList = old })
-	return shown
+	return shown, toggles
 }
 
 // TestResumeTUILaunchesChosenSession: picker `u` lists the account's sessions,
@@ -450,5 +459,156 @@ func TestFindSessionKeepsListingErrors(t *testing.T) {
 	_, err = findSession(f.dir, sessions, "zzzz")
 	if err == nil || !strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "matches no session") {
 		t.Fatalf("want the listing error unchanged, got %v", err)
+	}
+}
+
+// TestResumeTUIBypassToggle: the session list offers the bypass toggle; ⏎ with
+// it on launches with the bypass flag after the launch args, with it off (the
+// default) without. The account list offers no toggle.
+func TestResumeTUIBypassToggle(t *testing.T) {
+	t.Setenv("PATH", "")
+	f := seedResume(t, t.TempDir())
+	for _, on := range []bool{false, true} {
+		calls := stubExec(t)
+		_, toggles := stubPickToggle(t, 0, on)
+		if err := resumePickAccount(f.cfgPath); err != nil {
+			t.Fatalf("bypass %v: %v", on, err)
+		}
+		if !slices.Equal(*toggles, []string{"", "bypass"}) {
+			t.Fatalf("bypass %v: toggles offered = %q, want none on the account list and bypass on the session list", on, *toggles)
+		}
+		want := []string{"--settings", f.settings}
+		if on {
+			want = append(want, "--dangerously-skip-permissions")
+		}
+		if len(*calls) != 1 || !slices.Equal((*calls)[0].args, want) || (*calls)[0].id != resumeNewID {
+			t.Fatalf("bypass %v: exec calls = %+v, want args %q", on, *calls, want)
+		}
+	}
+}
+
+// TestResumeTUINoToggleWithoutBypassFlag: a claude-launching provider with no
+// preset bypass flag is not offered the toggle.
+func TestResumeTUINoToggleWithoutBypassFlag(t *testing.T) {
+	t.Setenv("PATH", "")
+	f := seedResume(t, t.TempDir())
+	addMineProvider(t, f)
+	calls := stubExec(t)
+	_, toggles := stubPickToggle(t, 0, true)
+	if err := runResumeTUI(f.cfgPath, "mine", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(*toggles, []string{""}) {
+		t.Fatalf("toggles offered = %q, want none", *toggles)
+	}
+	if len(*calls) != 1 || slices.Contains((*calls)[0].args, "--dangerously-skip-permissions") {
+		t.Fatalf("exec calls = %+v", *calls)
+	}
+}
+
+// addMineProvider adds provider "mine": runs claude with CLAUDE_CONFIG_DIR, but
+// is no preset, so it has no bypass flag. Its account "work" shares f.dir.
+func addMineProvider(t *testing.T, f resumeFixture) {
+	t.Helper()
+	cfg, err := config.Load(f.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Providers["mine"] = config.Provider{EnvVar: "CLAUDE_CONFIG_DIR", Command: "claude", Accounts: map[string]config.Account{
+		"work": {Dir: f.dir},
+	}}
+	if err := config.Save(f.cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestResumePrintBypass: --print --bypass prints the bypass flag before
+// --resume <id>; without --bypass it is absent.
+func TestResumePrintBypass(t *testing.T) {
+	f := seedResume(t, t.TempDir())
+	calls := stubExec(t)
+	out, _, err := runResume(t, "claude", "work", "--print", "--bypass")
+	if err != nil {
+		t.Fatalf("resume --print --bypass: %v", err)
+	}
+	want := "cd " + f.cwd + " && CLAUDE_CONFIG_DIR=" + f.dir +
+		" claude --settings " + f.settings + " --dangerously-skip-permissions --resume " + resumeNewID + "\n"
+	if out != want {
+		t.Fatalf("printed\n%q\nwant\n%q", out, want)
+	}
+	out, _, err = runResume(t, "claude", "work", "--print")
+	if err != nil || strings.Contains(out, "--dangerously-skip-permissions") {
+		t.Fatalf("without --bypass: %q, %v", out, err)
+	}
+	if _, _, err := runResume(t, "claude", "work", "--bypass"); err != nil {
+		t.Fatalf("resume --bypass: %v", err)
+	}
+	if len(*calls) != 1 || !slices.Equal((*calls)[0].args, []string{"--settings", f.settings, "--dangerously-skip-permissions"}) {
+		t.Fatalf("exec calls = %+v", *calls)
+	}
+}
+
+// TestResumeBypassRefusals: --bypass on a provider with no bypass flag is
+// refused naming it, and without <provider> <account> it is refused as the
+// other direct-only flags are; neither launches anything.
+func TestResumeBypassRefusals(t *testing.T) {
+	f := seedResume(t, t.TempDir())
+	addMineProvider(t, f)
+	calls := stubExec(t)
+	for _, args := range [][]string{{"mine", "work", "--bypass"}, {"mine", "work", "--bypass", "--print"}} {
+		out, _, err := runResume(t, args...)
+		if err == nil || !strings.Contains(err.Error(), `"mine"`) || !strings.Contains(err.Error(), "bypass") || strings.Contains(out, "--resume") {
+			t.Fatalf("%q: want a refusal naming mine, got out %q err %v", args, out, err)
+		}
+	}
+	if _, _, err := runResume(t, "--bypass"); err == nil || !strings.Contains(err.Error(), "--bypass needs <provider> <account>") {
+		t.Fatalf("bare --bypass: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("refused --bypass must not exec, got %+v", *calls)
+	}
+}
+
+// TestResumeBypassShownOnLaunch: with bypass on, the Resuming line says so, on
+// the CLI and in the picker; without it, it does not.
+func TestResumeBypassShownOnLaunch(t *testing.T) {
+	f := seedResume(t, t.TempDir())
+	stubExec(t)
+	for _, on := range []bool{false, true} {
+		args := []string{"claude", "work", "--print"}
+		if on {
+			args = append(args, "--bypass")
+		}
+		_, errOut, err := runResume(t, args...)
+		if err != nil || strings.Contains(errOut, "(bypass on)") != on {
+			t.Fatalf("CLI bypass %v: stderr %q, err %v", on, errOut, err)
+		}
+	}
+	if got := resumingLine(session.Info{ID: resumeNewID}, session.Meta{}, f.cwd, true); !strings.HasSuffix(got, "in "+f.cwd+" (bypass on)") {
+		t.Fatalf("picker line with bypass = %q", got)
+	}
+	if got := resumingLine(session.Info{ID: resumeNewID}, session.Meta{}, f.cwd, false); strings.Contains(got, "bypass") {
+		t.Fatalf("picker line without bypass = %q", got)
+	}
+}
+
+// TestResumeTUIMissingCwdHintKeepsBypass: the "From a shell" hint for a session
+// whose directory is gone carries --bypass when the toggle was on, and only then.
+func TestResumeTUIMissingCwdHintKeepsBypass(t *testing.T) {
+	f := seedResume(t, filepath.Join(t.TempDir(), "deleted-project"))
+	calls := stubExec(t)
+	for _, on := range []bool{false, true} {
+		stubPickToggle(t, 0, on)
+		captured := captureHandoffMessage(t)
+		if err := runResumeTUI(f.cfgPath, "claude", "work"); err != nil {
+			t.Fatal(err)
+		}
+		hint := (*captured)[len(*captured)-1].Text
+		if !strings.HasPrefix(hint, "From a shell: aiacc resume claude work --session aaaa2222") || strings.Contains(hint, " --bypass") != on {
+			t.Fatalf("bypass %v: hint %q", on, hint)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("a missing cwd must not exec, got %+v", *calls)
 	}
 }

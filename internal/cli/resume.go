@@ -22,13 +22,13 @@ import (
 // variable so tests can record the launch instead of exec'ing.
 var execResume = launchResume
 
-// pickList shows the session list. A variable so tests can choose a row
-// without a tty.
-var pickList = tui.RunList
+// pickList shows the account and session lists, the latter with the bypass
+// toggle. A variable so tests can choose a row without a tty.
+var pickList = tui.RunListToggle
 
 func newResumeCmd() *cobra.Command {
 	var sessionID, cwd string
-	var printOnly bool
+	var printOnly, bypass bool
 	cmd := &cobra.Command{
 		Use:   "resume [provider] [account]",
 		Short: "Resume a session in the same account, in its original directory",
@@ -45,10 +45,10 @@ func newResumeCmd() *cobra.Command {
 				return err
 			}
 			if len(args) == 2 {
-				return resumeDirect(cmd, path, args[0], args[1], sessionID, cwd, printOnly)
+				return resumeDirect(cmd, path, args[0], args[1], sessionID, cwd, printOnly, bypass)
 			}
 			// The picker would drop these flags, and drop --print by launching.
-			for _, f := range []string{"print", "session", "cwd"} {
+			for _, f := range []string{"print", "session", "cwd", "bypass"} {
 				if cmd.Flags().Changed(f) {
 					return fmt.Errorf("--%s needs <provider> <account>: aiacc resume <provider> <account> --%s …", f, f)
 				}
@@ -56,18 +56,20 @@ func newResumeCmd() *cobra.Command {
 			if len(args) == 0 && isTerminal(os.Stdin) {
 				return resumePickAccount(path)
 			}
-			return fmt.Errorf("usage: aiacc resume <provider> <account> [--session <id>] [--cwd <dir>] [--print]")
+			return fmt.Errorf("usage: aiacc resume <provider> <account> [--session <id>] [--cwd <dir>] [--print] [--bypass]")
 		},
 	}
 	cmd.Flags().StringVar(&sessionID, "session", "", "session id, or a unique prefix of it as the picker shows (default: the most recent)")
 	cmd.Flags().StringVar(&cwd, "cwd", "", "resume from this directory instead of the session's recorded one (it must exist)")
 	cmd.Flags().BoolVar(&printOnly, "print", false, "print the command instead of running it")
+	cmd.Flags().BoolVar(&bypass, "bypass", false, "resume with the provider's permission-bypass flag, so the agent runs tools without asking")
 	return cmd
 }
 
 // resumeDirect resumes one session (the most recent, or --session) of the
-// account in place, or prints the command with --print. It writes nothing.
-func resumeDirect(cmd *cobra.Command, cfgPath, providerName, account, sessionID, cwdFlag string, printOnly bool) error {
+// account in place, or prints the command with --print. With bypass it adds
+// the provider's bypass flag after the launch args. It writes nothing.
+func resumeDirect(cmd *cobra.Command, cfgPath, providerName, account, sessionID, cwdFlag string, printOnly, bypass bool) error {
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -81,6 +83,14 @@ func resumeDirect(cmd *cobra.Command, cfgPath, providerName, account, sessionID,
 	}
 	if !launchesClaude(c, providerName) {
 		return fmt.Errorf("resume is claude-only — it resumes Claude Code transcripts, and %q is not a claude profile (command 'claude', env 'CLAUDE_CONFIG_DIR')", providerName)
+	}
+	args := provider.LaunchArgs(c, providerName, account)
+	if bypass {
+		flag := provider.BypassFlag(c, providerName)
+		if flag == "" {
+			return fmt.Errorf("--bypass: provider %q has no known permission-bypass flag", providerName)
+		}
+		args = append(args, flag)
 	}
 	dir, err := provider.AccountDir(c, providerName, account)
 	if err != nil {
@@ -108,8 +118,7 @@ func resumeDirect(cmd *cobra.Command, cfgPath, providerName, account, sessionID,
 		return err
 	}
 
-	args := provider.LaunchArgs(c, providerName, account)
-	fmt.Fprintln(cmd.ErrOrStderr(), resumingLine(sess, meta, cwd))
+	fmt.Fprintln(cmd.ErrOrStderr(), resumingLine(sess, meta, cwd, bypass))
 	if printOnly {
 		fmt.Fprintln(cmd.OutOrStdout(), printedResume(dir, args, cwd, sess.ID))
 		return nil
@@ -189,8 +198,14 @@ func titleOf(m session.Meta) string {
 	return truncate(m.Title, 60)
 }
 
-func resumingLine(s session.Info, m session.Meta, cwd string) string {
-	return fmt.Sprintf("Resuming %s %q (%s) in %s", shortID(s.ID), titleOf(m), humanAge(s.Modified), cwd)
+// resumingLine announces the resume, ending in "(bypass on)" when the launch
+// carries the permission-bypass flag.
+func resumingLine(s session.Info, m session.Meta, cwd string, bypass bool) string {
+	line := fmt.Sprintf("Resuming %s %q (%s) in %s", shortID(s.ID), titleOf(m), humanAge(s.Modified), cwd)
+	if bypass {
+		line += " (bypass on)"
+	}
+	return line
 }
 
 // printedResume is what --print shows: the cd, the config-dir env var and the
@@ -230,7 +245,7 @@ func resumePickAccount(cfgPath string) error {
 	for i, a := range accts {
 		items[i] = tui.ListItem{Primary: a.account}
 	}
-	i, err := pickList("resume — which account?", items)
+	i, _, err := pickList("resume — which account?", items, "")
 	if err != nil || i < 0 {
 		return err
 	}
@@ -259,7 +274,14 @@ func runResumeTUI(cfgPath, providerName, account string) error {
 	if len(sessions) == 0 {
 		return showMessage("resume · "+account, []tui.Line{{Text: "No sessions found in " + dir + ".", Color: tui.Grey}})
 	}
-	si, err := pickList("resume — which session? ("+account+")", items)
+	// The bypass toggle is offered only where the provider has a flag for it,
+	// and starts off on every open: aiacc never adds the flag on its own.
+	bypassFlag := provider.BypassFlag(c, providerName)
+	toggle := ""
+	if bypassFlag != "" {
+		toggle = "bypass"
+	}
+	si, bypass, err := pickList("resume — which session? ("+account+")", items, toggle)
 	if err != nil || si < 0 {
 		return err
 	}
@@ -270,14 +292,22 @@ func runResumeTUI(cfgPath, providerName, account string) error {
 	}
 	cwd, err := resumeCwd(meta.Cwd, "")
 	if err != nil {
+		hint := "From a shell: aiacc resume " + providerName + " " + account + " --session " + shortID(sessions[si].ID) + " --cwd <dir>"
+		if bypass {
+			hint += " --bypass"
+		}
 		return showMessage("resume · "+account, []tui.Line{
 			{Text: err.Error(), Color: tui.Grey},
 			{},
-			{Text: "From a shell: aiacc resume " + providerName + " " + account + " --session " + shortID(sessions[si].ID) + " --cwd <dir>", Color: tui.Blue},
+			{Text: hint, Color: tui.Blue},
 		})
 	}
-	fmt.Println(resumingLine(sessions[si], meta, cwd))
-	return execResume(dir, provider.LaunchArgs(c, providerName, account), cwd, sessions[si].ID)
+	fmt.Println(resumingLine(sessions[si], meta, cwd, bypass))
+	args := provider.LaunchArgs(c, providerName, account)
+	if bypass {
+		args = append(args, bypassFlag)
+	}
+	return execResume(dir, args, cwd, sessions[si].ID)
 }
 
 // sessionChoices is the session list the hand-off and resume pickers show:
