@@ -14,8 +14,11 @@ a key.
 ## Decision
 
 - The picker's `e` action (edit) reads the account's settings file and rewrites
-  only `env.ANTHROPIC_AUTH_TOKEN`, `env.ANTHROPIC_BASE_URL` and
-  `env.ANTHROPIC_MODEL`. Every other key is kept as parsed.
+  its `env` block from the screen: every string-valued env key is listed and
+  editable (a key dropped from the screen is removed), a value that is not a
+  JSON string is kept as parsed, and every key outside `env` is kept as parsed.
+  The token key itself is masked: its value is never read, shown or returned,
+  and an empty token field keeps the key already in the file.
 - It runs only on that explicit action. Generation, add, rename, launch, doctor
   and handoff still never open the file.
 - The token is never displayed, logged, prefilled or put in an error: the token

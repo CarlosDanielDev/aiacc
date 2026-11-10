@@ -54,9 +54,26 @@ func fileEnv(t *testing.T, path string) map[string]string {
 	return doc.Env
 }
 
-// glmForm is the prefill the picker passes for a settings-backed account.
+// readForm is the prefill the picker passes: provider.ReadSettingsEnv's view of
+// the file at path.
+func readForm(t *testing.T, path string) EditForm {
+	t.Helper()
+	env, err := provider.ReadSettingsEnv(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return EditForm{SettingsEnv: env}
+}
+
+// glmForm is the prefill for a settings-backed account with base URL and model.
 func glmForm(hasToken bool) EditForm {
-	return EditForm{SettingsEnv: provider.SettingsEnv{BaseURL: "https://glm.example/api", Model: "glm-4.6", HasToken: hasToken}}
+	return EditForm{SettingsEnv: provider.SettingsEnv{
+		Vals: []provider.EnvVal{
+			{Key: "ANTHROPIC_BASE_URL", Value: "https://glm.example/api"},
+			{Key: "ANTHROPIC_MODEL", Value: "glm-4.6"},
+		},
+		HasToken: hasToken,
+	}}
 }
 
 func TestDriveEditKeyOpensEditForSelectedRow(t *testing.T) {
@@ -91,7 +108,11 @@ func TestEditEmptyTokenKeepsExistingKey(t *testing.T) {
 	path := editFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"`+sentinelToken+`","ANTHROPIC_BASE_URL":"https://old"}}`)
 	// Tab to base URL, clear it ("https://old" is 11 bytes), type the new one.
 	keys := "\t" + strings.Repeat("\x7f", len("https://old")) + "https://new\r"
-	saved, screen := runEdit(t, path, EditForm{SettingsEnv: provider.SettingsEnv{BaseURL: "https://old", HasToken: true}}, keys)
+	form := EditForm{SettingsEnv: provider.SettingsEnv{
+		Vals:     []provider.EnvVal{{Key: "ANTHROPIC_BASE_URL", Value: "https://old"}},
+		HasToken: true,
+	}}
+	saved, screen := runEdit(t, path, form, keys)
 	if !saved {
 		t.Fatal("save not reported")
 	}
@@ -175,12 +196,174 @@ func TestEditArrowsMoveFieldsAndNeverCancel(t *testing.T) {
 	}
 }
 
+// TestEditListsEveryEnvKeyAndMasksToken: the frame names every env key the file
+// holds — model slots included — with its value, the add-key row, and the drop
+// affordance; the token appears only as "keep current key", never as dots or a
+// value.
+func TestEditListsEveryEnvKeyAndMasksToken(t *testing.T) {
+	form := EditForm{SettingsEnv: provider.SettingsEnv{
+		Vals: []provider.EnvVal{
+			{Key: "ANTHROPIC_BASE_URL", Value: "https://ghost.example/api"},
+			{Key: "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", Value: "fast"},
+			{Key: "ANTHROPIC_DEFAULT_OPUS_MODEL", Value: "opus-x"},
+		},
+		HasToken: true,
+	}}
+	out := RenderEdit("glm", "ghost.json", "", form, Size{Cols: 80, Rows: 24})
+	for _, want := range []string{
+		"ANTHROPIC_BASE_URL", "https://ghost.example/api",
+		"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", "fast",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL", "opus-x",
+		"keep current key", "new key", "drop key",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("frame misses %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "•") {
+		t.Error("untouched token field shows dots: it would look prefilled")
+	}
+}
+
+// TestEditRoundTripsModelSlotFile: a file with only a base URL and model-slot
+// keys opens, takes an edit on a slot row, and saves exactly that edit — every
+// other key and value comes back as it was.
+func TestEditRoundTripsModelSlotFile(t *testing.T) {
+	body := `{"env":{"ANTHROPIC_BASE_URL":"https://ghost.example","ANTHROPIC_DEFAULT_OPUS_MODEL":"opus-x","ANTHROPIC_DEFAULT_SONNET_MODEL":"sonnet-x","ANTHROPIC_DEFAULT_HAIKU_MODEL":"haiku-x"}}`
+	path := editFixture(t, body)
+	form := readForm(t, path)
+	// Rows: token, BASE_URL, HAIKU, OPUS, SONNET (sorted), add. Three downs put
+	// the cursor on OPUS; "x" appends to its value; enter saves.
+	saved, screen := runEdit(t, path, form, "\x1b[B\x1b[B\x1b[Bx\r")
+	if !saved {
+		t.Fatal("save not reported")
+	}
+	env := fileEnv(t, path)
+	if env["ANTHROPIC_DEFAULT_OPUS_MODEL"] != "opus-xx" {
+		t.Fatalf("opus slot = %q, want opus-xx", env["ANTHROPIC_DEFAULT_OPUS_MODEL"])
+	}
+	if env["ANTHROPIC_BASE_URL"] != "https://ghost.example" ||
+		env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "haiku-x" ||
+		env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "sonnet-x" {
+		t.Fatalf("untouched keys changed: %v", env)
+	}
+	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
+		t.Fatal("a token was invented")
+	}
+	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"} {
+		if !strings.Contains(screen, key) {
+			t.Fatalf("screen never showed %q:\n%s", key, screen)
+		}
+	}
+}
+
+// TestEditAddsKeyAndEditsValue: typing a name on the new-key row and pressing
+// enter adds the key and focuses its empty value; typing there and saving
+// writes it. Nothing else in the file changes.
+func TestEditAddsKeyAndEditsValue(t *testing.T) {
+	path := editFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://x"}}`)
+	form := EditForm{SettingsEnv: provider.SettingsEnv{
+		Vals: []provider.EnvVal{{Key: "ANTHROPIC_BASE_URL", Value: "https://x"}},
+	}}
+	// Rows: token, base, new key. Two tabs reach the new-key row.
+	keys := "\t\tANTHROPIC_SMALL_FAST_MODEL\rclaude-haiku\r"
+	saved, screen := runEdit(t, path, form, keys)
+	if !saved {
+		t.Fatal("save not reported")
+	}
+	env := fileEnv(t, path)
+	if env["ANTHROPIC_SMALL_FAST_MODEL"] != "claude-haiku" {
+		t.Fatalf("added key = %q, want claude-haiku", env["ANTHROPIC_SMALL_FAST_MODEL"])
+	}
+	if env["ANTHROPIC_BASE_URL"] != "https://x" {
+		t.Fatalf("existing keys changed: %v", env)
+	}
+	if _, ok := env["ANTHROPIC_MODEL"]; ok {
+		t.Fatal("a model key was invented")
+	}
+	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
+		t.Fatal("a token was invented")
+	}
+	if !strings.Contains(screen, "ANTHROPIC_SMALL_FAST_MODEL") {
+		t.Fatalf("new key never shown:\n%s", screen)
+	}
+}
+
+// TestEditDropsKeyAndKeepsCursorOnAnEnvRow: ctrl-D on a key row removes it, and
+// the cursor lands on an env row afterwards — typing then edits a value, never
+// a stray new-key name.
+func TestEditDropsKeyAndKeepsCursorOnAnEnvRow(t *testing.T) {
+	path := editFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://x","ANTHROPIC_MODEL":"glm-4.6","ANTHROPIC_EXTRA":"gone"}}`)
+	form := readForm(t, path)
+	// Rows: token, BASE_URL, EXTRA, MODEL (sorted), new key. Three tabs reach
+	// MODEL, the last env row; ctrl-D drops it; the cursor must land on the new
+	// last env row (EXTRA), where "z" is appended; enter saves. Dropping the
+	// last row is the case that needs the clamp: without it the cursor would
+	// sit on the new-key row and "z" would become a stray key.
+	saved, _ := runEdit(t, path, form, "\t\t\t\x04z\r")
+	if !saved {
+		t.Fatal("save not reported")
+	}
+	env := fileEnv(t, path)
+	if _, ok := env["ANTHROPIC_MODEL"]; ok {
+		t.Fatalf("dropped key survived: %v", env)
+	}
+	if env["ANTHROPIC_EXTRA"] != "gonez" {
+		t.Fatalf("extra = %q, want gonez (cursor stayed on a value row)", env["ANTHROPIC_EXTRA"])
+	}
+	if env["ANTHROPIC_BASE_URL"] != "https://x" {
+		t.Fatalf("base URL changed: %v", env)
+	}
+	if got, ok := env["z"]; ok {
+		t.Fatalf("stray key %q was created by the drop", got)
+	}
+}
+
+// TestEditAddDuplicateNameJumpsToExistingRow: adding a name the file already
+// has does not create a second entry — the cursor jumps to the existing row.
+func TestEditAddDuplicateNameJumpsToExistingRow(t *testing.T) {
+	path := editFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://x","ANTHROPIC_FOO":"keep"}}`)
+	form := readForm(t, path)
+	// Rows: token, BASE_URL, FOO, new key. Three tabs reach the new-key row;
+	// typing the existing name and enter jumps to FOO's row; enter saves.
+	saved, _ := runEdit(t, path, form, "\t\t\tANTHROPIC_FOO\r\r")
+	if !saved {
+		t.Fatal("save not reported")
+	}
+	raw, _ := os.ReadFile(path)
+	if n := bytes.Count(raw, []byte(`"ANTHROPIC_FOO"`)); n != 1 {
+		t.Fatalf("duplicate FOO entry written (%d occurrences):\n%s", n, raw)
+	}
+	env := fileEnv(t, path)
+	if env["ANTHROPIC_FOO"] != "keep" || env["ANTHROPIC_BASE_URL"] != "https://x" {
+		t.Fatalf("values changed by the jump: %v", env)
+	}
+}
+
+// TestEditAddTokenNameGoesToTokenRow: naming the token key on the new-key row
+// lands on the masked token field — the value stays dots on screen and is
+// written to the file's token, never as a listed env row.
+func TestEditAddTokenNameGoesToTokenRow(t *testing.T) {
+	path := editFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://x"}}`)
+	secret := "plain-secret-value"
+	keys := "\t\t\tANTHROPIC_AUTH_TOKEN\r" + secret + "\r"
+	saved, screen := runEdit(t, path, glmForm(false), keys)
+	if !saved {
+		t.Fatal("save not reported")
+	}
+	env := fileEnv(t, path)
+	if env["ANTHROPIC_AUTH_TOKEN"] != secret {
+		t.Fatalf("token = %q, want the typed value", env["ANTHROPIC_AUTH_TOKEN"])
+	}
+	if strings.Contains(screen, secret) {
+		t.Fatal("typed token echoed on screen")
+	}
+}
+
 // TestEditPrefillsEndpointButNeverToken: the base URL and model are shown; the
 // token is not, and a file that has one says so instead of showing dots.
 func TestEditPrefillsEndpointButNeverToken(t *testing.T) {
-	out := RenderEdit("glm", "settings.json", "", EditForm{SettingsEnv: provider.SettingsEnv{
-		BaseURL: "https://glm.example/api", Model: "glm-4.6", HasToken: true,
-	}}, Size{Cols: 80, Rows: 24})
+	out := RenderEdit("glm", "settings.json", "", glmForm(true), Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"https://glm.example/api", "glm-4.6", "keep current key"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("frame misses %q:\n%s", want, out)
@@ -193,7 +376,8 @@ func TestEditPrefillsEndpointButNeverToken(t *testing.T) {
 
 // TestEditFrameNeverEchoesToken: even a token the screen holds renders as dots.
 func TestEditFrameNeverEchoesToken(t *testing.T) {
-	out := RenderEdit("glm", "settings.json", "", EditForm{Token: sentinelToken, SettingsEnv: provider.SettingsEnv{HasToken: true}}, Size{Cols: 80, Rows: 24})
+	form := EditForm{Token: sentinelToken, SettingsEnv: provider.SettingsEnv{HasToken: true}}
+	out := RenderEdit("glm", "settings.json", "", form, Size{Cols: 80, Rows: 24})
 	if strings.Contains(out, sentinelToken) {
 		t.Fatalf("token echoed in frame:\n%s", out)
 	}
@@ -203,14 +387,24 @@ func TestEditFrameNeverEchoesToken(t *testing.T) {
 }
 
 // TestEditFramesFitTerminal is TestFramesFitTerminal for the edit screen: at
-// every size, with long values and hints, the frame neither wraps nor scrolls.
+// every size, with long values, many env keys and hints, the frame neither
+// wraps nor scrolls.
 func TestEditFramesFitTerminal(t *testing.T) {
 	long := "https://" + strings.Repeat("very-long-host-", 8) + "example.com/api/v1"
+	keys := []provider.EnvVal{
+		{Key: "ANTHROPIC_BASE_URL", Value: long},
+		{Key: "ANTHROPIC_CUSTOM_MODEL_OPTION", Value: long},
+		{Key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", Value: "haiku-x"},
+		{Key: "ANTHROPIC_DEFAULT_OPUS_MODEL", Value: "opus-x"},
+		{Key: "ANTHROPIC_DEFAULT_SONNET_MODEL", Value: "sonnet-x"},
+		{Key: "ANTHROPIC_SMALL_FAST_MODEL", Value: "a-very-long-model-name-value-indeed"},
+	}
 	for _, sz := range []Size{{20, 10}, {24, 12}, {40, 14}, {60, 8}, {80, 24}, {200, 60}} {
 		frames := map[string]string{
-			"edit":      RenderEdit("claude-glm-account-with-a-long-name", "settings.json", "", EditForm{Token: strings.Repeat("x", 80), SettingsEnv: provider.SettingsEnv{HasToken: true, BaseURL: long, Model: long}}, sz),
+			"edit":      RenderEdit("claude-glm-account-with-a-long-name", "settings.json", "", EditForm{Token: strings.Repeat("x", 80), SettingsEnv: provider.SettingsEnv{Vals: keys, HasToken: true}}, sz),
 			"edit-hint": RenderEdit("glm", "settings.json", "settings.json is not valid JSON — nothing written", glmForm(true), sz),
-			"edit-tok":  RenderEdit("glm", "settings.json", "", EditForm{Field: 2, SettingsEnv: provider.SettingsEnv{BaseURL: long}}, sz),
+			"edit-tok":  RenderEdit("glm", "settings.json", "", EditForm{Field: 2, SettingsEnv: provider.SettingsEnv{Vals: keys}}, sz),
+			"edit-add":  RenderEdit("glm", "settings.json", "", EditForm{Field: len(keys) + 1, AddKey: "ANTHROPIC_NEW", SettingsEnv: provider.SettingsEnv{Vals: keys}}, sz),
 		}
 		for name, out := range frames {
 			if used := strings.Count(out, "\r\n"); used >= sz.Rows {
@@ -223,6 +417,26 @@ func TestEditFramesFitTerminal(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestEditWindowKeepsCursorVisible: with more env keys than fit, the frame
+// windows them and always shows the focused row.
+func TestEditWindowKeepsCursorVisible(t *testing.T) {
+	var vals []provider.EnvVal
+	for _, k := range []string{"A_MODEL", "B_MODEL", "C_MODEL", "D_MODEL", "E_MODEL", "F_MODEL"} {
+		vals = append(vals, provider.EnvVal{Key: "ANTHROPIC_" + k, Value: "x"})
+	}
+	focused := "ANTHROPIC_E_MODEL"
+	out := RenderEdit("glm", "settings.json", "", EditForm{
+		Field:       5,
+		SettingsEnv: provider.SettingsEnv{Vals: vals},
+	}, Size{Cols: 60, Rows: 18})
+	if !strings.Contains(out, focused) {
+		t.Fatalf("focused row scrolled out of view:\n%s", out)
+	}
+	if !strings.Contains(out, "above") && !strings.Contains(out, "below") {
+		t.Fatal("windowed list has no more-above/below readout")
 	}
 }
 

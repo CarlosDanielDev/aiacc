@@ -1,11 +1,13 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/CarlosDanielDev/aiacc/internal/fsutil"
@@ -13,16 +15,12 @@ import (
 
 // This file is the one place aiacc reads and rewrites an account's settings
 // file. It is the narrow exception ADR-0009 records to ADR-0007's "generate,
-// never read": only the explicit edit action calls it, it touches the three
-// endpoint keys and nothing else, and it never returns, prints or logs the
-// token.
+// never read": only the explicit edit action calls it, it touches the file's
+// env block and nothing else, and it never returns, prints or logs the token.
 
-// The env keys the edit screen owns. Every other key in the file is kept as is.
-const (
-	envAuthToken = "ANTHROPIC_AUTH_TOKEN"
-	envBaseURL   = "ANTHROPIC_BASE_URL"
-	envModel     = "ANTHROPIC_MODEL"
-)
+// EnvAuthToken is the one masked key: the edit screen never shows, returns or
+// clears its value. Every other env key is listed and editable as-is.
+const EnvAuthToken = "ANTHROPIC_AUTH_TOKEN"
 
 // Refusal reasons. Each says what is wrong with the file and never quotes its
 // contents, so a refusal is safe to show on screen.
@@ -44,69 +42,107 @@ func (e SettingsError) Error() string { return filepath.Base(e.Path) + " " + e.E
 
 func (e SettingsError) Unwrap() error { return e.Err }
 
-// SettingsEnv is what the edit screen may show of a settings file: the endpoint
-// fields, and whether a token is set. The token value is deliberately absent.
+// EnvVal is one env key and its string value, in the order the edit screen
+// lists it.
+type EnvVal struct {
+	Key   string
+	Value string
+}
+
+// SettingsEnv is what the edit screen may show of a settings file: every env
+// key except the token, each with its value, and whether a token is set. The
+// token value is deliberately absent.
 type SettingsEnv struct {
-	BaseURL  string
-	Model    string
+	Vals     []EnvVal
 	HasToken bool
 }
 
-// SettingsEdit is what a save writes. An empty field keeps the file's current
-// value, so an untouched token field never clears a key.
+// SettingsEdit is what a save writes: the env block exactly as the screen shows
+// it (a key left out of Vals is removed), plus a new token. An empty Token
+// keeps the file's current key, so an untouched token field never clears one.
 type SettingsEdit struct {
-	Token   string
-	BaseURL string
-	Model   string
+	Token string
+	Vals  []EnvVal
 }
 
-// ReadSettingsEnv reports the endpoint fields of the settings file at path.
+// ReadSettingsEnv reports every editable env key of the settings file at path.
 // It is the only read aiacc makes of that file, and it never returns the token.
+// Keys whose value is not a JSON string cannot be shown or edited, so they are
+// left out (and preserved verbatim by EditSettings).
 func ReadSettingsEnv(path string) (SettingsEnv, error) {
 	_, env, _, _, err := loadSettings(path)
 	if err != nil {
 		return SettingsEnv{}, err
 	}
 	var out SettingsEnv
-	out.BaseURL = envString(env, envBaseURL)
-	out.Model = envString(env, envModel)
-	out.HasToken = envString(env, envAuthToken) != ""
+	for k := range env {
+		if k == EnvAuthToken {
+			s, ok := envString(env, k)
+			out.HasToken = ok && s != ""
+			continue
+		}
+		if s, ok := envString(env, k); ok {
+			out.Vals = append(out.Vals, EnvVal{Key: k, Value: s})
+		}
+	}
+	sort.Slice(out.Vals, func(i, j int) bool { return out.Vals[i].Key < out.Vals[j].Key })
 	return out, nil
 }
 
-// EditSettings rewrites the endpoint keys of the settings file at path. It is
-// refused, with nothing written, unless the file exists, is a regular JSON
-// object, and has an env that is an object (or none). The write goes through a
-// temp file in the same directory and a rename, so a crash leaves the old file
-// whole. The mode becomes 0600 or the file's stricter existing mode, never
-// wider. A symlink is followed, so the link itself survives the edit.
+// EditSettings rewrites the env block of the settings file at path from e: the
+// keys in e.Vals are written as they are there, a key the file holds but the
+// edit leaves out is removed, and a value that is not a JSON string — which no
+// edit can have shown — is kept byte-for-byte. An empty Token keeps the file's
+// current key. It is refused, with nothing written, unless the file exists, is
+// a regular JSON object, and has an env that is an object (or none). The write
+// goes through a temp file in the same directory and a rename, so a crash
+// leaves the old file whole. The mode becomes 0600 or the file's stricter
+// existing mode, never wider. A symlink is followed, so the link itself
+// survives the edit.
 func EditSettings(path string, e SettingsEdit) error {
 	doc, env, real, mode, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
-	for _, kv := range []struct{ key, val string }{
-		{envAuthToken, e.Token}, {envBaseURL, e.BaseURL}, {envModel, e.Model},
-	} {
-		if kv.val == "" { // an empty field keeps the file's value
-			continue
+	// The new env block starts from the values no edit can have represented,
+	// then carries the edit itself.
+	next := map[string]json.RawMessage{}
+	for k, raw := range env {
+		if _, ok := envString(env, k); !ok {
+			next[k] = raw
 		}
-		raw, err := json.Marshal(kv.val)
+	}
+	for _, kv := range e.Vals {
+		raw, err := json.Marshal(kv.Value)
 		if err != nil {
 			return err
 		}
-		env[kv.key] = raw
+		next[kv.Key] = raw
 	}
-	envRaw, err := json.Marshal(env)
+	if e.Token != "" {
+		raw, err := json.Marshal(e.Token)
+		if err != nil {
+			return err
+		}
+		next[EnvAuthToken] = raw
+	} else if raw, ok := env[EnvAuthToken]; ok {
+		next[EnvAuthToken] = raw // the masked key is kept exactly as the file has it
+	}
+	envRaw, err := json.Marshal(next)
 	if err != nil {
 		return err
 	}
 	doc["env"] = envRaw
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
+	// The encoder writes <, > and & as themselves, so a value that holds them
+	// survives the save as the same bytes.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(doc); err != nil {
 		return err
 	}
-	return writeSettings(real, mode, append(out, '\n'))
+	return writeSettings(real, mode, buf.Bytes())
 }
 
 // loadSettings reads and validates the settings file at path. It returns the
@@ -147,15 +183,16 @@ func loadSettings(path string) (doc, env map[string]json.RawMessage, real string
 	return doc, env, real, mode, nil
 }
 
-// envString is the string value of key in env, or "" when absent or not a string.
-func envString(env map[string]json.RawMessage, key string) string {
-	var s string
-	if raw, ok := env[key]; ok {
+// envString is the string value of key in env. ok is false when the key is
+// absent or its value is not a JSON string.
+func envString(env map[string]json.RawMessage, key string) (s string, ok bool) {
+	if raw, has := env[key]; has {
 		if json.Unmarshal(raw, &s) != nil {
-			return ""
+			return "", false
 		}
+		return s, true
 	}
-	return s
+	return "", false
 }
 
 // writes tracks the temp files of writes in flight. A signal that ends the

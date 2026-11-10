@@ -1311,6 +1311,7 @@ const (
 	keyTab
 	keyBackspace
 	keyText
+	keyDrop
 )
 
 // geom is the terminal's live geometry. A terminal can be resized at any moment,
@@ -1865,9 +1866,10 @@ type fieldKey struct {
 // readFieldKey decodes one keypress for the text screens: printable bytes come
 // back as keyText, arrows as keyUp/keyDown (so they can walk the fields),
 // backspace as keyBackspace, enter as keyEnter, tab as keyTab, Esc as keyQuit,
-// and Ctrl-C as keyCopy. Anything else — left/right, Home, a modified arrow's
-// parameters — is keyNone, which the screens ignore: no character is ever
-// injected from a sequence, and no sequence cancels the screen.
+// Ctrl-C as keyCopy, and Ctrl-D as keyDrop (the edit screen's drop-a-key
+// chord). Anything else — left/right, Home, a modified arrow's parameters — is
+// keyNone, which the screens ignore: no character is ever injected from a
+// sequence, and no sequence cancels the screen.
 func readFieldKey(r *bufio.Reader, in io.Reader) (fieldKey, error) {
 	b, err := r.ReadByte()
 	if err != nil {
@@ -1879,6 +1881,8 @@ func readFieldKey(r *bufio.Reader, in io.Reader) (fieldKey, error) {
 		return fieldKey{k: k}, err
 	case 3: // Ctrl-C, delivered as a byte under -isig
 		return fieldKey{k: keyCopy}, nil
+	case 4: // Ctrl-D, delivered as a byte under -isig
+		return fieldKey{k: keyDrop}, nil
 	case '\t':
 		return fieldKey{k: keyTab}, nil
 	case '\r', '\n':
