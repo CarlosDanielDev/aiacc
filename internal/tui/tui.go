@@ -379,6 +379,20 @@ func trunc(s string, n int) string {
 	return string([]rune(s)[:max(0, n-1)]) + "…"
 }
 
+// marquee shows width runes of s through a window that advances one column per
+// phase, so a focused row longer than its column can be read in full
+// (issue #140). A string that fits is returned unchanged. Deterministic in
+// phase, like the logo animation — no wall clock, so renders stay testable.
+func marquee(s string, width, phase int) string {
+	r := []rune(s)
+	if len(r) <= width {
+		return s
+	}
+	span := len(r) - width + 1 // offsets the window can take, head to tail
+	off := phase % span
+	return string(r[off : off+width])
+}
+
 // frame centres the built lines in the terminal, adds a clear+home, and appends
 // a key legend below the box. Shared by the launcher, add, and remove screens.
 // frame repaints in place: cursor home, each line cleared to its end, then
@@ -1050,13 +1064,14 @@ type ListItem struct {
 
 // RenderList returns a framed single-column selection list. Pure, for tests.
 func RenderList(title string, items []ListItem, cursor int, sz Size) string {
-	return renderList(title, items, cursor, "", false, sz)
+	return renderList(title, items, cursor, "", false, 0, sz)
 }
 
 // renderList is RenderList with an optional toggle: a non-empty label adds
 // "b <label>: off|on" to the legend and, while on, " · <label> on" to the
-// title. An empty label renders the plain list.
-func renderList(title string, items []ListItem, cursor int, toggle string, on bool, sz Size) string {
+// title. An empty label renders the plain list. phase drives the focused
+// row's marquee (see marquee); unfocused rows ignore it.
+func renderList(title string, items []ListItem, cursor int, toggle string, on bool, phase int, sz Size) string {
 	w := innerWidth(sz.cols())
 	primCol := min(max(w/2, 8), 24)
 	keys := [][2]string{{"↑↓", "move"}, {"⏎", "select"}, {"q", "cancel"}}
@@ -1087,9 +1102,13 @@ func renderList(title string, items []ListItem, cursor int, toggle string, on bo
 		if focused {
 			ink = inkWhite
 		}
-		row := []seg{cur, {trunc(it.Primary, primCol), ink}}
+		prim := trunc(it.Primary, primCol)
+		if focused && runeLen(it.Primary) > primCol {
+			prim = marquee(it.Primary, primCol, phase) // scroll instead of cut
+		}
+		row := []seg{cur, {prim, ink}}
 		if it.Secondary != "" {
-			row = append(row, pad(primCol-runeLen(trunc(it.Primary, primCol))+1), seg{it.Secondary, inkDim})
+			row = append(row, pad(primCol-runeLen(prim)+1), seg{it.Secondary, inkDim})
 		}
 		lines = append(lines, boxRow(row, w))
 	}
@@ -1109,16 +1128,61 @@ func driveList(title string, items []ListItem, g *geom, in io.Reader, out io.Wri
 
 // driveListToggle is driveList with an optional toggle (see renderList) that
 // space or b flips; it starts off and is reported with the choice, never on a
-// cancel. An empty label means no toggle, and space and b do nothing.
+// cancel. An empty label means no toggle, and space and b do nothing. Like the
+// launcher's animateKeys it repaints on a ticker so the focused row's marquee
+// runs between keypresses, and reads keys in a goroutine joined before return.
 func driveListToggle(title string, items []ListItem, toggle string, g *geom, in io.Reader, out io.Writer) (int, bool, error) {
 	cursor, chosen, on := 0, -1, false
 	if len(items) == 0 {
 		cursor = -1
 	}
-	err := screenLoop(g, in, out,
-		func(r *bufio.Reader) (key, error) { return readKey(r, in) },
-		func(sz Size) string { return renderList(title, items, cursor, toggle, on, sz) },
-		func(k key) bool {
+	keys := make(chan key)
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	var readErr error
+	go func() {
+		defer close(finished)
+		r := bufio.NewReader(in)
+		for {
+			k, err := readKey(r, in)
+			if err != nil {
+				if err != io.EOF {
+					readErr = err
+				}
+				return
+			}
+			select {
+			case keys <- k:
+			case <-done:
+				return
+			}
+		}
+	}()
+	// The reader must not outlive this screen (issue #136): the next screen's
+	// loop shares the same input queue, and a reader still blocked in readKey
+	// would win the race for the first keypress typed after the transition. An
+	// expired read deadline unblocks a pending read without consuming it; the
+	// join waits for the exit; clearing the deadline leaves the stream usable
+	// by whatever reads it next. Readers without a deadline (test buffers and
+	// pipes in tests) end at EOF instead.
+	defer func() {
+		if dl, ok := in.(interface{ SetReadDeadline(time.Time) error }); ok {
+			dl.SetReadDeadline(time.Now())
+		}
+		close(done)
+		<-finished
+		if dl, ok := in.(interface{ SetReadDeadline(time.Time) error }); ok {
+			dl.SetReadDeadline(time.Time{})
+		}
+	}()
+
+	phase := 0
+	ticker := time.NewTicker(90 * time.Millisecond) // the launcher's tempo
+	defer ticker.Stop()
+	for {
+		fmt.Fprint(out, repaint(g)+renderList(title, items, cursor, toggle, on, phase, g.get()))
+		select {
+		case k := <-keys:
 			switch k {
 			case keyToggle:
 				on = toggle != "" && !on
@@ -1133,14 +1197,17 @@ func driveListToggle(title string, items []ListItem, toggle string, g *geom, in 
 			case keyEnter:
 				if cursor >= 0 {
 					chosen = cursor
-					return true
+					return chosen, on && chosen >= 0, nil
 				}
 			case keyQuit, keyCopy:
-				return true
+				return chosen, on && chosen >= 0, nil
 			}
-			return false
-		})
-	return chosen, on && chosen >= 0, err
+		case <-finished: // end of input ends the loop quietly, like screenLoop
+			return chosen, on && chosen >= 0, readErr
+		case <-ticker.C:
+			phase++
+		}
+	}
 }
 
 // RunList shows a selection list on /dev/tty and returns the chosen index or -1.
