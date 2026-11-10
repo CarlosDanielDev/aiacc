@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
@@ -408,6 +411,24 @@ func TestAddEscCancels(t *testing.T) {
 	}
 }
 
+// TestAddArrowsMoveFieldsAndNeverCancel: arrows are escape sequences, not
+// cancels — up/down walk the fields, and every other CSI byte is ignored
+// wholesale, so nothing ever lands in a field by accident.
+func TestAddArrowsMoveFieldsAndNeverCancel(t *testing.T) {
+	// Down then up: "x" lands back in the name.
+	if res := add(t, "\x1b[B\x1b[Ax\r"); !res.OK || res.Name != "x" {
+		t.Fatalf("down/up: got %+v, want name x", res)
+	}
+	// Down: "x" lands in the dir (a name is needed first — enter refuses without one).
+	if res := add(t, "n\x1b[Bx\r"); !res.OK || res.Name != "n" || res.Dir != "x" {
+		t.Fatalf("down: got %+v, want name n and dir x", res)
+	}
+	// Left/right/Home inject nothing: the dir field ends up exactly "x".
+	if res := add(t, "n\x1b[B\x1b[C\x1b[D\x1b[Hx\r"); !res.OK || res.Dir != "x" {
+		t.Fatalf("left/right: got %+v, want dir exactly x", res)
+	}
+}
+
 func TestAddBackspace(t *testing.T) {
 	if res := add(t, "work\x7f\r"); !res.OK || res.Name != "wor" {
 		t.Fatalf("got %+v, want name=wor", res)
@@ -744,6 +765,15 @@ func TestRenameEscCancels(t *testing.T) {
 	}
 }
 
+// TestRenameArrowsNeverCancelOrInject: the rename screen has one field, so
+// arrows have nothing to walk — but they must not cancel the screen or drop
+// characters into the name either.
+func TestRenameArrowsNeverCancelOrInject(t *testing.T) {
+	if got := rename(t, "work", "\x1b[A\x1b[B\x1b[C\x1b[D\x1b[H2\r", nil); got != "work2" {
+		t.Fatalf("got %q, want work2", got)
+	}
+}
+
 // TestRenameBlocksCollision: enter is refused while the new name is already
 // taken; after changing to a free name it succeeds.
 func TestRenameBlocksCollision(t *testing.T) {
@@ -941,9 +971,212 @@ func TestCopyTextFallsBackToBody(t *testing.T) {
 // TestCtrlCIsItsOwnKey: Ctrl-C arrives as a byte under -isig. It is decoded
 // separately so a screen with something to copy can take it.
 func TestCtrlCIsItsOwnKey(t *testing.T) {
-	k, err := readKey(bufio.NewReader(bytes.NewBufferString("\x03")))
+	src := bytes.NewBufferString("\x03")
+	k, err := readKey(bufio.NewReader(src), src)
 	if err != nil || k != keyCopy {
 		t.Fatalf("readKey(Ctrl-C) = %v, %v; want keyCopy", k, err)
+	}
+}
+
+// TestReadKeyEscThenKeyIsNotSwallowed: Esc cancels even when another key
+// follows it immediately, and that key stays in the buffer for the next read —
+// the old byte reader ate both and produced nothing.
+func TestReadKeyEscThenKeyIsNotSwallowed(t *testing.T) {
+	src := bytes.NewBufferString("\x1ba")
+	r := bufio.NewReader(src)
+	if k, err := readKey(r, src); err != nil || k != keyQuit {
+		t.Fatalf("readKey after Esc = %v, %v; want keyQuit", k, err)
+	}
+	if k, err := readKey(r, src); err != nil || k != keyAdd {
+		t.Fatalf("key after Esc = %v, %v; want keyAdd (not swallowed)", k, err)
+	}
+}
+
+// awaitSrc is an input that reaches the decoder the way the production tty
+// does: one byte through the buffer (its own read), everything else only
+// through the byteAwaiter seam, where nothing is ever in r's buffer. pushback
+// re-enters through Read, like timedTTY's.
+type awaitSrc struct {
+	queued []byte // served through Read, one byte per call
+	seam   []byte // served through awaitByte, one byte per call
+}
+
+func (a *awaitSrc) Read(p []byte) (int, error) {
+	if len(a.queued) > 0 {
+		p[0] = a.queued[0]
+		a.queued = a.queued[1:]
+		return 1, nil
+	}
+	return 0, nil // nothing there — the timeout shape, pre-bufio
+}
+
+func (a *awaitSrc) awaitByte(time.Duration) (byte, bool, error) {
+	if len(a.seam) > 0 {
+		b := a.seam[0]
+		a.seam = a.seam[1:]
+		return b, true, nil
+	}
+	return 0, false, nil // the window closed with nothing behind the Esc
+}
+
+func (a *awaitSrc) pushback(b byte) { a.queued = append([]byte{b}, a.queued...) }
+
+// TestReadKeyEscThenKeyViaAwaiterIsNotSwallowed: on the real tty a key pressed
+// right after Esc arrives in its own read, through the await seam — invisible
+// to r's buffer. Unreading the Esc there would swallow the key and re-queue a
+// phantom Esc, so Esc out of the remove prompt plus any key would close the
+// whole launcher. The key must come back on the next read instead.
+func TestReadKeyEscThenKeyViaAwaiterIsNotSwallowed(t *testing.T) {
+	src := &awaitSrc{queued: []byte{0x1b}, seam: []byte{'a'}}
+	r := bufio.NewReader(src)
+	if k, err := readKey(r, src); err != nil || k != keyQuit {
+		t.Fatalf("readKey after Esc = %v, %v; want keyQuit", k, err)
+	}
+	if k, err := readKey(r, src); err != nil || k != keyAdd {
+		t.Fatalf("key after Esc = %v, %v; want keyAdd (no swallow, no phantom Esc)", k, err)
+	}
+	if left := len(src.queued) + len(src.seam); left != 0 {
+		t.Fatalf("%d byte(s) left behind after both reads", left)
+	}
+}
+
+// TestReadFieldKeyEscThenKeyViaAwaiter: the text screens' decoder on the same
+// seam — Esc cancels, the follow key survives to the next read.
+func TestReadFieldKeyEscThenKeyViaAwaiter(t *testing.T) {
+	src := &awaitSrc{queued: []byte{0x1b}, seam: []byte{'x'}}
+	r := bufio.NewReader(src)
+	if got, err := readFieldKey(r, src); err != nil || got != (fieldKey{k: keyQuit}) {
+		t.Fatalf("readFieldKey after Esc = %+v, %v; want keyQuit", got, err)
+	}
+	if got, err := readFieldKey(r, src); err != nil || got != (fieldKey{k: keyText, b: 'x'}) {
+		t.Fatalf("key after Esc = %+v, %v; want keyText x (no swallow, no phantom Esc)", got, err)
+	}
+}
+
+// TestEscWindowFallsBackToPlainReadWhenSttyFails: on an input where timed
+// reads are unavailable (a pipe — stty fails there), the escape window falls
+// back to a plain read on the file, so a lone Esc at end of input still
+// cancels instead of turning the screen into an error.
+func TestEscWindowFallsBackToPlainReadWhenSttyFails(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	if _, err := pw.Write([]byte{0x1b}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	src := &timedTTY{File: pr}
+	r := bufio.NewReader(src)
+	if k, err := readKey(r, src); err != nil || k != keyQuit {
+		t.Fatalf("lone Esc at pipe EOF = %v, %v; want keyQuit via the plain-read fallback", k, err)
+	}
+	// And the input really was exhausted: the next read is EOF, not a phantom
+	// Esc or anything the fallback might have left behind.
+	if k, err := readKey(r, src); k != keyNone || err != io.EOF {
+		t.Fatalf("read past the cancel = %v, %v; want keyNone and EOF", k, err)
+	}
+}
+
+// TestEscWindowPropagatesRestoreFailure: a tty that delivered a byte inside
+// the window but will not go back to blocking reads ends the screen with an
+// error — a tty left in timed mode would degrade every later read. The exit
+// path re-applies the saved termios.
+func TestEscWindowPropagatesRestoreFailure(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	if _, err := pw.Write([]byte{'a'}); err != nil {
+		t.Fatal(err)
+	}
+	old := runStty
+	calls := 0
+	runStty = func(tty *os.File, args ...string) (string, error) {
+		calls++
+		if calls == 1 {
+			return "", nil // the window's timed read arms fine
+		}
+		return "", errors.New("stty: will not un-arm") // ...but the restore fails
+	}
+	t.Cleanup(func() { runStty = old })
+
+	src := &timedTTY{File: pr}
+	b, ok, err := src.awaitByte(escWindow)
+	if !ok || b != 'a' {
+		t.Fatalf("awaitByte = (%q, %v, %v); want the byte a with an error", b, ok, err)
+	}
+	if err == nil {
+		t.Fatal("a failed stty restore was swallowed")
+	}
+}
+
+// TestTimedTTYPushbackServesFirst: a pushback byte re-enters through Read
+// before anything the pipe still holds, so the byte order never flips.
+func TestTimedTTYPushbackServesFirst(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	if _, err := pw.Write([]byte{'y'}); err != nil {
+		t.Fatal(err)
+	}
+	src := &timedTTY{File: pr}
+	src.pushback('x')
+	var buf [1]byte
+	if _, err := src.Read(buf[:]); err != nil || buf[0] != 'x' {
+		t.Fatalf("first read = %q, %v; want the pushback x", buf, err)
+	}
+	if _, err := src.Read(buf[:]); err != nil || buf[0] != 'y' {
+		t.Fatalf("second read = %q, %v; want the pipe's y", buf, err)
+	}
+}
+
+// TestReadFieldKey: the text screens' decoder. Arrows decode to up/down (so
+// they can walk the fields); left/right, Home and a modified arrow's parameter
+// bytes are ignored without injecting anything; a lone Esc cancels; a key right
+// after Esc cancels and stays buffered; plain text rides through; backspace is
+// its own key.
+func TestReadFieldKey(t *testing.T) {
+	tests := []struct {
+		name string
+		keys string
+		want []fieldKey
+	}{
+		{"arrow up", "\x1b[A", []fieldKey{{k: keyUp}}},
+		{"arrow down", "\x1b[B", []fieldKey{{k: keyDown}}},
+		{"ss3 arrow", "\x1bOA", []fieldKey{{k: keyUp}}},
+		{"arrow left ignored", "\x1b[C", []fieldKey{{k: keyNone}}},
+		{"arrow right ignored", "\x1b[D", []fieldKey{{k: keyNone}}},
+		{"home ignored", "\x1b[H\x1b[F", []fieldKey{{k: keyNone}, {k: keyNone}}},
+		{"modified arrow with parameters", "\x1b[1;5A", []fieldKey{{k: keyUp}}},
+		{"tilde key ignored", "\x1b[2~", []fieldKey{{k: keyNone}}},
+		{"lone esc cancels", "\x1b", []fieldKey{{k: keyQuit}}},
+		{"esc then key", "\x1ba", []fieldKey{{k: keyQuit}, {k: keyText, b: 'a'}}},
+		{"esc ctrl-c", "\x1b\x03", []fieldKey{{k: keyQuit}, {k: keyCopy}}},
+		{"plain text", "ok", []fieldKey{{k: keyText, b: 'o'}, {k: keyText, b: 'k'}}},
+		{"backspace", "\x7f\x08", []fieldKey{{k: keyBackspace}, {k: keyBackspace}}},
+	}
+	for _, tt := range tests {
+		src := bytes.NewBufferString(tt.keys)
+		r := bufio.NewReader(src)
+		for i, want := range tt.want {
+			got, err := readFieldKey(r, src)
+			if err != nil {
+				t.Fatalf("%s: read %d: %v", tt.name, i, err)
+			}
+			if got != want {
+				t.Fatalf("%s: read %d = %+v, want %+v", tt.name, i, got, want)
+			}
+		}
 	}
 }
 
@@ -1148,6 +1381,24 @@ func TestDuplicateSubmitsNameAndDir(t *testing.T) {
 	ok, calls, _ = duplicate(t, "w2\t~/x\r", nil)
 	if !ok || len(calls) != 1 || calls[0] != [2]string{"w2", "~/x"} {
 		t.Fatalf("ok=%v calls=%v, want one submit of (w2, ~/x)", ok, calls)
+	}
+}
+
+// TestDuplicateArrowsMoveFieldsAndNeverCancel: the duplicate screen is a text
+// screen too — arrows walk its two fields, other CSI bytes are ignored, and no
+// sequence cancels it or injects a character.
+func TestDuplicateArrowsMoveFieldsAndNeverCancel(t *testing.T) {
+	ok, calls, _ := duplicate(t, "\x1b[B\x1b[Ax\r", nil)
+	if !ok || len(calls) != 1 || calls[0] != [2]string{"x", ""} {
+		t.Fatalf("ok=%v calls=%v, want one submit of (x, \"\")", ok, calls)
+	}
+	ok, calls, _ = duplicate(t, "\x1b[Bx\r", nil)
+	if !ok || len(calls) != 1 || calls[0] != [2]string{"", "x"} {
+		t.Fatalf("ok=%v calls=%v, want one submit of (\"\", x)", ok, calls)
+	}
+	ok, calls, _ = duplicate(t, "\x1b[C\x1b[D\x1b[Hx\r", nil)
+	if !ok || len(calls) != 1 || calls[0] != [2]string{"x", ""} {
+		t.Fatalf("ok=%v calls=%v, want left/right ignored, one submit of (x, \"\")", ok, calls)
 	}
 }
 

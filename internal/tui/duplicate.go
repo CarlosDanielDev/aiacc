@@ -48,27 +48,28 @@ func RenderDuplicate(provider, src string, f AddForm, hint string, sz Size) stri
 // calling submit. Returns true once submit has succeeded.
 func driveDuplicate(provider, src string, submit func(name, dir string) error, g *geom, in io.Reader, out io.Writer) (bool, error) {
 	f, hint, done := AddForm{}, "", false
-	err := screenLoop(g, in, out, (*bufio.Reader).ReadByte,
+	err := screenLoop(g, in, out,
+		func(r *bufio.Reader) (fieldKey, error) { return readFieldKey(r, in) },
 		func(sz Size) string { return RenderDuplicate(provider, src, f, hint, sz) },
-		func(b byte) bool {
+		func(fk fieldKey) bool {
 			focused := []*string{&f.Name, &f.Dir}[f.Field]
-			switch b {
-			case 0x1b, 3: // Esc / Ctrl-C
+			switch fk.k {
+			case keyQuit, keyCopy: // Esc / Ctrl-C
 				return true
-			case '\t':
+			case keyTab, keyDown, keyUp: // two fields: up and down both step
 				f.Field, hint = (f.Field+1)%2, ""
-			case '\r', '\n':
+			case keyEnter:
 				if err := submit(f.Name, f.Dir); err != nil {
 					hint = err.Error()
 					return false
 				}
 				done = true
 				return true
-			case 0x7f, 0x08:
+			case keyBackspace:
 				*focused, hint = trimLastByte(*focused), ""
-			default:
-				if (f.Field == 0 && nameByte(b)) || (f.Field == 1 && printableByte(b)) {
-					*focused += string(b)
+			case keyText:
+				if (f.Field == 0 && nameByte(fk.b)) || (f.Field == 1 && printableByte(fk.b)) {
+					*focused += string(fk.b)
 				}
 				hint = ""
 			}
@@ -81,6 +82,6 @@ func driveDuplicate(provider, src string, submit func(name, dir string) error, g
 // is called on Enter (see driveDuplicate). Returns true once a duplicate was made.
 func RunDuplicate(provider, src string, submit func(name, dir string) error) (bool, error) {
 	return onTTY(false, func(tty *os.File, g *geom) (bool, error) {
-		return driveDuplicate(provider, src, submit, g, tty, tty)
+		return driveDuplicate(provider, src, submit, g, &timedTTY{File: tty}, tty)
 	})
 }

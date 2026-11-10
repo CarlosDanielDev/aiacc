@@ -88,16 +88,19 @@ func driveEdit(path, account string, f EditForm, g *geom, in io.Reader, out io.W
 	file := filepath.Base(path)
 	hint := ""
 	saved := false
-	err := screenLoop(g, in, out, (*bufio.Reader).ReadByte,
+	err := screenLoop(g, in, out,
+		func(r *bufio.Reader) (fieldKey, error) { return readFieldKey(r, in) },
 		func(sz Size) string { return RenderEdit(account, file, hint, f, sz) },
-		func(b byte) bool {
+		func(fk fieldKey) bool {
 			focused := []*string{&f.Token, &f.BaseURL, &f.Model}[f.Field]
-			switch b {
-			case 0x1b, 3: // Esc / Ctrl-C
+			switch fk.k {
+			case keyQuit, keyCopy: // Esc / Ctrl-C
 				return true
-			case '\t':
+			case keyTab, keyDown:
 				f.Field, hint = (f.Field+1)%editFields, ""
-			case '\r', '\n':
+			case keyUp:
+				f.Field, hint = (f.Field+editFields-1)%editFields, ""
+			case keyEnter:
 				// An empty field keeps what the file has, so the save can't clear a key.
 				err := provider.EditSettings(path, provider.SettingsEdit{
 					Token:   f.Token,
@@ -110,12 +113,10 @@ func driveEdit(path, account string, f EditForm, g *geom, in io.Reader, out io.W
 				}
 				saved = true
 				return true
-			case 0x7f, 0x08: // Backspace / Delete
+			case keyBackspace:
 				*focused, hint = trimLastByte(*focused), ""
-			default:
-				if printableByte(b) {
-					*focused += string(b)
-				}
+			case keyText:
+				*focused += string(fk.b)
 				hint = ""
 			}
 			return false
@@ -127,7 +128,7 @@ func driveEdit(path, account string, f EditForm, g *geom, in io.Reader, out io.W
 // path. It reports whether the file was saved.
 func RunEdit(account, path string, f EditForm) (bool, error) {
 	return onTTY(false, func(tty *os.File, g *geom) (bool, error) {
-		return driveEdit(path, account, f, g, tty, tty)
+		return driveEdit(path, account, f, g, &timedTTY{File: tty}, tty)
 	})
 }
 

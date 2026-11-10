@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bufio"
 	"io"
 	"os"
 	"testing"
@@ -33,7 +34,11 @@ func startAnimate(t *testing.T, r *os.File) <-chan Result {
 func nextScreenKeys(t *testing.T, r *os.File) []key {
 	t.Helper()
 	var got []key
-	err := screenLoop(fixedGeom(80, 24), r, io.Discard, readKey,
+	// The next screen reads the way production does: through a timedTTY shared
+	// by the reader and the decoder (see Run and the Run* wrappers).
+	src := &timedTTY{File: r}
+	err := screenLoop(fixedGeom(80, 24), r, io.Discard,
+		func(rb *bufio.Reader) (key, error) { return readKey(rb, src) },
 		func(Size) string { return "" },
 		func(k key) bool { got = append(got, k); return false })
 	if err != nil {
