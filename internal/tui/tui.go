@@ -1455,12 +1455,19 @@ func Run(rows []Row, setupNeeded bool, version string) (Result, error) {
 // animate is the live picker loop: it reads keys in a goroutine and repaints on a
 // ticker so the logo shimmers. Shares the key-state machine with drive().
 func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File) (Result, error) {
+	return animateKeys(rows, setupNeeded, version, g, tty, tty)
+}
+
+// animateKeys is animate on split streams, so a test can drive the real loop
+// over a pipe instead of a tty.
+func animateKeys(rows []Row, setupNeeded bool, version string, g *geom, in *os.File, out io.Writer) (Result, error) {
 	st := pickerState{cursor: initialCursor(rows), confirm: -1, version: version}
 	keys := make(chan key)
 	done := make(chan struct{})
-	defer close(done)
+	finished := make(chan struct{})
 	go func() {
-		r := bufio.NewReader(tty)
+		defer close(finished)
+		r := bufio.NewReader(in)
 		for {
 			k, err := readKey(r)
 			if err != nil {
@@ -1476,11 +1483,23 @@ func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File
 
 	ticker := time.NewTicker(90 * time.Millisecond)
 	defer ticker.Stop()
+	// The reader must not outlive this screen: the next screen's loop shares
+	// the same input queue, and a reader still blocked in readKey would win
+	// the race for the first keypress typed after the transition. An expired
+	// read deadline unblocks a pending read without consuming it; the join
+	// waits for the exit; clearing the deadline leaves the stream usable by
+	// whatever reads it next.
+	defer func() {
+		in.SetReadDeadline(time.Now())
+		close(done)
+		<-finished
+		in.SetReadDeadline(time.Time{})
+	}()
 	phase := 0
 	for {
 		sz := g.get()
-		fmt.Fprint(tty, repaint(g))
-		fmt.Fprint(tty, st.frame(rows, setupNeeded, phase, sz))
+		fmt.Fprint(out, repaint(g))
+		fmt.Fprint(out, st.frame(rows, setupNeeded, phase, sz))
 		select {
 		case k := <-keys:
 			if res, done := st.handle(rows, k); done {
