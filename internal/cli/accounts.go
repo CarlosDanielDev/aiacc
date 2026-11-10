@@ -318,6 +318,26 @@ func saveAccount(path, providerName, account, dir string, quota int, envOverride
 	})
 }
 
+// updateRegistration rewrites one account's dir and settings path under the
+// config lock. The name is fixed here (that is renameAccount's job), so no
+// name-collision check runs. Used by the edit screen.
+func updateRegistration(path, providerName, account, dir, settings string) error {
+	return config.Update(path, func(c *config.Config) error {
+		p, ok := c.Providers[providerName]
+		if !ok {
+			return fmt.Errorf("unknown provider %q", providerName)
+		}
+		acct, ok := p.Accounts[account]
+		if !ok {
+			return fmt.Errorf("unknown account %q", account)
+		}
+		acct.Dir, acct.Settings = dir, settings
+		p.Accounts[account] = acct
+		c.Providers[providerName] = p
+		return nil
+	})
+}
+
 // accountOwners lists every provider that registers account, sorted. The
 // launcher is named by the bare account, so one name should have one owner.
 func accountOwners(c *config.Config, account string) []string {

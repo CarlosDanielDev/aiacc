@@ -88,7 +88,7 @@ func TestTextFormsCtrlCCancels(t *testing.T) {
 		t.Fatalf("rename: got (%q, %v), want empty", name, err)
 	}
 	path := editFixture(t, `{"env":{}}`)
-	if saved, err := driveEdit(path, "glm", glmForm(false), g, strings.NewReader("\x03\r"), io.Discard); err != nil || saved {
+	if saved, err := driveEdit(path, "glm", glmForm(false), func(dir, settings string) error { return nil }, g, strings.NewReader("\x03\r"), io.Discard); err != nil || saved {
 		t.Fatalf("edit: got (%v, %v), want not saved", saved, err)
 	}
 }
