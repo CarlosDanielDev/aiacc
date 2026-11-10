@@ -1468,14 +1468,21 @@ func Run(rows []Row, setupNeeded bool, version string) (Result, error) {
 // animate is the live picker loop: it reads keys in a goroutine and repaints on a
 // ticker so the logo shimmers. Shares the key-state machine with drive().
 func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File) (Result, error) {
+	return animateKeys(rows, setupNeeded, version, g, tty, tty)
+}
+
+// animateKeys is animate on split streams, so a test can drive the real loop
+// over a pipe instead of a tty.
+func animateKeys(rows []Row, setupNeeded bool, version string, g *geom, in *os.File, out io.Writer) (Result, error) {
 	st := pickerState{cursor: initialCursor(rows), confirm: -1, version: version}
 	keys := make(chan key)
 	done := make(chan struct{})
-	defer close(done)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		// One timedTTY shared by the reader and the decoder: the pushback byte
 		// must be visible to both sides of the read pipeline.
-		src := &timedTTY{File: tty}
+		src := &timedTTY{File: in}
 		r := bufio.NewReader(src)
 		for {
 			k, err := readKey(r, src)
@@ -1492,11 +1499,23 @@ func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File
 
 	ticker := time.NewTicker(90 * time.Millisecond)
 	defer ticker.Stop()
+	// The reader must not outlive this screen: the next screen's loop shares
+	// the same input queue, and a reader still blocked in readKey would win
+	// the race for the first keypress typed after the transition. An expired
+	// read deadline unblocks a pending read without consuming it; the join
+	// waits for the exit; clearing the deadline leaves the stream usable by
+	// whatever reads it next.
+	defer func() {
+		in.SetReadDeadline(time.Now())
+		close(done)
+		<-finished
+		in.SetReadDeadline(time.Time{})
+	}()
 	phase := 0
 	for {
 		sz := g.get()
-		fmt.Fprint(tty, repaint(g))
-		fmt.Fprint(tty, st.frame(rows, setupNeeded, phase, sz))
+		fmt.Fprint(out, repaint(g))
+		fmt.Fprint(out, st.frame(rows, setupNeeded, phase, sz))
 		select {
 		case k := <-keys:
 			if res, done := st.handle(rows, k); done {
@@ -1737,7 +1756,16 @@ func (t *timedTTY) pushback(b byte) { t.back, t.has = b, true }
 func (t *timedTTY) awaitByte(d time.Duration) (byte, bool, error) {
 	tenths := int((d + 99*time.Millisecond) / (100 * time.Millisecond))
 	if err := stty(t.File, "min", "0", "time", strconv.Itoa(tenths)); err != nil {
-		return 0, false, err
+		// Timed reads are unavailable here (not a tty, or a degraded one) —
+		// but the terminal mode is untouched, so a plain read is safe. On a
+		// pipe it ends at EOF and a lone Esc still cancels; on a real tty it
+		// blocks, the way every read did before the window existed.
+		var b [1]byte
+		n, rerr := t.File.Read(b[:])
+		if n > 0 {
+			return b[0], true, nil
+		}
+		return 0, false, rerr
 	}
 	var b [1]byte
 	n, err := t.File.Read(b[:])
@@ -1897,7 +1925,9 @@ func stty(tty *os.File, args ...string) error {
 	return err
 }
 
-func runStty(tty *os.File, args ...string) (string, error) {
+// runStty is behind a seam, so a test can arm the escape window while making
+// the restore fail.
+var runStty = func(tty *os.File, args ...string) (string, error) {
 	cmd := exec.Command("stty", args...)
 	cmd.Stdin = tty
 	out, err := cmd.Output()

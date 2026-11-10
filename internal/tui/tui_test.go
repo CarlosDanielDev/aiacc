@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1051,10 +1053,11 @@ func TestReadFieldKeyEscThenKeyViaAwaiter(t *testing.T) {
 	}
 }
 
-// TestEscWindowPropagatesSttyFailure: an escape window that cannot put the tty
-// back to blocking reads must end the screen with an error (the exit path
-// restores the saved termios), never leave timed reads behind silently.
-func TestEscWindowPropagatesSttyFailure(t *testing.T) {
+// TestEscWindowFallsBackToPlainReadWhenSttyFails: on an input where timed
+// reads are unavailable (a pipe — stty fails there), the escape window falls
+// back to a plain read on the file, so a lone Esc at end of input still
+// cancels instead of turning the screen into an error.
+func TestEscWindowFallsBackToPlainReadWhenSttyFails(t *testing.T) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -1064,10 +1067,53 @@ func TestEscWindowPropagatesSttyFailure(t *testing.T) {
 	if _, err := pw.Write([]byte{0x1b}); err != nil {
 		t.Fatal(err)
 	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	src := &timedTTY{File: pr}
 	r := bufio.NewReader(src)
-	if _, err := readKey(r, src); err == nil {
-		t.Fatal("readKey swallowed the esc-window stty failure on a non-tty input")
+	if k, err := readKey(r, src); err != nil || k != keyQuit {
+		t.Fatalf("lone Esc at pipe EOF = %v, %v; want keyQuit via the plain-read fallback", k, err)
+	}
+	// And the input really was exhausted: the next read is EOF, not a phantom
+	// Esc or anything the fallback might have left behind.
+	if k, err := readKey(r, src); k != keyNone || err != io.EOF {
+		t.Fatalf("read past the cancel = %v, %v; want keyNone and EOF", k, err)
+	}
+}
+
+// TestEscWindowPropagatesRestoreFailure: a tty that delivered a byte inside
+// the window but will not go back to blocking reads ends the screen with an
+// error — a tty left in timed mode would degrade every later read. The exit
+// path re-applies the saved termios.
+func TestEscWindowPropagatesRestoreFailure(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	if _, err := pw.Write([]byte{'a'}); err != nil {
+		t.Fatal(err)
+	}
+	old := runStty
+	calls := 0
+	runStty = func(tty *os.File, args ...string) (string, error) {
+		calls++
+		if calls == 1 {
+			return "", nil // the window's timed read arms fine
+		}
+		return "", errors.New("stty: will not un-arm") // ...but the restore fails
+	}
+	t.Cleanup(func() { runStty = old })
+
+	src := &timedTTY{File: pr}
+	b, ok, err := src.awaitByte(escWindow)
+	if !ok || b != 'a' {
+		t.Fatalf("awaitByte = (%q, %v, %v); want the byte a with an error", b, ok, err)
+	}
+	if err == nil {
+		t.Fatal("a failed stty restore was swallowed")
 	}
 }
 
