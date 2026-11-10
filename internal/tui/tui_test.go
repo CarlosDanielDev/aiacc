@@ -177,6 +177,79 @@ func TestRenderListShowsItems(t *testing.T) {
 	}
 }
 
+// marqueeLong overflows the primary column at any terminal the tests use
+// (the column is clamped to 24 runes) and varies, so consecutive marquee
+// windows are visibly different.
+func marqueeLong() string { return strings.Repeat("abcdefghij", 6) }
+
+// TestRenderListMarqueePhase: a focused row longer than its column scrolls
+// with the animation phase (issue #140), showing its tail after enough phases;
+// a short focused row, and an overflowing unfocused row, never move.
+func TestRenderListMarqueePhase(t *testing.T) {
+	items := []ListItem{{Primary: marqueeLong()}, {Primary: "short"}}
+	sz := Size{Cols: 80, Rows: 24}
+	p0 := renderList("pick", items, 0, "", false, 0, sz)
+	p1 := renderList("pick", items, 0, "", false, 1, sz)
+	p2 := renderList("pick", items, 0, "", false, 2, sz)
+	if p0 == p1 || p1 == p2 {
+		t.Fatal("focused overflowing row did not change across phases")
+	}
+	// The marquee reaches the tail: some phase shows the last runes of the row.
+	tail := marqueeLong()[54:]
+	sawTail := false
+	for phase := range 64 {
+		if strings.Contains(ansi.ReplaceAllString(renderList("pick", items, 0, "", false, phase, sz), ""), tail) {
+			sawTail = true
+			break
+		}
+	}
+	if !sawTail {
+		t.Fatal("marquee never showed the tail of an overflowing focused row")
+	}
+	// Unfocused rows stay truncated: no phase moves them.
+	if renderList("pick", items, 1, "", false, 0, sz) != renderList("pick", items, 1, "", false, 1, sz) {
+		t.Fatal("unfocused overflowing row moved with the phase")
+	}
+	// A row that fits its column is phase-stable.
+	short := []ListItem{{Primary: "short"}}
+	if renderList("pick", short, 0, "", false, 0, sz) != renderList("pick", short, 0, "", false, 1, sz) {
+		t.Fatal("short focused row moved with the phase")
+	}
+}
+
+// TestRenderListMarqueeStaysInFrame: a scrolling focused row obeys the frame
+// invariants at every phase — all framed lines share one visible width, never
+// wider than the terminal (issue #140, narrow terminals).
+func TestRenderListMarqueeStaysInFrame(t *testing.T) {
+	for _, cols := range []int{20, 24, 40} {
+		for _, phase := range []int{0, 1, 7} {
+			sz := Size{Cols: cols, Rows: 8}
+			out := renderList("pick", []ListItem{{Primary: marqueeLong(), Secondary: "x"}}, 0, "", false, phase, sz)
+			wid := -1
+			framed := 0
+			for _, ln := range strings.Split(out, "\r\n") {
+				trimmed := strings.TrimLeft(ansi.ReplaceAllString(ln, ""), " ")
+				if !strings.ContainsAny(firstRune(trimmed), "┏┃┗┣") {
+					continue
+				}
+				framed++
+				n := visibleLen(ln)
+				if wid == -1 {
+					wid = n
+				} else if n != wid {
+					t.Fatalf("cols=%d phase=%d: framed line width %d != %d:\n%q", cols, phase, n, wid, ln)
+				}
+				if n > cols {
+					t.Fatalf("cols=%d phase=%d: framed line %d wider than the terminal:\n%q", cols, phase, n, ln)
+				}
+			}
+			if framed == 0 {
+				t.Fatalf("cols=%d phase=%d: no framed lines found", cols, phase)
+			}
+		}
+	}
+}
+
 func TestRenderMessageShowsBody(t *testing.T) {
 	out := RenderMessage("done", []Line{{Text: "all good", Color: Green}}, Size{Cols: 80, Rows: 24})
 	for _, want := range []string{"DONE", "all good", "close"} {
