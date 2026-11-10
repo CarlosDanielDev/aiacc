@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,11 +28,18 @@ func editFixture(t *testing.T, body string) string {
 }
 
 // runEdit drives the edit screen over keys against the file at path and returns
-// whether it saved, plus every byte the screen drew.
+// whether it saved, plus every byte the screen drew. The registration submit is
+// a no-op.
 func runEdit(t *testing.T, path string, form EditForm, keys string) (bool, string) {
+	return runEditSubmit(t, path, form, func(dir, settings string) error { return nil }, keys)
+}
+
+// runEditSubmit is runEdit with the submit the screen hands the typed dir and
+// settings to on Enter.
+func runEditSubmit(t *testing.T, path string, form EditForm, submit func(dir, settings string) error, keys string) (bool, string) {
 	t.Helper()
 	var out bytes.Buffer
-	saved, err := driveEdit(path, "glm", form, fixedGeom(80, 24), bytes.NewBufferString(keys), &out)
+	saved, err := driveEdit(path, "glm", form, submit, fixedGeom(80, 24), bytes.NewBufferString(keys), &out)
 	if err != nil {
 		t.Fatalf("driveEdit: %v", err)
 	}
@@ -62,12 +70,12 @@ func readForm(t *testing.T, path string) EditForm {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return EditForm{SettingsEnv: env}
+	return EditForm{File: true, SettingsEnv: env}
 }
 
 // glmForm is the prefill for a settings-backed account with base URL and model.
 func glmForm(hasToken bool) EditForm {
-	return EditForm{SettingsEnv: provider.SettingsEnv{
+	return EditForm{File: true, SettingsEnv: provider.SettingsEnv{
 		Vals: []provider.EnvVal{
 			{Key: "ANTHROPIC_BASE_URL", Value: "https://glm.example/api"},
 			{Key: "ANTHROPIC_MODEL", Value: "glm-4.6"},
@@ -108,7 +116,7 @@ func TestEditEmptyTokenKeepsExistingKey(t *testing.T) {
 	path := editFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"`+sentinelToken+`","ANTHROPIC_BASE_URL":"https://old"}}`)
 	// Tab to base URL, clear it ("https://old" is 11 bytes), type the new one.
 	keys := "\t" + strings.Repeat("\x7f", len("https://old")) + "https://new\r"
-	form := EditForm{SettingsEnv: provider.SettingsEnv{
+	form := EditForm{File: true, SettingsEnv: provider.SettingsEnv{
 		Vals:     []provider.EnvVal{{Key: "ANTHROPIC_BASE_URL", Value: "https://old"}},
 		HasToken: true,
 	}}
@@ -129,8 +137,9 @@ func TestEditEmptyTokenKeepsExistingKey(t *testing.T) {
 }
 
 // TestEditRefusedSaveStaysOnScreen: a file that is not valid JSON is refused
-// with its name in the hint, nothing is written, and the screen stays open
-// until the user leaves. The file's contents, which hold the token, never show.
+// with its name in the hint, the registration (already saved) is announced, and
+// the screen stays open until the user leaves. The file's contents, which hold
+// the token, never show.
 func TestEditRefusedSaveStaysOnScreen(t *testing.T) {
 	bad := `{"env":{"ANTHROPIC_AUTH_TOKEN":"` + sentinelToken + `",,,`
 	path := editFixture(t, bad)
@@ -141,8 +150,8 @@ func TestEditRefusedSaveStaysOnScreen(t *testing.T) {
 	if !strings.Contains(screen, "settings.json is not valid JSON") {
 		t.Fatalf("refusal not shown; screen:\n%s", screen)
 	}
-	if !strings.Contains(screen, "nothing written") {
-		t.Fatal("hint does not say nothing was written")
+	if !strings.Contains(screen, "unchanged") {
+		t.Fatalf("hint does not say the file was left unchanged:\n%s", screen)
 	}
 	raw, _ := os.ReadFile(path)
 	if string(raw) != bad {
@@ -201,7 +210,7 @@ func TestEditArrowsMoveFieldsAndNeverCancel(t *testing.T) {
 // affordance; the token appears only as "keep current key", never as dots or a
 // value.
 func TestEditListsEveryEnvKeyAndMasksToken(t *testing.T) {
-	form := EditForm{SettingsEnv: provider.SettingsEnv{
+	form := EditForm{File: true, SettingsEnv: provider.SettingsEnv{
 		Vals: []provider.EnvVal{
 			{Key: "ANTHROPIC_BASE_URL", Value: "https://ghost.example/api"},
 			{Key: "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", Value: "fast"},
@@ -262,7 +271,7 @@ func TestEditRoundTripsModelSlotFile(t *testing.T) {
 // writes it. Nothing else in the file changes.
 func TestEditAddsKeyAndEditsValue(t *testing.T) {
 	path := editFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://x"}}`)
-	form := EditForm{SettingsEnv: provider.SettingsEnv{
+	form := EditForm{File: true, SettingsEnv: provider.SettingsEnv{
 		Vals: []provider.EnvVal{{Key: "ANTHROPIC_BASE_URL", Value: "https://x"}},
 	}}
 	// Rows: token, base, new key. Two tabs reach the new-key row.
@@ -376,7 +385,7 @@ func TestEditPrefillsEndpointButNeverToken(t *testing.T) {
 
 // TestEditFrameNeverEchoesToken: even a token the screen holds renders as dots.
 func TestEditFrameNeverEchoesToken(t *testing.T) {
-	form := EditForm{Token: sentinelToken, SettingsEnv: provider.SettingsEnv{HasToken: true}}
+	form := EditForm{File: true, Token: sentinelToken, SettingsEnv: provider.SettingsEnv{HasToken: true}}
 	out := RenderEdit("glm", "settings.json", "", form, Size{Cols: 80, Rows: 24})
 	if strings.Contains(out, sentinelToken) {
 		t.Fatalf("token echoed in frame:\n%s", out)
@@ -401,10 +410,12 @@ func TestEditFramesFitTerminal(t *testing.T) {
 	}
 	for _, sz := range []Size{{20, 10}, {24, 12}, {40, 14}, {60, 8}, {80, 24}, {200, 60}} {
 		frames := map[string]string{
-			"edit":      RenderEdit("claude-glm-account-with-a-long-name", "settings.json", "", EditForm{Token: strings.Repeat("x", 80), SettingsEnv: provider.SettingsEnv{Vals: keys, HasToken: true}}, sz),
+			"edit":      RenderEdit("claude-glm-account-with-a-long-name", "settings.json", "", EditForm{File: true, Token: strings.Repeat("x", 80), SettingsEnv: provider.SettingsEnv{Vals: keys, HasToken: true}}, sz),
 			"edit-hint": RenderEdit("glm", "settings.json", "settings.json is not valid JSON — nothing written", glmForm(true), sz),
-			"edit-tok":  RenderEdit("glm", "settings.json", "", EditForm{Field: 2, SettingsEnv: provider.SettingsEnv{Vals: keys}}, sz),
-			"edit-add":  RenderEdit("glm", "settings.json", "", EditForm{Field: len(keys) + 1, AddKey: "ANTHROPIC_NEW", SettingsEnv: provider.SettingsEnv{Vals: keys}}, sz),
+			"edit-tok":  RenderEdit("glm", "settings.json", "", EditForm{File: true, Field: 2, SettingsEnv: provider.SettingsEnv{Vals: keys}}, sz),
+			"edit-add":  RenderEdit("glm", "settings.json", "", EditForm{File: true, Field: len(keys) + 1, AddKey: "ANTHROPIC_NEW", SettingsEnv: provider.SettingsEnv{Vals: keys}}, sz),
+			"edit-reg":  RenderEdit("glm", "", "settings path is a directory, not a settings file: /tmp/x", EditForm{Dir: "~/claude-glm", Settings: ""}, sz),
+			"edit-full": RenderEdit("glm", "settings.json", "", EditForm{File: true, Field: len(keys) + 2, Dir: "~/.claude-glm", Settings: "~/.claude-glm/glm.json", SettingsEnv: provider.SettingsEnv{Vals: keys, HasToken: true}}, sz),
 		}
 		for name, out := range frames {
 			if used := strings.Count(out, "\r\n"); used >= sz.Rows {
@@ -429,6 +440,7 @@ func TestEditWindowKeepsCursorVisible(t *testing.T) {
 	}
 	focused := "ANTHROPIC_E_MODEL"
 	out := RenderEdit("glm", "settings.json", "", EditForm{
+		File:        true,
 		Field:       5,
 		SettingsEnv: provider.SettingsEnv{Vals: vals},
 	}, Size{Cols: 60, Rows: 18})
@@ -456,6 +468,117 @@ func TestEditFramesStaySquare(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// --- registration rows: the stored dir and settings link ---------------------
+
+// TestEditShowsRegistrationRowsPrefilled: the frame shows the stored dir and
+// settings path exactly as they are registered, alongside the file editor.
+func TestEditShowsRegistrationRowsPrefilled(t *testing.T) {
+	form := glmForm(false)
+	form.Dir, form.Settings = "~/claude-glm", "~/claude-glm/settings.json"
+	out := RenderEdit("glm", "settings.json", "", form, Size{Cols: 80, Rows: 24})
+	for _, want := range []string{"~/claude-glm", "~/claude-glm/settings.json"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("frame misses %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestEditWithoutFileEditsRegistrationOnly: with no settings file the screen
+// has no token, env or new-key rows — only dir and settings — and Enter hands
+// the typed values to submit.
+func TestEditWithoutFileEditsRegistrationOnly(t *testing.T) {
+	form := EditForm{Dir: "~/old", Settings: ""}
+	var gotDir, gotSettings string
+	submit := func(dir, settings string) error { gotDir, gotSettings = dir, settings; return nil }
+	saved, screen := runEditSubmit(t, "", form, submit, "x\r")
+	if !saved {
+		t.Fatal("save not reported")
+	}
+	if gotDir != "~/oldx" || gotSettings != "" {
+		t.Fatalf("submit got dir=%q settings=%q, want ~/oldx and \"\"", gotDir, gotSettings)
+	}
+	for _, absent := range []string{"paste a new key", "new key", "keep current key"} {
+		if strings.Contains(screen, absent) {
+			t.Fatalf("frame shows file-editor row %q without a file:\n%s", absent, screen)
+		}
+	}
+}
+
+// TestEditRefusedRegistrationWritesNothing: a refused registration save keeps
+// the screen open with the reason, and the settings file is left untouched —
+// the env save only runs once the registration is accepted.
+func TestEditRefusedRegistrationWritesNothing(t *testing.T) {
+	body := `{"env":{"ANTHROPIC_BASE_URL":"https://x"}}`
+	path := editFixture(t, body)
+	refusal := errors.New("settings path is a directory, not a settings file: /tmp")
+	submit := func(dir, settings string) error { return refusal }
+	saved, screen := runEditSubmit(t, path, glmForm(false), submit, "\r\x1b")
+	if saved {
+		t.Fatal("refused registration reported as saved")
+	}
+	if !strings.Contains(screen, "settings path is a directory") || !strings.Contains(screen, "nothing written") {
+		t.Fatalf("refusal not shown:\n%s", screen)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != body {
+		t.Fatal("file written despite the refused registration")
+	}
+}
+
+// TestEditRegistrationRowsTakeTyping: with the file editor present, the dir and
+// settings rows follow the new-key row; typing appends there and Enter saves
+// the registration and the file.
+func TestEditRegistrationRowsTakeTyping(t *testing.T) {
+	path := editFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://x"}}`)
+	form := glmForm(false)
+	form.Dir, form.Settings = "~/d", "~/d/settings.json"
+	var gotDir, gotSettings string
+	submit := func(dir, settings string) error { gotDir, gotSettings = dir, settings; return nil }
+	// rows: token(0), base(1), model(2), new key(3), dir(4), settings(5). Four
+	// tabs reach dir.
+	saved, _ := runEditSubmit(t, path, form, submit, "\t\t\t\tx\r")
+	if !saved {
+		t.Fatal("save not reported")
+	}
+	if gotDir != "~/dx" || gotSettings != "~/d/settings.json" {
+		t.Fatalf("submit got dir=%q settings=%q, want ~/dx and ~/d/settings.json", gotDir, gotSettings)
+	}
+	// The file save runs after the registration: the form's values land whole.
+	if got := fileEnv(t, path)["ANTHROPIC_BASE_URL"]; got != "https://glm.example/api" {
+		t.Fatalf("base URL = %q, want the form's value written", got)
+	}
+}
+
+// TestEditChangedLinkSparesTheOldFile: the env rows belong to the file the
+// screen opened with. Re-pointing the settings link and saving must not write
+// the form's env block (a typed token included) into the old, now-unlinked
+// file: the registration is saved, the env write is skipped, and the hint says
+// the env block needs a fresh pass — no silent success.
+func TestEditChangedLinkSparesTheOldFile(t *testing.T) {
+	body := `{"env":{"ANTHROPIC_BASE_URL":"https://old"}}`
+	path := editFixture(t, body)
+	form := glmForm(false)
+	form.Dir, form.Settings = "~/d", "~/d/old.json"
+	var gotDir, gotSettings string
+	submit := func(dir, settings string) error { gotDir, gotSettings = dir, settings; return nil }
+	// rows: token(0), base(1), model(2), new key(3), dir(4), settings(5). One
+	// tab edits the base URL, four more reach the settings row; there the old
+	// link is cleared and the new one typed, and Enter saves both parts.
+	keys := "\tx\t\t\t\t" + strings.Repeat("\x7f", len("~/d/old.json")) + "~/d/new.json\r"
+	saved, screen := runEditSubmit(t, path, form, submit, keys)
+	if saved {
+		t.Fatal("a changed settings link reported the env block as saved")
+	}
+	if gotDir != "~/d" || gotSettings != "~/d/new.json" {
+		t.Fatalf("submit got dir=%q settings=%q, want the new link", gotDir, gotSettings)
+	}
+	if !strings.Contains(screen, "reopen") {
+		t.Fatalf("hint does not say the env block needs a fresh pass:\n%s", screen)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != body {
+		t.Fatalf("old file written after the link moved:\n%s", raw)
 	}
 }
 

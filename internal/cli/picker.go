@@ -79,7 +79,7 @@ func runPicker(filter string) error {
 			}
 			continue
 		case tui.Edit:
-			if err := runEditTUI(rows[res.Index]); err != nil {
+			if err := runEditTUI(path, rows[res.Index]); err != nil {
 				return err
 			}
 			continue
