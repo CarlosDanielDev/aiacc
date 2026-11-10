@@ -755,13 +755,15 @@ func RenderSetupResult(r SetupResult, sz Size) string {
 
 // driveSetupResult shows the result and waits for an exit key.
 func driveSetupResult(r SetupResult, g *geom, in io.Reader, out io.Writer) error {
-	return screenLoop(g, in, out, readKey, func(sz Size) string { return RenderSetupResult(r, sz) },
+	return screenLoop(g, in, out,
+		func(r *bufio.Reader) (key, error) { return readKey(r, in) },
+		func(sz Size) string { return RenderSetupResult(r, sz) },
 		func(k key) bool { return k == keyQuit || k == keyEnter || k == keyCopy })
 }
 
 // RunSetupResult shows the setup result screen on /dev/tty.
 func RunSetupResult(r SetupResult) error {
-	return onTTYErr(func(tty *os.File, g *geom) error { return driveSetupResult(r, g, tty, tty) })
+	return onTTYErr(func(tty *os.File, g *geom) error { return driveSetupResult(r, g, timedTTY{tty}, tty) })
 }
 
 // --- Add profile --------------------------------------------------------------
@@ -883,18 +885,21 @@ func RenderAdd(currentLogin, provider string, f AddForm, hint string, sz Size) s
 func driveAdd(currentLogin, providerName string, withSettings bool, g *geom, in io.Reader, out io.Writer) (AddResult, error) {
 	f, hint := AddForm{WithSettings: withSettings}, ""
 	var result AddResult
-	err := screenLoop(g, in, out, (*bufio.Reader).ReadByte,
+	err := screenLoop(g, in, out,
+		func(r *bufio.Reader) (fieldKey, error) { return readFieldKey(r, in) },
 		func(sz Size) string { return RenderAdd(currentLogin, providerName, f, hint, sz) },
-		func(b byte) bool {
+		func(fk fieldKey) bool {
 			// focused is the text the keystroke edits; the name field is the only
 			// one with a narrower alphabet.
 			focused := []*string{&f.Name, &f.Dir, &f.Settings}[f.Field]
-			switch b {
-			case 0x1b, 3: // Esc / Ctrl-C
+			switch fk.k {
+			case keyQuit, keyCopy: // Esc / Ctrl-C
 				return true
-			case '\t':
+			case keyTab, keyDown:
 				f.Field, hint = (f.Field+1)%f.fields(), ""
-			case '\r', '\n':
+			case keyUp:
+				f.Field, hint = (f.Field+f.fields()-1)%f.fields(), ""
+			case keyEnter:
 				if !ValidName(f.Name) {
 					f.Field, hint = 0, "name: a letter first, then letters, digits, - or _"
 					return false
@@ -910,11 +915,11 @@ func driveAdd(currentLogin, providerName string, withSettings bool, g *geom, in 
 				}
 				result = AddResult{Name: f.Name, Dir: d, Settings: settings, OK: true}
 				return true
-			case 0x7f, 0x08: // Backspace / Delete
+			case keyBackspace:
 				*focused, hint = trimLastByte(*focused), ""
-			default:
-				if (f.Field == 0 && nameByte(b)) || (f.Field > 0 && printableByte(b)) {
-					*focused += string(b)
+			case keyText:
+				if (f.Field == 0 && nameByte(fk.b)) || (f.Field > 0 && printableByte(fk.b)) {
+					*focused += string(fk.b)
 				}
 				hint = ""
 			}
@@ -1002,13 +1007,14 @@ func launchName(buf string) string {
 func driveRename(oldName string, taken map[string]bool, g *geom, in io.Reader, out io.Writer) (string, error) {
 	buf, hint := oldName, ""
 	var chosen string
-	err := screenLoop(g, in, out, (*bufio.Reader).ReadByte,
+	err := screenLoop(g, in, out,
+		func(r *bufio.Reader) (fieldKey, error) { return readFieldKey(r, in) },
 		func(sz Size) string { return RenderRename(oldName, buf, hint, sz) },
-		func(b byte) bool {
-			switch b {
-			case 0x1b, 3: // Esc / Ctrl-C
+		func(fk fieldKey) bool {
+			switch fk.k {
+			case keyQuit, keyCopy: // Esc / Ctrl-C
 				return true
-			case '\r', '\n':
+			case keyEnter:
 				switch {
 				case buf == oldName:
 					return true // unchanged — nothing to do
@@ -1020,14 +1026,15 @@ func driveRename(oldName string, taken map[string]bool, g *geom, in io.Reader, o
 					chosen = buf
 					return true
 				}
-			case 0x7f, 0x08:
+			case keyBackspace:
 				buf, hint = trimLastByte(buf), ""
-			default:
-				if nameByte(b) {
-					buf += string(b)
+			case keyText:
+				if nameByte(fk.b) {
+					buf += string(fk.b)
 				}
 				hint = ""
 			}
+			// keyUp/keyDown/keyTab: one field, nothing to walk to — ignored.
 			return false
 		})
 	return chosen, err
@@ -1108,7 +1115,9 @@ func driveListToggle(title string, items []ListItem, toggle string, g *geom, in 
 	if len(items) == 0 {
 		cursor = -1
 	}
-	err := screenLoop(g, in, out, readKey, func(sz Size) string { return renderList(title, items, cursor, toggle, on, sz) },
+	err := screenLoop(g, in, out,
+		func(r *bufio.Reader) (key, error) { return readKey(r, in) },
+		func(sz Size) string { return renderList(title, items, cursor, toggle, on, sz) },
 		func(k key) bool {
 			switch k {
 			case keyToggle:
@@ -1136,7 +1145,7 @@ func driveListToggle(title string, items []ListItem, toggle string, g *geom, in 
 
 // RunList shows a selection list on /dev/tty and returns the chosen index or -1.
 func RunList(title string, items []ListItem) (int, error) {
-	return onTTY(-1, func(tty *os.File, g *geom) (int, error) { return driveList(title, items, g, tty, tty) })
+	return onTTY(-1, func(tty *os.File, g *geom) (int, error) { return driveList(title, items, g, timedTTY{tty}, tty) })
 }
 
 // RunListToggle is RunList with an optional toggle labelled toggle ("" = none,
@@ -1144,7 +1153,7 @@ func RunList(title string, items []ListItem) (int, error) {
 func RunListToggle(title string, items []ListItem, toggle string) (int, bool, error) {
 	on := false
 	i, err := onTTY(-1, func(tty *os.File, g *geom) (int, error) {
-		i, o, err := driveListToggle(title, items, toggle, g, tty, tty)
+		i, o, err := driveListToggle(title, items, toggle, g, timedTTY{tty}, tty)
 		on = o
 		return i, err
 	})
@@ -1244,7 +1253,8 @@ func driveMessage(title string, body func(checked bool) []Line, box *Checkbox, g
 	var note Line
 	checked := false
 	var lines []Line // the body as last drawn, so ^C copies what is on screen
-	return screenLoop(g, in, out, readKey,
+	return screenLoop(g, in, out,
+		func(r *bufio.Reader) (key, error) { return readKey(r, in) },
 		func(sz Size) string {
 			lines = body(checked)
 			return renderCheckMessage(title, lines, note, box, checked, sz)
@@ -1298,6 +1308,9 @@ const (
 	keyYes
 	keyNo
 	keyQuit
+	keyTab
+	keyBackspace
+	keyText
 )
 
 // geom is the terminal's live geometry. A terminal can be resized at any moment,
@@ -1462,7 +1475,7 @@ func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File
 	go func() {
 		r := bufio.NewReader(tty)
 		for {
-			k, err := readKey(r)
+			k, err := readKey(r, timedTTY{tty})
 			if err != nil {
 				return
 			}
@@ -1497,7 +1510,7 @@ func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File
 // settings-file field.
 func RunAdd(currentLogin, provider string, withSettings bool) (AddResult, error) {
 	return onTTY(AddResult{}, func(tty *os.File, g *geom) (AddResult, error) {
-		return driveAdd(currentLogin, provider, withSettings, g, tty, tty)
+		return driveAdd(currentLogin, provider, withSettings, g, timedTTY{tty}, tty)
 	})
 }
 
@@ -1510,7 +1523,7 @@ func RunRename(oldName string, taken []string) (string, error) {
 		set[n] = true
 	}
 	return onTTY("", func(tty *os.File, g *geom) (string, error) {
-		return driveRename(oldName, set, g, tty, tty)
+		return driveRename(oldName, set, g, timedTTY{tty}, tty)
 	})
 }
 
@@ -1592,7 +1605,9 @@ func (s *pickerState) frame(rows []Row, setupNeeded bool, phase int, sz Size) st
 func drive(rows []Row, setupNeeded bool, g *geom, in io.Reader, out io.Writer) (Result, error) {
 	st := pickerState{cursor: initialCursor(rows), confirm: -1}
 	res := Result{Kind: Cancelled}
-	err := screenLoop(g, in, out, readKey, func(sz Size) string { return st.frame(rows, setupNeeded, 0, sz) },
+	err := screenLoop(g, in, out,
+		func(r *bufio.Reader) (key, error) { return readKey(r, in) },
+		func(sz Size) string { return st.frame(rows, setupNeeded, 0, sz) },
 		func(k key) bool {
 			r, done := st.handle(rows, k)
 			if done {
@@ -1631,8 +1646,9 @@ func step(rows []Row, cursor, dir int) int {
 }
 
 // readKey decodes one logical keypress: arrows (or vim j/k), enter, add (a),
-// remove (d), yes/no (y/n), and quit (q / Esc / Ctrl-C).
-func readKey(r *bufio.Reader) (key, error) {
+// remove (d), yes/no (y/n), and quit (q / Esc / Ctrl-C). in is the reader r
+// draws from; escape sequences that trickle in across reads are awaited on it.
+func readKey(r *bufio.Reader, in io.Reader) (key, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return keyNone, err
@@ -1672,26 +1688,130 @@ func readKey(r *bufio.Reader) (key, error) {
 	case 'k':
 		return keyUp, nil
 	case 0x1b: // Esc: an arrow sequence, or a lone Esc that cancels
-		b2, err := r.ReadByte()
-		if err != nil {
-			return keyQuit, nil
-		}
-		if b2 != '[' && b2 != 'O' {
-			return keyNone, nil
-		}
-		b3, err := r.ReadByte()
-		if err != nil {
-			return keyNone, err
-		}
-		switch b3 {
-		case 'A':
-			return keyUp, nil
-		case 'B':
-			return keyDown, nil
-		}
-		return keyNone, nil
+		return escKey(r, in), nil
 	}
 	return keyNone, nil
+}
+
+// escWindow is how long an ESC waits for the rest of its sequence before it
+// counts as a lone Esc. Long enough for an arrow key that arrives split across
+// two reads (a laggy ssh), short enough that Esc still feels immediate.
+const escWindow = 200 * time.Millisecond
+
+// byteAwaiter sources one more byte within a deadline — the short window that
+// tells a lone Esc from a sequence still in flight. The raw tty implements it
+// (a timed read needs VTIME on the terminal); test inputs don't: their whole
+// input is already in the reader, where io.EOF plays the same role.
+type byteAwaiter interface {
+	awaitByte(d time.Duration) (byte, bool, error)
+}
+
+// timedTTY is the raw terminal as a byteAwaiter: it flips the tty into timed
+// reads (VMIN 0, VTIME in tenths of a second) for the window, then back to the
+// blocking mode the screen loops read with. Two `stty` calls per escape byte;
+// escape bytes are rare.
+type timedTTY struct{ *os.File }
+
+func (t timedTTY) awaitByte(d time.Duration) (byte, bool, error) {
+	tenths := int((d + 99*time.Millisecond) / (100 * time.Millisecond))
+	if err := stty(t.File, "min", "0", "time", strconv.Itoa(tenths)); err != nil {
+		return 0, false, err
+	}
+	var b [1]byte
+	n, err := t.File.Read(b[:])
+	if err2 := stty(t.File, "min", "1", "time", "0"); err == nil {
+		err = err2
+	}
+	if n > 0 {
+		return b[0], true, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return 0, false, nil // the window closed with nothing behind the Esc
+}
+
+// nextByte returns the next byte of a sequence: one already buffered, or one
+// that arrives within d on a reader that can wait. ok=false when no byte comes
+// — a lone Esc, or the end of a test's input.
+func nextByte(r *bufio.Reader, in io.Reader, d time.Duration) (byte, bool, error) {
+	if r.Buffered() > 0 {
+		b, err := r.ReadByte()
+		return b, err == nil, err
+	}
+	if a, ok := in.(byteAwaiter); ok {
+		return a.awaitByte(d)
+	}
+	b, err := r.ReadByte()
+	return b, err == nil, err
+}
+
+// escKey decodes the bytes after an ESC: CSI/SS3 arrows come back as keyUp or
+// keyDown, any other sequence as keyNone (left/right, Home, mouse — ignored),
+// and a lone Esc — nothing within the window — as keyQuit. A key pressed right
+// after the Esc cancels too, and stays unread in the buffer so the next read
+// still sees it: nothing is swallowed.
+func escKey(r *bufio.Reader, in io.Reader) key {
+	b2, ok, err := nextByte(r, in, escWindow)
+	if err != nil || !ok {
+		return keyQuit
+	}
+	if b2 != '[' && b2 != 'O' {
+		_ = r.UnreadByte() // best effort — the cancel never re-reads this screen
+		return keyQuit
+	}
+	// Parameter and intermediate bytes until the final byte (0x40–0x7E) that
+	// names the key; a truncated sequence is simply ignored.
+	final, ok, err := nextByte(r, in, escWindow)
+	for err == nil && ok && (final < 0x40 || final > 0x7e) {
+		final, ok, err = nextByte(r, in, escWindow)
+	}
+	if err != nil || !ok {
+		return keyNone
+	}
+	switch final {
+	case 'A':
+		return keyUp
+	case 'B':
+		return keyDown
+	}
+	return keyNone
+}
+
+// fieldKey is one keypress on a text screen (add / edit / rename / duplicate):
+// k says what arrived, and for keyText, b is the printable byte to insert.
+type fieldKey struct {
+	k key
+	b byte
+}
+
+// readFieldKey decodes one keypress for the text screens: printable bytes come
+// back as keyText, arrows as keyUp/keyDown (so they can walk the fields),
+// backspace as keyBackspace, enter as keyEnter, tab as keyTab, Esc as keyQuit,
+// and Ctrl-C as keyCopy. Anything else — left/right, Home, a modified arrow's
+// parameters — is keyNone, which the screens ignore: no character is ever
+// injected from a sequence, and no sequence cancels the screen.
+func readFieldKey(r *bufio.Reader, in io.Reader) (fieldKey, error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return fieldKey{}, err
+	}
+	switch b {
+	case 0x1b:
+		return fieldKey{k: escKey(r, in)}, nil
+	case 3: // Ctrl-C, delivered as a byte under -isig
+		return fieldKey{k: keyCopy}, nil
+	case '\t':
+		return fieldKey{k: keyTab}, nil
+	case '\r', '\n':
+		return fieldKey{k: keyEnter}, nil
+	case 0x7f, 0x08: // Backspace / Delete
+		return fieldKey{k: keyBackspace}, nil
+	}
+	if printableByte(b) {
+		return fieldKey{k: keyText, b: b}, nil
+	}
+	return fieldKey{k: keyNone}, nil
 }
 
 func sttyState(tty *os.File) (string, error) {

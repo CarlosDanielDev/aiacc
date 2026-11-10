@@ -408,6 +408,24 @@ func TestAddEscCancels(t *testing.T) {
 	}
 }
 
+// TestAddArrowsMoveFieldsAndNeverCancel: arrows are escape sequences, not
+// cancels — up/down walk the fields, and every other CSI byte is ignored
+// wholesale, so nothing ever lands in a field by accident.
+func TestAddArrowsMoveFieldsAndNeverCancel(t *testing.T) {
+	// Down then up: "x" lands back in the name.
+	if res := add(t, "\x1b[B\x1b[Ax\r"); !res.OK || res.Name != "x" {
+		t.Fatalf("down/up: got %+v, want name x", res)
+	}
+	// Down: "x" lands in the dir (a name is needed first — enter refuses without one).
+	if res := add(t, "n\x1b[Bx\r"); !res.OK || res.Name != "n" || res.Dir != "x" {
+		t.Fatalf("down: got %+v, want name n and dir x", res)
+	}
+	// Left/right/Home inject nothing: the dir field ends up exactly "x".
+	if res := add(t, "n\x1b[B\x1b[C\x1b[D\x1b[Hx\r"); !res.OK || res.Dir != "x" {
+		t.Fatalf("left/right: got %+v, want dir exactly x", res)
+	}
+}
+
 func TestAddBackspace(t *testing.T) {
 	if res := add(t, "work\x7f\r"); !res.OK || res.Name != "wor" {
 		t.Fatalf("got %+v, want name=wor", res)
@@ -744,6 +762,15 @@ func TestRenameEscCancels(t *testing.T) {
 	}
 }
 
+// TestRenameArrowsNeverCancelOrInject: the rename screen has one field, so
+// arrows have nothing to walk — but they must not cancel the screen or drop
+// characters into the name either.
+func TestRenameArrowsNeverCancelOrInject(t *testing.T) {
+	if got := rename(t, "work", "\x1b[A\x1b[B\x1b[C\x1b[D\x1b[H2\r", nil); got != "work2" {
+		t.Fatalf("got %q, want work2", got)
+	}
+}
+
 // TestRenameBlocksCollision: enter is refused while the new name is already
 // taken; after changing to a free name it succeeds.
 func TestRenameBlocksCollision(t *testing.T) {
@@ -941,9 +968,64 @@ func TestCopyTextFallsBackToBody(t *testing.T) {
 // TestCtrlCIsItsOwnKey: Ctrl-C arrives as a byte under -isig. It is decoded
 // separately so a screen with something to copy can take it.
 func TestCtrlCIsItsOwnKey(t *testing.T) {
-	k, err := readKey(bufio.NewReader(bytes.NewBufferString("\x03")))
+	src := bytes.NewBufferString("\x03")
+	k, err := readKey(bufio.NewReader(src), src)
 	if err != nil || k != keyCopy {
 		t.Fatalf("readKey(Ctrl-C) = %v, %v; want keyCopy", k, err)
+	}
+}
+
+// TestReadKeyEscThenKeyIsNotSwallowed: Esc cancels even when another key
+// follows it immediately, and that key stays in the buffer for the next read —
+// the old byte reader ate both and produced nothing.
+func TestReadKeyEscThenKeyIsNotSwallowed(t *testing.T) {
+	src := bytes.NewBufferString("\x1ba")
+	r := bufio.NewReader(src)
+	if k, err := readKey(r, src); err != nil || k != keyQuit {
+		t.Fatalf("readKey after Esc = %v, %v; want keyQuit", k, err)
+	}
+	if k, err := readKey(r, src); err != nil || k != keyAdd {
+		t.Fatalf("key after Esc = %v, %v; want keyAdd (not swallowed)", k, err)
+	}
+}
+
+// TestReadFieldKey: the text screens' decoder. Arrows decode to up/down (so
+// they can walk the fields); left/right, Home and a modified arrow's parameter
+// bytes are ignored without injecting anything; a lone Esc cancels; a key right
+// after Esc cancels and stays buffered; plain text rides through; backspace is
+// its own key.
+func TestReadFieldKey(t *testing.T) {
+	tests := []struct {
+		name string
+		keys string
+		want []fieldKey
+	}{
+		{"arrow up", "\x1b[A", []fieldKey{{k: keyUp}}},
+		{"arrow down", "\x1b[B", []fieldKey{{k: keyDown}}},
+		{"ss3 arrow", "\x1bOA", []fieldKey{{k: keyUp}}},
+		{"arrow left ignored", "\x1b[C", []fieldKey{{k: keyNone}}},
+		{"arrow right ignored", "\x1b[D", []fieldKey{{k: keyNone}}},
+		{"home ignored", "\x1b[H\x1b[F", []fieldKey{{k: keyNone}, {k: keyNone}}},
+		{"modified arrow with parameters", "\x1b[1;5A", []fieldKey{{k: keyUp}}},
+		{"tilde key ignored", "\x1b[2~", []fieldKey{{k: keyNone}}},
+		{"lone esc cancels", "\x1b", []fieldKey{{k: keyQuit}}},
+		{"esc then key", "\x1ba", []fieldKey{{k: keyQuit}, {k: keyText, b: 'a'}}},
+		{"esc ctrl-c", "\x1b\x03", []fieldKey{{k: keyQuit}, {k: keyCopy}}},
+		{"plain text", "ok", []fieldKey{{k: keyText, b: 'o'}, {k: keyText, b: 'k'}}},
+		{"backspace", "\x7f\x08", []fieldKey{{k: keyBackspace}, {k: keyBackspace}}},
+	}
+	for _, tt := range tests {
+		src := bytes.NewBufferString(tt.keys)
+		r := bufio.NewReader(src)
+		for i, want := range tt.want {
+			got, err := readFieldKey(r, src)
+			if err != nil {
+				t.Fatalf("%s: read %d: %v", tt.name, i, err)
+			}
+			if got != want {
+				t.Fatalf("%s: read %d = %+v, want %+v", tt.name, i, got, want)
+			}
+		}
 	}
 }
 
@@ -1148,6 +1230,24 @@ func TestDuplicateSubmitsNameAndDir(t *testing.T) {
 	ok, calls, _ = duplicate(t, "w2\t~/x\r", nil)
 	if !ok || len(calls) != 1 || calls[0] != [2]string{"w2", "~/x"} {
 		t.Fatalf("ok=%v calls=%v, want one submit of (w2, ~/x)", ok, calls)
+	}
+}
+
+// TestDuplicateArrowsMoveFieldsAndNeverCancel: the duplicate screen is a text
+// screen too — arrows walk its two fields, other CSI bytes are ignored, and no
+// sequence cancels it or injects a character.
+func TestDuplicateArrowsMoveFieldsAndNeverCancel(t *testing.T) {
+	ok, calls, _ := duplicate(t, "\x1b[B\x1b[Ax\r", nil)
+	if !ok || len(calls) != 1 || calls[0] != [2]string{"x", ""} {
+		t.Fatalf("ok=%v calls=%v, want one submit of (x, \"\")", ok, calls)
+	}
+	ok, calls, _ = duplicate(t, "\x1b[Bx\r", nil)
+	if !ok || len(calls) != 1 || calls[0] != [2]string{"", "x"} {
+		t.Fatalf("ok=%v calls=%v, want one submit of (\"\", x)", ok, calls)
+	}
+	ok, calls, _ = duplicate(t, "\x1b[C\x1b[D\x1b[Hx\r", nil)
+	if !ok || len(calls) != 1 || calls[0] != [2]string{"x", ""} {
+		t.Fatalf("ok=%v calls=%v, want left/right ignored, one submit of (x, \"\")", ok, calls)
 	}
 }
 

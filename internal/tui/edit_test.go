@@ -145,6 +145,36 @@ func TestEditEscCancelsWithoutWriting(t *testing.T) {
 	}
 }
 
+// TestEditArrowsMoveFieldsAndNeverCancel: arrows walk the edit screen's fields
+// and no sequence cancels it or injects a character.
+func TestEditArrowsMoveFieldsAndNeverCancel(t *testing.T) {
+	body := `{"env":{"ANTHROPIC_BASE_URL":"https://old"}}`
+	// Down to base URL: "x" lands there, appended to the prefill — not in the token.
+	path := editFixture(t, body)
+	if saved, _ := runEdit(t, path, glmForm(false), "\x1b[Bx\r"); !saved {
+		t.Fatal("save not reported")
+	}
+	if got := fileEnv(t, path)["ANTHROPIC_BASE_URL"]; got != "https://glm.example/apix" {
+		t.Fatalf("base URL = %q, want the prefill with x appended", got)
+	}
+	// Down then up: "x" lands back in the token.
+	path = editFixture(t, body)
+	if saved, _ := runEdit(t, path, glmForm(false), "\x1b[B\x1b[Ax\r"); !saved {
+		t.Fatal("save not reported")
+	}
+	if got := fileEnv(t, path)["ANTHROPIC_AUTH_TOKEN"]; got != "x" {
+		t.Fatalf("token = %q, want x (up moved back to the token)", got)
+	}
+	// Left/right/Home inject nothing; the base URL keeps only the appended "x".
+	path = editFixture(t, body)
+	if saved, _ := runEdit(t, path, glmForm(false), "\x1b[B\x1b[C\x1b[D\x1b[Hx\r"); !saved {
+		t.Fatal("save not reported")
+	}
+	if got := fileEnv(t, path)["ANTHROPIC_BASE_URL"]; got != "https://glm.example/apix" {
+		t.Fatalf("base URL = %q, want the prefill with only x appended", got)
+	}
+}
+
 // TestEditPrefillsEndpointButNeverToken: the base URL and model are shown; the
 // token is not, and a file that has one says so instead of showing dots.
 func TestEditPrefillsEndpointButNeverToken(t *testing.T) {
