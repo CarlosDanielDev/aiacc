@@ -238,10 +238,12 @@ skills, hooks and statusline and talks to its own endpoint from any directory.
 
 aiacc stores only the path and never reads the file on add, launch or doctor —
 your key never passes through aiacc unless you ask. `e` in the picker (edit)
-reads the file and rewrites only `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and
-`ANTHROPIC_MODEL`, keeping every other key. The token is never shown: an empty
-token field keeps the key already there, and a file that isn't valid JSON is
-refused with nothing written. The file stays `0600` (never wider). Keep it
+reads the file and rewrites its `env` block: every key it lists is editable
+(model slots included), keys are added on the *new key* row and dropped with
+ctrl-D, and every key outside `env` is kept as parsed. The token is never
+shown: an empty token field keeps the key already there, and a file that isn't
+valid JSON is refused with nothing written. The file stays `0600` (never
+wider). Keep it
 private (`chmod 600`); `aiacc doctor` warns when it isn't and fails when it's
 missing.
 

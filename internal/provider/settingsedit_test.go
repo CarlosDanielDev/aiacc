@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -49,6 +50,18 @@ func envOf(t *testing.T, doc map[string]json.RawMessage) map[string]string {
 	return env
 }
 
+// compactOf is raw JSON with the insignificant whitespace between tokens
+// removed, so two values compare byte-for-byte modulo what a re-marshal is
+// allowed to move.
+func compactOf(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	return buf.String()
+}
+
 func dirNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -62,14 +75,41 @@ func dirNames(t *testing.T, dir string) []string {
 	return names
 }
 
-func TestReadSettingsEnvNeverReturnsToken(t *testing.T) {
-	path := settingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"`+sentinelToken+`","ANTHROPIC_BASE_URL":"https://glm.example/api","ANTHROPIC_MODEL":"glm-4.6"}}`, 0o600)
+// TestReadSettingsEnvListsEveryEnvKey: the read returns every env key whose
+// value is a JSON string — model slots included — sorted, with the token
+// reduced to HasToken. Values that are not strings cannot be shown or edited,
+// so they are left out of the list (and preserved verbatim on save).
+func TestReadSettingsEnvListsEveryEnvKey(t *testing.T) {
+	path := settingsFixture(t, `{"env":{
+		"ANTHROPIC_DEFAULT_SONNET_MODEL":"sonnet-x",
+		"ANTHROPIC_AUTH_TOKEN":"`+sentinelToken+`",
+		"ANTHROPIC_BASE_URL":"https://ghost.example/api",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL":"opus-x",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":"haiku-x",
+		"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME":"fast",
+		"DEBUG_FLAG":true
+	}}`, 0o600)
 	got, err := ReadSettingsEnv(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.BaseURL != "https://glm.example/api" || got.Model != "glm-4.6" || !got.HasToken {
-		t.Fatalf("read %+v, want base, model and HasToken", got)
+	want := []EnvVal{
+		{"ANTHROPIC_BASE_URL", "https://ghost.example/api"},
+		{"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", "fast"},
+		{"ANTHROPIC_DEFAULT_HAIKU_MODEL", "haiku-x"},
+		{"ANTHROPIC_DEFAULT_OPUS_MODEL", "opus-x"},
+		{"ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnet-x"},
+	}
+	if len(got.Vals) != len(want) {
+		t.Fatalf("Vals = %v, want %v", got.Vals, want)
+	}
+	for i, kv := range want {
+		if got.Vals[i] != kv {
+			t.Fatalf("Vals[%d] = %v, want %v (sorted, string values only)", i, got.Vals[i], kv)
+		}
+	}
+	if !got.HasToken {
+		t.Fatal("HasToken = false, want true")
 	}
 	// The read value is what the edit screen gets. It must not carry the key.
 	blob, _ := json.Marshal(got)
@@ -78,25 +118,44 @@ func TestReadSettingsEnvNeverReturnsToken(t *testing.T) {
 	}
 }
 
+// TestReadSettingsEnvTokenOnlyFile: a file whose env holds only the token lists
+// no editable keys but still says a token is set.
+func TestReadSettingsEnvTokenOnlyFile(t *testing.T) {
+	path := settingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"`+sentinelToken+`"}}`, 0o600)
+	got, err := ReadSettingsEnv(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Vals) != 0 || !got.HasToken {
+		t.Fatalf("read %+v, want no Vals and HasToken", got)
+	}
+}
+
+// TestEditSettingsPreservesOtherKeys: a save that rewrites the env block keeps
+// the top-level keys and every env key the edit carried.
 func TestEditSettingsPreservesOtherKeys(t *testing.T) {
 	path := settingsFixture(t, `{
   "permissions": {"allow": ["Bash(ls)"]},
   "model": "opus",
   "env": {"ANTHROPIC_BASE_URL": "https://old.example", "ANTHROPIC_AUTH_TOKEN": "old-token", "FOO": "keep"}
 }`, 0o600)
-	if err := EditSettings(path, SettingsEdit{Token: "new-token", BaseURL: "https://new.example"}); err != nil {
+	edit := SettingsEdit{Token: "new-token", Vals: []EnvVal{
+		{"ANTHROPIC_BASE_URL", "https://new.example"},
+		{"FOO", "keep"},
+	}}
+	if err := EditSettings(path, edit); err != nil {
 		t.Fatal(err)
 	}
 	doc := readJSON(t, path)
 	env := envOf(t, doc)
 	if env["ANTHROPIC_AUTH_TOKEN"] != "new-token" || env["ANTHROPIC_BASE_URL"] != "https://new.example" {
-		t.Fatalf("owned keys not updated: %v", env)
+		t.Fatalf("edited keys not updated: %v", env)
 	}
 	if env["FOO"] != "keep" {
-		t.Fatalf("unrelated env key lost: %v", env)
+		t.Fatalf("carried env key lost: %v", env)
 	}
 	if _, ok := env["ANTHROPIC_MODEL"]; ok {
-		t.Fatalf("empty model must not be invented: %v", env)
+		t.Fatalf("model not in the edit must not be invented: %v", env)
 	}
 	if string(doc["model"]) != `"opus"` {
 		t.Fatalf("top-level key changed: %s", doc["model"])
@@ -106,9 +165,83 @@ func TestEditSettingsPreservesOtherKeys(t *testing.T) {
 	}
 }
 
+// TestEditSettingsKeepsTopLevelContentByteForByte: an env-only edit leaves every
+// non-env top-level value's content identical byte-for-byte (modulo the
+// whitespace between JSON tokens), and no <, > or & is escaped into entities.
+func TestEditSettingsKeepsTopLevelContentByteForByte(t *testing.T) {
+	body := `{
+  "permissions": {
+    "allow": [ "Bash(ls:*)" , { "command": "a<b & c>d" } ],
+    "deny":  []
+  },
+  "note": "keep <this> & that",
+  "model": "opus",
+  "env": {"ANTHROPIC_BASE_URL": "https://old", "ANTHROPIC_AUTH_TOKEN": "old-token"}
+}`
+	path := settingsFixture(t, body, 0o600)
+	before := readJSON(t, path)
+	edit := SettingsEdit{Token: sentinelToken, Vals: []EnvVal{
+		{"ANTHROPIC_BASE_URL", "https://new"},
+	}}
+	if err := EditSettings(path, edit); err != nil {
+		t.Fatal(err)
+	}
+	after := readJSON(t, path)
+	for _, key := range []string{"permissions", "note", "model"} {
+		if compactOf(t, before[key]) != compactOf(t, after[key]) {
+			t.Fatalf("top-level key %q changed:\nbefore %s\nafter  %s", key, before[key], after[key])
+		}
+	}
+	if len(before) != len(after) {
+		t.Fatalf("top-level key set changed: before %d keys, after %d", len(before), len(after))
+	}
+	if envOf(t, after)["ANTHROPIC_BASE_URL"] != "https://new" {
+		t.Fatal("the env edit itself did not land")
+	}
+}
+
+// TestEditSettingsDropsKeysRemovedFromTheEdit: the edit is the whole env block
+// as the screen shows it — a key left out of Vals is removed, which is how the
+// screen's drop action reaches the file.
+func TestEditSettingsDropsKeysRemovedFromTheEdit(t *testing.T) {
+	path := settingsFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://old","ANTHROPIC_EXTRA":"gone"}}`, 0o600)
+	edit := SettingsEdit{Vals: []EnvVal{{"ANTHROPIC_BASE_URL", "https://new"}}}
+	if err := EditSettings(path, edit); err != nil {
+		t.Fatal(err)
+	}
+	env := envOf(t, readJSON(t, path))
+	if _, ok := env["ANTHROPIC_EXTRA"]; ok {
+		t.Fatalf("dropped key survived: %v", env)
+	}
+	if env["ANTHROPIC_BASE_URL"] != "https://new" {
+		t.Fatalf("kept key not written: %v", env)
+	}
+}
+
+// TestEditSettingsKeepsNonStringEnvValues: values the screen cannot represent
+// (not JSON strings) are not editable, so a save never destroys them.
+func TestEditSettingsKeepsNonStringEnvValues(t *testing.T) {
+	path := settingsFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://old","DEBUG":true,"RETRIES":3}}`, 0o600)
+	edit := SettingsEdit{Vals: []EnvVal{{"ANTHROPIC_BASE_URL", "https://new"}}}
+	if err := EditSettings(path, edit); err != nil {
+		t.Fatal(err)
+	}
+	doc := readJSON(t, path)
+	if string(doc["env"]) == "" {
+		t.Fatal("env block lost")
+	}
+	var env map[string]json.RawMessage
+	if err := json.Unmarshal(doc["env"], &env); err != nil {
+		t.Fatal(err)
+	}
+	if string(env["DEBUG"]) != "true" || string(env["RETRIES"]) != "3" {
+		t.Fatalf("non-string env values changed: %v", env)
+	}
+}
+
 func TestEditSettingsEmptyTokenKeepsExisting(t *testing.T) {
 	path := settingsFixture(t, `{"env":{"ANTHROPIC_AUTH_TOKEN":"old-token","ANTHROPIC_BASE_URL":"https://old.example"}}`, 0o600)
-	if err := EditSettings(path, SettingsEdit{Token: "", BaseURL: "https://new.example"}); err != nil {
+	if err := EditSettings(path, SettingsEdit{Vals: []EnvVal{{"ANTHROPIC_BASE_URL", "https://new.example"}}}); err != nil {
 		t.Fatal(err)
 	}
 	env := envOf(t, readJSON(t, path))
@@ -122,7 +255,7 @@ func TestEditSettingsEmptyTokenKeepsExisting(t *testing.T) {
 
 func TestEditSettingsWritesModelWhenSet(t *testing.T) {
 	path := settingsFixture(t, `{"env":{"ANTHROPIC_BASE_URL":"https://x"}}`, 0o600)
-	if err := EditSettings(path, SettingsEdit{Model: "glm-4.6"}); err != nil {
+	if err := EditSettings(path, SettingsEdit{Vals: []EnvVal{{"ANTHROPIC_MODEL", "glm-4.6"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := envOf(t, readJSON(t, path))["ANTHROPIC_MODEL"]; got != "glm-4.6" {
@@ -209,7 +342,7 @@ func TestEditSettingsRefusesWithoutWriting(t *testing.T) {
 				content, _ = os.ReadFile(path)
 			}
 
-			err := EditSettings(path, SettingsEdit{Token: sentinelToken, BaseURL: "https://x"})
+			err := EditSettings(path, SettingsEdit{Token: sentinelToken, Vals: []EnvVal{{"ANTHROPIC_BASE_URL", "https://x"}}})
 			if err == nil {
 				t.Fatal("edit accepted a file it must refuse")
 			}
@@ -244,7 +377,7 @@ func TestEditSettingsFollowsSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := EditSettings(link, SettingsEdit{BaseURL: "https://new"}); err != nil {
+	if err := EditSettings(link, SettingsEdit{Vals: []EnvVal{{"ANTHROPIC_BASE_URL", "https://new"}}}); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Lstat(link)
