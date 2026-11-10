@@ -551,6 +551,37 @@ func TestEditRegistrationRowsTakeTyping(t *testing.T) {
 	}
 }
 
+// TestEditChangedLinkSparesTheOldFile: the env rows belong to the file the
+// screen opened with. Re-pointing the settings link and saving must not write
+// the form's env block (a typed token included) into the old, now-unlinked
+// file: the registration is saved, the env write is skipped, and the hint says
+// the env block needs a fresh pass — no silent success.
+func TestEditChangedLinkSparesTheOldFile(t *testing.T) {
+	body := `{"env":{"ANTHROPIC_BASE_URL":"https://old"}}`
+	path := editFixture(t, body)
+	form := glmForm(false)
+	form.Dir, form.Settings = "~/d", "~/d/old.json"
+	var gotDir, gotSettings string
+	submit := func(dir, settings string) error { gotDir, gotSettings = dir, settings; return nil }
+	// rows: token(0), base(1), model(2), new key(3), dir(4), settings(5). One
+	// tab edits the base URL, four more reach the settings row; there the old
+	// link is cleared and the new one typed, and Enter saves both parts.
+	keys := "\tx\t\t\t\t" + strings.Repeat("\x7f", len("~/d/old.json")) + "~/d/new.json\r"
+	saved, screen := runEditSubmit(t, path, form, submit, keys)
+	if saved {
+		t.Fatal("a changed settings link reported the env block as saved")
+	}
+	if gotDir != "~/d" || gotSettings != "~/d/new.json" {
+		t.Fatalf("submit got dir=%q settings=%q, want the new link", gotDir, gotSettings)
+	}
+	if !strings.Contains(screen, "reopen") {
+		t.Fatalf("hint does not say the env block needs a fresh pass:\n%s", screen)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != body {
+		t.Fatalf("old file written after the link moved:\n%s", raw)
+	}
+}
+
 // TestSignalExitCleansInFlightWrite sends a real shutdown signal through the
 // signal path while a save is in its write window. The exit seam records the
 // code, the save fails, and no temp file holding the token is left behind.

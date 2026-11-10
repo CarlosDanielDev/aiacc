@@ -73,11 +73,17 @@ func saveRegistration(cfgPath, providerName, account, dir, settings string) erro
 	}
 	// A keyword that already resolves to the stored skeleton is a no-op too:
 	// the screen keeps the typed value across a refused file save, and a second
-	// Enter must not turn into a refusal on the existing file.
+	// Enter must not turn into a refusal on the existing file. A no-op it is
+	// only while the skeleton still exists — a file that has since disappeared
+	// is exactly what re-typing the keyword regenerates.
 	if dir == stored.Dir && settings != stored.Settings {
 		if ep, keyword, err := provider.ClassifySettings(providerName, settings); err == nil && keyword &&
 			filepath.Join(dir, ep.Filename) == stored.Settings {
-			return nil
+			if real, err := provider.ExpandHome(stored.Settings); err == nil {
+				if _, statErr := os.Stat(real); statErr == nil {
+					return nil
+				}
+			}
 		}
 	}
 	resolved, err := resolveSettings(providerName, dir, settings)

@@ -289,6 +289,33 @@ func TestEditEnvOnlySaveLeavesAMissingDirAlone(t *testing.T) {
 	}
 }
 
+// TestEditRetypedKeywordRegeneratesAMissingSkeleton: the registered skeleton
+// file is gone (deleted by hand, a restored dir); re-typing its keyword must
+// regenerate it, not silently succeed while the launcher still points at
+// nothing.
+func TestEditRetypedKeywordRegeneratesAMissingSkeleton(t *testing.T) {
+	cfgPath, _, home := editFixtureProfile(t)
+	name := provider.Presets["claude"].Endpoints["glm"].Filename
+	if err := os.Remove(filepath.Join(home, ".claude-glm", name)); err != nil {
+		t.Fatal(err)
+	}
+	driveEditScreen(t, func(f tui.EditForm) (string, string) { return f.Dir, "glm" }, nil)
+	if err := runEditTUI(cfgPath, editRow(t, cfgPath, "claude", "glm")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude-glm", name)); err != nil {
+		t.Fatalf("missing skeleton not regenerated: %v", err)
+	}
+	c, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join("~/.claude-glm", name)
+	if acct := c.Providers["claude"].Accounts["glm"]; acct.Settings != want {
+		t.Fatalf("stored settings = %q, want %q", acct.Settings, want)
+	}
+}
+
 // TestEditUnreadableFileStillEditsRegistration: a registered settings file that
 // cannot be read no longer dead-ends in a message screen — the registration
 // rows stay editable so a broken link can be repaired.

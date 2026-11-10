@@ -191,6 +191,7 @@ func driveEdit(path, account string, f EditForm, submit func(dir, settings strin
 	if path != "" {
 		file = filepath.Base(path)
 	}
+	opened := f.Settings // the settings value the env rows came from
 	hint := ""
 	saved := false
 	err := screenLoop(g, in, out,
@@ -228,6 +229,16 @@ func driveEdit(path, account string, f EditForm, submit func(dir, settings strin
 				}
 				// An empty token field keeps what the file has, so the save can't
 				// clear a key.
+				if f.File && f.Settings != opened {
+					// The env rows belong to the file the screen opened with.
+					// A changed settings link re-points the registration at
+					// another file — a keyword's fresh skeleton included, whose
+					// preset env the form's stale values must not clobber — so
+					// the edits are skipped and announced, never written into
+					// the old, now-unlinked file.
+					hint = "settings link changed — reopen to edit the new file's env block"
+					return false
+				}
 				if f.File {
 					err := provider.EditSettings(path, provider.SettingsEdit{
 						Token: f.Token,
