@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/CarlosDanielDev/aiacc/internal/provider"
@@ -986,6 +987,110 @@ func TestReadKeyEscThenKeyIsNotSwallowed(t *testing.T) {
 	}
 	if k, err := readKey(r, src); err != nil || k != keyAdd {
 		t.Fatalf("key after Esc = %v, %v; want keyAdd (not swallowed)", k, err)
+	}
+}
+
+// awaitSrc is an input that reaches the decoder the way the production tty
+// does: one byte through the buffer (its own read), everything else only
+// through the byteAwaiter seam, where nothing is ever in r's buffer. pushback
+// re-enters through Read, like timedTTY's.
+type awaitSrc struct {
+	queued []byte // served through Read, one byte per call
+	seam   []byte // served through awaitByte, one byte per call
+}
+
+func (a *awaitSrc) Read(p []byte) (int, error) {
+	if len(a.queued) > 0 {
+		p[0] = a.queued[0]
+		a.queued = a.queued[1:]
+		return 1, nil
+	}
+	return 0, nil // nothing there — the timeout shape, pre-bufio
+}
+
+func (a *awaitSrc) awaitByte(time.Duration) (byte, bool, error) {
+	if len(a.seam) > 0 {
+		b := a.seam[0]
+		a.seam = a.seam[1:]
+		return b, true, nil
+	}
+	return 0, false, nil // the window closed with nothing behind the Esc
+}
+
+func (a *awaitSrc) pushback(b byte) { a.queued = append([]byte{b}, a.queued...) }
+
+// TestReadKeyEscThenKeyViaAwaiterIsNotSwallowed: on the real tty a key pressed
+// right after Esc arrives in its own read, through the await seam — invisible
+// to r's buffer. Unreading the Esc there would swallow the key and re-queue a
+// phantom Esc, so Esc out of the remove prompt plus any key would close the
+// whole launcher. The key must come back on the next read instead.
+func TestReadKeyEscThenKeyViaAwaiterIsNotSwallowed(t *testing.T) {
+	src := &awaitSrc{queued: []byte{0x1b}, seam: []byte{'a'}}
+	r := bufio.NewReader(src)
+	if k, err := readKey(r, src); err != nil || k != keyQuit {
+		t.Fatalf("readKey after Esc = %v, %v; want keyQuit", k, err)
+	}
+	if k, err := readKey(r, src); err != nil || k != keyAdd {
+		t.Fatalf("key after Esc = %v, %v; want keyAdd (no swallow, no phantom Esc)", k, err)
+	}
+	if left := len(src.queued) + len(src.seam); left != 0 {
+		t.Fatalf("%d byte(s) left behind after both reads", left)
+	}
+}
+
+// TestReadFieldKeyEscThenKeyViaAwaiter: the text screens' decoder on the same
+// seam — Esc cancels, the follow key survives to the next read.
+func TestReadFieldKeyEscThenKeyViaAwaiter(t *testing.T) {
+	src := &awaitSrc{queued: []byte{0x1b}, seam: []byte{'x'}}
+	r := bufio.NewReader(src)
+	if got, err := readFieldKey(r, src); err != nil || got != (fieldKey{k: keyQuit}) {
+		t.Fatalf("readFieldKey after Esc = %+v, %v; want keyQuit", got, err)
+	}
+	if got, err := readFieldKey(r, src); err != nil || got != (fieldKey{k: keyText, b: 'x'}) {
+		t.Fatalf("key after Esc = %+v, %v; want keyText x (no swallow, no phantom Esc)", got, err)
+	}
+}
+
+// TestEscWindowPropagatesSttyFailure: an escape window that cannot put the tty
+// back to blocking reads must end the screen with an error (the exit path
+// restores the saved termios), never leave timed reads behind silently.
+func TestEscWindowPropagatesSttyFailure(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	if _, err := pw.Write([]byte{0x1b}); err != nil {
+		t.Fatal(err)
+	}
+	src := &timedTTY{File: pr}
+	r := bufio.NewReader(src)
+	if _, err := readKey(r, src); err == nil {
+		t.Fatal("readKey swallowed the esc-window stty failure on a non-tty input")
+	}
+}
+
+// TestTimedTTYPushbackServesFirst: a pushback byte re-enters through Read
+// before anything the pipe still holds, so the byte order never flips.
+func TestTimedTTYPushbackServesFirst(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	if _, err := pw.Write([]byte{'y'}); err != nil {
+		t.Fatal(err)
+	}
+	src := &timedTTY{File: pr}
+	src.pushback('x')
+	var buf [1]byte
+	if _, err := src.Read(buf[:]); err != nil || buf[0] != 'x' {
+		t.Fatalf("first read = %q, %v; want the pushback x", buf, err)
+	}
+	if _, err := src.Read(buf[:]); err != nil || buf[0] != 'y' {
+		t.Fatalf("second read = %q, %v; want the pipe's y", buf, err)
 	}
 }
 

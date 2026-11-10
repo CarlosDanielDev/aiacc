@@ -82,6 +82,6 @@ func driveDuplicate(provider, src string, submit func(name, dir string) error, g
 // is called on Enter (see driveDuplicate). Returns true once a duplicate was made.
 func RunDuplicate(provider, src string, submit func(name, dir string) error) (bool, error) {
 	return onTTY(false, func(tty *os.File, g *geom) (bool, error) {
-		return driveDuplicate(provider, src, submit, g, timedTTY{tty}, tty)
+		return driveDuplicate(provider, src, submit, g, &timedTTY{File: tty}, tty)
 	})
 }

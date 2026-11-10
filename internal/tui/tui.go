@@ -763,7 +763,7 @@ func driveSetupResult(r SetupResult, g *geom, in io.Reader, out io.Writer) error
 
 // RunSetupResult shows the setup result screen on /dev/tty.
 func RunSetupResult(r SetupResult) error {
-	return onTTYErr(func(tty *os.File, g *geom) error { return driveSetupResult(r, g, timedTTY{tty}, tty) })
+	return onTTYErr(func(tty *os.File, g *geom) error { return driveSetupResult(r, g, &timedTTY{File: tty}, tty) })
 }
 
 // --- Add profile --------------------------------------------------------------
@@ -1145,7 +1145,7 @@ func driveListToggle(title string, items []ListItem, toggle string, g *geom, in 
 
 // RunList shows a selection list on /dev/tty and returns the chosen index or -1.
 func RunList(title string, items []ListItem) (int, error) {
-	return onTTY(-1, func(tty *os.File, g *geom) (int, error) { return driveList(title, items, g, timedTTY{tty}, tty) })
+	return onTTY(-1, func(tty *os.File, g *geom) (int, error) { return driveList(title, items, g, &timedTTY{File: tty}, tty) })
 }
 
 // RunListToggle is RunList with an optional toggle labelled toggle ("" = none,
@@ -1153,7 +1153,7 @@ func RunList(title string, items []ListItem) (int, error) {
 func RunListToggle(title string, items []ListItem, toggle string) (int, bool, error) {
 	on := false
 	i, err := onTTY(-1, func(tty *os.File, g *geom) (int, error) {
-		i, o, err := driveListToggle(title, items, toggle, g, timedTTY{tty}, tty)
+		i, o, err := driveListToggle(title, items, toggle, g, &timedTTY{File: tty}, tty)
 		on = o
 		return i, err
 	})
@@ -1473,9 +1473,12 @@ func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
-		r := bufio.NewReader(tty)
+		// One timedTTY shared by the reader and the decoder: the pushback byte
+		// must be visible to both sides of the read pipeline.
+		src := &timedTTY{File: tty}
+		r := bufio.NewReader(src)
 		for {
-			k, err := readKey(r, timedTTY{tty})
+			k, err := readKey(r, src)
 			if err != nil {
 				return
 			}
@@ -1510,7 +1513,7 @@ func animate(rows []Row, setupNeeded bool, version string, g *geom, tty *os.File
 // settings-file field.
 func RunAdd(currentLogin, provider string, withSettings bool) (AddResult, error) {
 	return onTTY(AddResult{}, func(tty *os.File, g *geom) (AddResult, error) {
-		return driveAdd(currentLogin, provider, withSettings, g, timedTTY{tty}, tty)
+		return driveAdd(currentLogin, provider, withSettings, g, &timedTTY{File: tty}, tty)
 	})
 }
 
@@ -1523,7 +1526,7 @@ func RunRename(oldName string, taken []string) (string, error) {
 		set[n] = true
 	}
 	return onTTY("", func(tty *os.File, g *geom) (string, error) {
-		return driveRename(oldName, set, g, timedTTY{tty}, tty)
+		return driveRename(oldName, set, g, &timedTTY{File: tty}, tty)
 	})
 }
 
@@ -1688,7 +1691,7 @@ func readKey(r *bufio.Reader, in io.Reader) (key, error) {
 	case 'k':
 		return keyUp, nil
 	case 0x1b: // Esc: an arrow sequence, or a lone Esc that cancels
-		return escKey(r, in), nil
+		return escKey(r, in)
 	}
 	return keyNone, nil
 }
@@ -1709,21 +1712,43 @@ type byteAwaiter interface {
 // timedTTY is the raw terminal as a byteAwaiter: it flips the tty into timed
 // reads (VMIN 0, VTIME in tenths of a second) for the window, then back to the
 // blocking mode the screen loops read with. Two `stty` calls per escape byte;
-// escape bytes are rare.
-type timedTTY struct{ *os.File }
+// escape bytes are rare. It is always handed around as a pointer: the pushback
+// byte below is shared state between the screen loop's reader and the decoder.
+type timedTTY struct {
+	*os.File
+	back byte
+	has  bool
+}
 
-func (t timedTTY) awaitByte(d time.Duration) (byte, bool, error) {
+// Read serves the pushback byte before the tty, so a key read ahead of a
+// cancelling Esc re-enters the normal pipeline. Order-safe: pushback only
+// happens while the screen reader's own buffer is empty.
+func (t *timedTTY) Read(p []byte) (int, error) {
+	if t.has {
+		t.has = false
+		p[0] = t.back
+		return 1, nil
+	}
+	return t.File.Read(p)
+}
+
+func (t *timedTTY) pushback(b byte) { t.back, t.has = b, true }
+
+func (t *timedTTY) awaitByte(d time.Duration) (byte, bool, error) {
 	tenths := int((d + 99*time.Millisecond) / (100 * time.Millisecond))
 	if err := stty(t.File, "min", "0", "time", strconv.Itoa(tenths)); err != nil {
 		return 0, false, err
 	}
 	var b [1]byte
 	n, err := t.File.Read(b[:])
+	// A failed restore leaves the tty in timed mode, degrading every later
+	// read, so it must surface: the screen ends with an error and the exit
+	// path re-applies the saved termios.
 	if err2 := stty(t.File, "min", "1", "time", "0"); err == nil {
 		err = err2
 	}
 	if n > 0 {
-		return b[0], true, nil
+		return b[0], true, err
 	}
 	if err != nil {
 		return 0, false, err
@@ -1731,51 +1756,75 @@ func (t timedTTY) awaitByte(d time.Duration) (byte, bool, error) {
 	return 0, false, nil // the window closed with nothing behind the Esc
 }
 
+// bytePushback hands a byte read ahead of a cancelling Esc back to the reader,
+// so the next read still sees it.
+type bytePushback interface {
+	pushback(b byte)
+}
+
 // nextByte returns the next byte of a sequence: one already buffered, or one
 // that arrives within d on a reader that can wait. ok=false when no byte comes
-// — a lone Esc, or the end of a test's input.
-func nextByte(r *bufio.Reader, in io.Reader, d time.Duration) (byte, bool, error) {
+// — a lone Esc, or the end of a test's input. ahead reports that the byte was
+// read outside r (the await seam), so a caller that wants to give it back must
+// push it, not unread it.
+func nextByte(r *bufio.Reader, in io.Reader, d time.Duration) (b byte, ok, ahead bool, err error) {
 	if r.Buffered() > 0 {
 		b, err := r.ReadByte()
-		return b, err == nil, err
+		return b, err == nil, false, err
 	}
-	if a, ok := in.(byteAwaiter); ok {
-		return a.awaitByte(d)
+	if a, canAwait := in.(byteAwaiter); canAwait {
+		b, ok, err := a.awaitByte(d)
+		return b, ok, ok, err
 	}
-	b, err := r.ReadByte()
-	return b, err == nil, err
+	b, err = r.ReadByte()
+	return b, err == nil, false, err
 }
 
 // escKey decodes the bytes after an ESC: CSI/SS3 arrows come back as keyUp or
 // keyDown, any other sequence as keyNone (left/right, Home, mouse — ignored),
 // and a lone Esc — nothing within the window — as keyQuit. A key pressed right
-// after the Esc cancels too, and stays unread in the buffer so the next read
-// still sees it: nothing is swallowed.
-func escKey(r *bufio.Reader, in io.Reader) key {
-	b2, ok, err := nextByte(r, in, escWindow)
-	if err != nil || !ok {
-		return keyQuit
+// after the Esc cancels too, and is handed back for the next read — through
+// r's buffer when it came from there, through the reader's pushback when it
+// was read ahead on the await seam — so nothing is swallowed and no phantom
+// Esc re-queues. A tty that errors, or that will not leave timed mode, ends
+// the screen with an error instead of degrading every later read.
+func escKey(r *bufio.Reader, in io.Reader) (key, error) {
+	b2, ok, ahead, err := nextByte(r, in, escWindow)
+	if err != nil && err != io.EOF {
+		return keyQuit, err
+	}
+	if !ok {
+		return keyQuit, nil
 	}
 	if b2 != '[' && b2 != 'O' {
-		_ = r.UnreadByte() // best effort — the cancel never re-reads this screen
-		return keyQuit
+		if ahead {
+			if p, canPush := in.(bytePushback); canPush {
+				p.pushback(b2)
+			}
+		} else {
+			_ = r.UnreadByte()
+		}
+		return keyQuit, nil
 	}
 	// Parameter and intermediate bytes until the final byte (0x40–0x7E) that
 	// names the key; a truncated sequence is simply ignored.
-	final, ok, err := nextByte(r, in, escWindow)
+	final, ok, _, err := nextByte(r, in, escWindow)
 	for err == nil && ok && (final < 0x40 || final > 0x7e) {
-		final, ok, err = nextByte(r, in, escWindow)
+		final, ok, _, err = nextByte(r, in, escWindow)
 	}
-	if err != nil || !ok {
-		return keyNone
+	if err != nil && err != io.EOF {
+		return keyNone, err
+	}
+	if !ok {
+		return keyNone, nil
 	}
 	switch final {
 	case 'A':
-		return keyUp
+		return keyUp, nil
 	case 'B':
-		return keyDown
+		return keyDown, nil
 	}
-	return keyNone
+	return keyNone, nil
 }
 
 // fieldKey is one keypress on a text screen (add / edit / rename / duplicate):
@@ -1798,7 +1847,8 @@ func readFieldKey(r *bufio.Reader, in io.Reader) (fieldKey, error) {
 	}
 	switch b {
 	case 0x1b:
-		return fieldKey{k: escKey(r, in)}, nil
+		k, err := escKey(r, in)
+		return fieldKey{k: k}, err
 	case 3: // Ctrl-C, delivered as a byte under -isig
 		return fieldKey{k: keyCopy}, nil
 	case '\t':

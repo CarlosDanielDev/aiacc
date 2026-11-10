@@ -128,7 +128,7 @@ func driveEdit(path, account string, f EditForm, g *geom, in io.Reader, out io.W
 // path. It reports whether the file was saved.
 func RunEdit(account, path string, f EditForm) (bool, error) {
 	return onTTY(false, func(tty *os.File, g *geom) (bool, error) {
-		return driveEdit(path, account, f, g, timedTTY{tty}, tty)
+		return driveEdit(path, account, f, g, &timedTTY{File: tty}, tty)
 	})
 }
 
