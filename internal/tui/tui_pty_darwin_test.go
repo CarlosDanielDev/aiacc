@@ -84,7 +84,11 @@ func TestAnimateHandsOffRealTTY(t *testing.T) {
 		if k != keyEnter {
 			t.Fatalf("next screen first key: got %v, want enter", k)
 		}
+		fmt.Println("PHASE2-OK")
 	case <-time.After(10 * time.Second):
 		t.Fatal("next screen never received the follow-up keypress — it was eaten by the outgoing screen's reader")
 	}
+	// Leave the terminal the way the driver expects to find it: the test set
+	// raw mode on the real /dev/tty and nothing else restores it.
+	stty(tty, "icanon", "echo", "isig", "min", "1", "time", "0")
 }
