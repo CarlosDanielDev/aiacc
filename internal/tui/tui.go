@@ -1160,12 +1160,15 @@ func driveListToggle(title string, items []ListItem, toggle string, g *geom, in 
 	}()
 	// The reader must not outlive this screen (issue #136): the next screen's
 	// loop shares the same input queue, and a reader still blocked in readKey
-	// would win the race for the first keypress typed after the transition. An
-	// expired read deadline unblocks a pending read without consuming it; the
-	// join waits for the exit; clearing the deadline leaves the stream usable
-	// by whatever reads it next. Readers without a deadline (test buffers and
-	// pipes in tests) end at EOF instead.
+	// would win the race for the first keypress typed after the transition.
+	// Same mechanism as the launcher's join (issue #146): arm termios for the
+	// real tty — Go deadlines cannot wake a blocking read on a macOS /dev/tty —
+	// and fall back to the deadline where there is no tty (pipes, test buffers).
 	defer func() {
+		var armed bool
+		if tt, ok := in.(*timedTTY); ok {
+			armed = tt.armTimedRead()
+		}
 		if dl, ok := in.(interface{ SetReadDeadline(time.Time) error }); ok {
 			dl.SetReadDeadline(time.Now())
 		}
@@ -1173,6 +1176,9 @@ func driveListToggle(title string, items []ListItem, toggle string, g *geom, in 
 		<-finished
 		if dl, ok := in.(interface{ SetReadDeadline(time.Time) error }); ok {
 			dl.SetReadDeadline(time.Time{})
+		}
+		if armed {
+			in.(*timedTTY).disarmTimedRead()
 		}
 	}()
 
@@ -1546,11 +1552,12 @@ func animateKeys(rows []Row, setupNeeded bool, version string, g *geom, in *os.F
 	keys := make(chan key)
 	done := make(chan struct{})
 	finished := make(chan struct{})
+	// One timedTTY shared by the reader, the decoder and the join: the pushback
+	// byte must be visible to both sides of the read pipeline, and the join
+	// arms the same tty the reader is blocked in.
+	src := &timedTTY{File: in}
 	go func() {
 		defer close(finished)
-		// One timedTTY shared by the reader and the decoder: the pushback byte
-		// must be visible to both sides of the read pipeline.
-		src := &timedTTY{File: in}
 		r := bufio.NewReader(src)
 		for {
 			k, err := readKey(r, src)
@@ -1569,15 +1576,22 @@ func animateKeys(rows []Row, setupNeeded bool, version string, g *geom, in *os.F
 	defer ticker.Stop()
 	// The reader must not outlive this screen: the next screen's loop shares
 	// the same input queue, and a reader still blocked in readKey would win
-	// the race for the first keypress typed after the transition. An expired
-	// read deadline unblocks a pending read without consuming it; the join
-	// waits for the exit; clearing the deadline leaves the stream usable by
-	// whatever reads it next.
+	// the race for the first keypress typed after the transition (issue #136).
+	// The arm is what actually unblocks that read on a real tty: Go read
+	// deadlines do not wake a blocking read on a macOS /dev/tty (golang/go#43716),
+	// so deadline-only joins left the reader parked until the next keypress —
+	// which the expiring deadline then consumed (issue #146, "press twice").
+	// Arming termios makes the pending read return within ~100ms with nothing
+	// consumed; on a pipe the arm fails and the deadline does the unblocking.
 	defer func() {
+		armed := src.armTimedRead()
 		in.SetReadDeadline(time.Now())
 		close(done)
 		<-finished
 		in.SetReadDeadline(time.Time{})
+		if armed {
+			src.disarmTimedRead()
+		}
 	}()
 	phase := 0
 	for {
@@ -1820,6 +1834,23 @@ func (t *timedTTY) Read(p []byte) (int, error) {
 }
 
 func (t *timedTTY) pushback(b byte) { t.back, t.has = b, true }
+
+// armTimedRead puts the tty in VMIN 0 TIME 1 so a read that is already
+// blocked returns within ~100ms — with nothing consumed when nothing was
+// typed (golang/go#43716: Go read deadlines cannot do this on a macOS tty,
+// which is why the join below does not trust SetReadDeadline alone). It
+// reports whether the arm succeeded: on a pipe (every test) it fails and the
+// deadline fallback stays in charge.
+func (t *timedTTY) armTimedRead() bool {
+	return stty(t.File, "min", "0", "time", "1") == nil
+}
+
+// disarmTimedRead restores the raw-mode blocking read. A failure here is not
+// surfaced: the screen exiting right after re-applies its saved termios, which
+// covers this mode too.
+func (t *timedTTY) disarmTimedRead() {
+	_ = stty(t.File, "min", "1", "time", "0")
+}
 
 func (t *timedTTY) awaitByte(d time.Duration) (byte, bool, error) {
 	tenths := int((d + 99*time.Millisecond) / (100 * time.Millisecond))
